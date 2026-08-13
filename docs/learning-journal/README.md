@@ -22,5 +22,4 @@ learning-journal/
 
 ## 当前阶段
 
-当前处于 [Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)。
-
+[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)的学习与隔离实验已经完成，当前正在准备正式功能开发；进入下一阶段前需先确定对应 Phase Spec。

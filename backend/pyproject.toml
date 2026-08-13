@@ -5,7 +5,15 @@ description = "Backend service for the literature review agent system"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "alembic>=1.16.5",
+    "arq>=0.28,<0.29",
+    "fastapi>=0.141.1",
+    "httpx2>=2.10.0",
     "langgraph>=1.2.10",
+    "psycopg[binary]>=3.2.9",
+    "pydantic>=2,<3",
+    "sqlalchemy>=2.0.43",
+    "uvicorn[standard]>=0.52.2",
 ]
 
 [project.scripts]
@@ -17,3 +25,15 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "literature_agent"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "nbclient>=0.10.2",
+    "nbformat>=5.10.4",
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-httpx2>=1.0.0",
+    "ruff>=0.16.2",
+]

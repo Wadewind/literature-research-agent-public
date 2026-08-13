@@ -1,6 +1,6 @@
 # Literature Review Agent System
 
-面向学习和简历展示的文献综述 Agent 系统。项目当前处于 Phase 0：项目基线与技术验证。
+面向学习和简历展示的文献综述 Agent 系统。Phase 0 的技术学习与隔离验证已经完成，项目正在准备正式功能开发。
 
 ## 仓库布局
 
@@ -12,7 +12,7 @@ agent-service/
 └─ deploy/    # 后续加入的本地部署配置
 ```
 
-当前后端仍是最小入口，用于验证重组后的 Python 包和 uv 项目。
+当前后端仍是最小入口。API、Worker、数据库和前端工程将在对应垂直切片需要时逐步加入。
 
 ```bash
 cd backend

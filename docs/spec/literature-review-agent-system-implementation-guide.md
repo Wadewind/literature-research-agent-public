@@ -268,7 +268,7 @@ Ports
   repositories / queue / model / parser / storage / sandbox
         ↓
 Adapters
-  PostgreSQL / ARQ / LangGraph / HTTPX / Docling / filesystem
+  PostgreSQL / ARQ / LangGraph / HTTPX2 / Docling / filesystem
 ```
 
 关键规则：
@@ -293,13 +293,13 @@ Adapters
 | 数据库 | PostgreSQL 18、pgvector 0.8.2 | 业务状态、事件、全文检索、向量和 Checkpoint |
 | 后台任务 | ARQ 0.28、Valkey 9.x | 异步 Worker、Job 投递和实时通知 |
 | PDF 解析 | Docling，pypdf 回退 | 文档结构、页码、表格、阅读顺序 |
-| 外部 HTTP | HTTPX | 模型和学术 API 调用 |
+| 外部 HTTP | HTTPX2 | 模型和学术 API 调用 |
 | 模型适配 | langchain-core、langchain-openai | 首个 OpenAI-compatible Chat/Embedding Adapter |
 | 文件存储 | 本地 Storage Adapter | PDF、解析结果和 Artifact；未来替换 S3 |
 | 前端 | React 19、Vite、TypeScript strict | 独立 Web UI |
 | UI 数据 | TanStack Query、原生 EventSource | 服务端状态、SSE 和恢复 |
 | 样式 | Tailwind CSS、shadcn/ui | 控制 UI 开发成本 |
-| 测试 | pytest、pytest-asyncio、respx、Hypothesis、Testcontainers | 行为、并发、边界和故障验证 |
+| 测试 | pytest、pytest-asyncio、pytest-httpx2（基于 RESPX）、Hypothesis、Testcontainers | 行为、并发、边界和故障验证 |
 | 质量 | Ruff、Pyright、ESLint、tsc | 格式、静态检查和类型约束 |
 | 部署 | Docker Compose | 单机可复现环境 |
 
@@ -1354,7 +1354,7 @@ docs/learning-journal/modules/
 
 - Fake Chat Model；
 - Fake Embedding；
-- HTTPX Mock/respx；
+- HTTPX2 Mock/pytest-httpx2（必要时直接使用 RESPX）；
 - 固定 PDF Fixture；
 - 注入 Clock、ID Generator 和随机源；
 - Testcontainers PostgreSQL/Valkey。
