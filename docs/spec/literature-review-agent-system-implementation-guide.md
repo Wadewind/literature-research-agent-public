@@ -1,12 +1,14 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v1
+> 状态：Proposed v2
 >
-> 日期：2026-08-10
+> 日期：2026-08-13
 >
 > 定位：面向单人、AI 辅助开发的总体实施文档；用于确定产品边界、总体架构、模块职责、阶段顺序和学习目标
 >
 > 技术方向：Python / FastAPI / LangGraph / PostgreSQL / pgvector / ARQ / Valkey / React
+>
+> v2 变更：将 RAG、固定 Workflow 和可靠后端定义为可独立交付的 Core v1；Research Agent 改为 Core 完成后通过成熟 SDK 接入的扩展里程碑
 
 ## 1. 文档用途
 
@@ -33,11 +35,14 @@
 
 ### 2.1 产品目标
 
-系统面向需要阅读、整理和撰写技术文献综述的用户，围绕一个 Research Project 提供三种执行模式：
+系统面向需要阅读、整理和撰写技术文献综述的用户，围绕一个 Research Project 先完成两种核心执行模式：
 
 1. **文献 RAG 问答**：针对项目内已经收录的文献进行有出处、可回跳原文的问答；
-2. **综述 Workflow**：按照可观察、可暂停、可恢复的固定流程收集文献、提取证据、生成大纲并撰写带引用的综述；
-3. **Research Agent**：在步数、预算、工具和权限约束下，自主检索文献、读取证据、分析数据、生成图表和导出文件。
+2. **综述 Workflow**：按照可观察、可暂停、可恢复的固定流程收集文献、提取证据、生成大纲并撰写带引用的综述。
+
+在核心能力完成、经过评测并具备可靠运行证据后，再建设 **Research Agent Extension**：通过 `ResearchAgentRuntime` 适配边界接入 OpenHands SDK、Deep Agents 或经评审的同类运行时，让 Agent 在受控 Workspace 中发现论文相关的公开项目页、代码仓库、数据集和补充材料，并把结果交回本系统的 Evidence、Artifact、Run 和 Event 体系。
+
+本项目不以自行重造通用 Agent Harness、浏览器自动化框架或 Sandbox 平台为目标。Agent SDK 负责通用 Agent Loop、上下文管理和环境操作；本系统负责研究领域状态、可靠执行、权限、证据追溯和用户可见历史。
 
 系统的核心价值不是生成更多文本，而是：
 
@@ -56,7 +61,8 @@
 - LangGraph 状态图、Checkpoint、Interrupt 和 Durable Execution；
 - RAG 的文档解析、切分、检索、重排、上下文构建和评测；
 - 引用、证据和生成文本之间的可追溯关系；
-- Agent Tool 的 Schema、权限、预算、副作用和沙箱边界；
+- 外部 Agent Runtime 与业务 Run、Event、Artifact、权限和恢复语义的集成边界；
+- Browser、Tool 和 Sandbox 的权限、预算、副作用与 Prompt Injection 风险；
 - 日志、指标、Trace 和业务 Event 各自解决什么问题。
 
 ### 2.3 简历项目目标
@@ -78,9 +84,9 @@
 
 ## 3. 项目边界
 
-### 3.1 首版范围
+### 3.1 Core Research Backend v1 范围
 
-首版需要完成：
+Core Research Backend v1 需要完成：
 
 - Research Project 和文献库；
 - PDF 上传、解析、切分和向量化；
@@ -89,13 +95,14 @@
 - Evidence 和 Citation 可追溯；
 - 固定的文献综述 LangGraph Workflow；
 - Workflow 暂停、恢复和人工确认；
-- 受限的 Research Agent 和 Tool Registry；
 - Markdown、图片等 Artifact 管理；
 - 通用 Run、Attempt、Step 和 Event 模型；
 - ARQ 后台 Worker、重试和协作式取消；
 - SSE 实时事件与断线重放；
 - 单节点 Docker Compose 部署；
 - 关键行为的自动测试、故障注入和学习笔记。
+
+总体架构需要为后续 `ResearchAgentRuntime` Adapter 保留清晰边界，但 Core v1 不提前实现未验证的通用 Agent、Tool Registry、浏览器或 Sandbox 抽象。
 
 ### 3.2 明确非目标
 
@@ -106,6 +113,8 @@
 - 用户自定义任意 DAG Node；
 - 插件市场；
 - 多 Agent、Swarm、辩论或动态 Agent 团队；
+- 自行实现通用 Agent Loop、上下文压缩、浏览器自动化框架或 Sandbox 平台；
+- Core v1 中的开放互联网浏览、自动下载和任意代码执行；
 - 任意 Shell 或直接访问宿主机的 Python；
 - 自动抓取付费墙后的论文全文；
 - Kubernetes、多地域和高可用；
@@ -135,7 +144,7 @@ Research Project 是用户组织一次研究主题的顶层资源，拥有：
 - 文献库；
 - RAG Conversations；
 - Review Workflow Runs；
-- Research Agent Runs；
+- 后续扩展的 Research Agent Runs；
 - Evidence、Citation 和 Artifact。
 
 所有用户可见查询必须在 Project 和用户所有权范围内执行。
@@ -148,7 +157,7 @@ Paper Version 表示系统实际处理过的一份全文版本。重新上传、
 
 ### 4.3 Conversation 与 Agent Session
 
-Conversation 保存用户和系统之间的对话历史。Agent Session 是某次 Agent 执行需要的工作上下文，可能关联 Conversation，但不等同于后台业务 Run。
+Conversation 保存用户和系统之间的对话历史。后续接入 Agent SDK 时，Agent Session 或 SDK Conversation 是一次 Agent 执行的运行时上下文，可能关联 Conversation，但不等同于后台业务 Run，也不能成为用户权限、业务结果和 Artifact 的唯一事实来源。
 
 ### 4.4 Run、Attempt、Step 与 Job
 
@@ -201,7 +210,7 @@ Artifact 是一次 Run 产生的持久文件或结构化产物，例如：
 
 ### 5.1 物理部署
 
-首版采用单仓库、单节点、少量进程的模块化单体：
+Core v1 采用单仓库、单节点、少量进程的模块化单体：
 
 ```text
                          ┌──────────────────┐
@@ -223,14 +232,14 @@ Artifact 是一次 Run 产生的持久文件或结构化产物，例如：
                │               ┌──────────────────┐
                │               │ Python Worker    │
                │               │ ingestion / rag  │
-               │               │ workflow / agent │
+               │               │ workflow         │
                │               └────────┬─────────┘
                │                        │
                ▼                        ▼
 ┌──────────────────────────┐   ┌───────────────────────────┐
 │ PostgreSQL + pgvector    │   │ External Adapters         │
 │ business state / events │   │ LLM / OpenAlex / Crossref │
-│ vectors / checkpoints   │   │ parser / sandbox          │
+│ vectors / checkpoints   │   │ parser / model / academic │
 └──────────────────────────┘   └───────────────────────────┘
                │
                ▼
@@ -250,7 +259,21 @@ postgres
 valkey
 ```
 
-Sandbox、Caddy 和可观测性后端在后期通过可选 Compose Profile 加入。
+Agent Runtime、Sandbox、Caddy 和可观测性后端在后期通过可选 Compose Profile 加入。Core v1 不要求部署 Agent Server 或 Sandbox。
+
+Agent Extension 的部署边界为：
+
+```text
+Business AgentRun / Event / Permission / Artifact (本系统)
+                         │
+                         ▼
+              ResearchAgentRuntime Port
+                         │
+                         ▼
+       SDK Runtime / Agent Server / Isolated Workspace
+```
+
+无论 Runtime 在 Worker 进程内还是独立部署，PostgreSQL 中的业务 Run、Event、权限和 Artifact 仍是产品事实来源。
 
 ### 5.2 逻辑分层
 
@@ -265,10 +288,11 @@ Domain
   state machines / invariants / policies / value objects
         ↓
 Ports
-  repositories / queue / model / parser / storage / sandbox
+  repositories / queue / model / parser / storage / agent runtime
         ↓
 Adapters
   PostgreSQL / ARQ / LangGraph / HTTPX2 / Docling / filesystem
+  future OpenHands / Deep Agents / sandbox adapters
 ```
 
 关键规则：
@@ -285,9 +309,10 @@ Adapters
 
 | 领域 | 初始选择 | 作用 |
 |---|---|---|
-| Python | CPython 3.13、uv | 统一 API、Worker、Agent 和数据处理开发体验 |
+| Python | CPython 3.13、uv | 统一 API、Worker 和数据处理开发体验 |
 | API | FastAPI、Pydantic v2、Uvicorn | REST、上传、SSE、边界校验 |
-| Agent/Workflow | LangGraph 1.2.x | 状态图、Checkpoint、Interrupt、Resume |
+| Workflow | LangGraph 1.2.x | 固定综述图的 State、Checkpoint、Interrupt、Resume |
+| Agent Extension | Phase 5 ADR 后确定 | 候选 OpenHands SDK、Deep Agents 或同类 Runtime |
 | 数据访问 | SQLAlchemy 2.0 Async、psycopg 3 | ORM 映射、显式事务和 PostgreSQL 异步访问 |
 | 迁移 | Alembic | 业务 Schema 版本化 |
 | 数据库 | PostgreSQL 18、pgvector 0.8.2 | 业务状态、事件、全文检索、向量和 Checkpoint |
@@ -316,7 +341,7 @@ Adapters
 - Personal API Key 扩展边界；
 - 跨用户、跨 Project 访问隔离。
 
-不负责业务 Run 状态和 Agent 权限判断。Tool 权限由 Tool Policy 模块负责。
+不负责业务 Run 状态和 Agent 权限判断。后续 Agent Tool 权限由独立 Execution Policy 负责。
 
 ### 7.2 Project
 
@@ -378,7 +403,7 @@ RAG Conversation 不负责后台队列和文档解析。
 
 ### 7.7 Run Control
 
-这是三个模式共享的后端核心，负责：
+这是 RAG、Workflow 和后续 Agent Extension 共享的后端核心，负责：
 
 - Run 状态机；
 - Attempt 和 Step；
@@ -453,33 +478,41 @@ Valkey 通知可以丢失，PostgreSQL Event 不可以丢失。
 
 首版图结构由代码定义并版本化，不提供用户自定义 Canvas。
 
-### 7.12 Research Agent
+### 7.12 Research Agent Runtime Integration（后续扩展）
 
-负责：
+本模块不自行实现通用 Agent Loop，而是在 Core Research Backend 完成后通过 `ResearchAgentRuntime` Port 接入经 ADR 选定的 OpenHands SDK、Deep Agents 或同类运行时。
 
-- Agent Loop 的 LangGraph 表达；
-- Tool 选择和 Observation；
-- 最大步数、Token、成本和墙钟时间；
-- 重复 Tool Call 检测；
-- Steering/取消检查；
-- 最终回答和 Artifact 生成。
+本系统负责：
 
-Agent 只能调用注册工具，不能直接获得数据库、文件系统或宿主机访问权限。
+- 创建和授权业务 `AgentRun`；
+- 保存 Run、Attempt、用户取消意图、预算、审批、业务 Event 和最终结果；
+- 将 Project、Paper、Evidence 和 Artifact 以最小授权上下文提供给 Runtime；
+- 把 SDK Conversation/Thread、Workspace/Sandbox 和 Event Cursor 映射到稳定业务 ID；
+- 归一化 SDK 事件、错误、Usage 和 Artifact 提交；
+- 在 Runtime 重试、恢复或响应丢失时进行幂等对账。
 
-### 7.13 Tool Registry 与 Tool Execution
+外部 Agent Runtime 负责：
 
-负责：
+- 通用 Agent Loop、规划和上下文管理；
+- Tool 选择和运行时内部 Observation；
+- Browser、文件、命令和 Sandbox Workspace 内部操作；
+- SDK 自身的流式事件与执行上下文。
 
-- Tool 名称、版本、说明和 JSON Schema；
-- Tool 参数验证；
+SDK Conversation、Thread、Checkpoint、Workspace 和 Event 不能替代 PostgreSQL 中的业务 Run、权限、Event、Evidence 和 Artifact。选型阶段必须明确 ARQ、本系统 Run Control 与 SDK Runtime 之间的重试、取消和恢复所有权，避免多层自动重试相乘。
+
+### 7.13 Agent Tool 与 Execution Policy（后续扩展）
+
+Agent 扩展阶段负责：
+
+- Runtime 可见工具或能力的版本、说明和输入 Schema；
 - 用户、Project、Run 和 Policy Context；
-- 幂等 Tool Call；
-- 超时和输出大小限制；
-- ToolExecution 记录；
-- 危险操作审批；
-- Sandbox Adapter。
+- Tool 或外部副作用的幂等键；
+- 超时、网络、输出大小和资源限制；
+- ToolExecution 或等价审计记录；
+- 危险操作和下载前审批；
+- Sandbox 与 Artifact Workspace 边界。
 
-首版工具应限定为文献领域和 Artifact 生成能力。
+Core v1 不提前建设通用 Tool Registry。RAG 和固定 Workflow 直接通过明确的应用 Port 调用领域能力；只有 Agent SDK 集成验证证明需要统一 Tool 契约后，才在阶段 Spec 中确定具体模型。
 
 ### 7.14 Evidence 与 Citation
 
@@ -519,7 +552,7 @@ Agent 只能调用注册工具，不能直接获得数据库、文件系统或�
 
 业务 Event 面向产品历史；日志、指标和 Trace 面向运行诊断，不能互相替代。
 
-## 8. 三种模式的运行方式
+## 8. 核心模式与后续 Agent 扩展的运行方式
 
 ### 8.1 RAG 模式
 
@@ -560,30 +593,35 @@ Workflow 是最主要的长时间任务，必须支持：
 - 用户可以查询、取消和恢复；
 - 每个阶段有可理解的状态和失败原因。
 
-### 8.3 Agent 模式
+### 8.3 Research Agent Extension（后续）
 
 ```text
 用户目标
-  → Agent State
-  → Model Decision
-  → Tool Call Schema Validation
-  → Policy/Budget Check
-  → Execute Tool
-  → Persist ToolExecution + Artifact/Event
-  → Observation
-  → 下一轮或结束
+  → 创建业务 AgentRun + Event
+  → Worker 通过 ResearchAgentRuntime Adapter 启动或恢复 SDK Runtime
+  → Runtime 在授权的 Project Context 与隔离 Workspace 中执行
+  → SDK Event/Usage/Approval 被归一化为业务 Event
+  → 下载内容先提交为隔离 Artifact，再按需进入现有 Ingestion Run
+  → 最终报告绑定 Paper/Evidence/Resource Manifest
+  → Run 完成并持久化 Artifact
 ```
 
-Agent 模式比 Workflow 更开放，因此必须更严格限制：
+首个候选用户故事限定为：基于 Project 已有论文和 Evidence，发现论文官方项目页、代码仓库、开放数据集与补充材料，生成可审计的 Resource Manifest 和研究报告。首版 Agent 不绕过登录、付费墙或 CAPTCHA，不自动提交或发布内容。
 
-- 可见工具集合；
+Agent Runtime 比固定 Workflow 更开放，因此必须更严格限制：
+
+- 可见工具、网络目标和凭据集合；
 - 最大步骤；
 - 单 Tool 和总墙钟时间；
 - Token 和费用；
 - Tool 输出大小；
 - 重复或无进展循环；
 - 代码执行权限；
+- 下载文件的大小、类型、哈希和隔离；
+- 来自网页、论文和仓库内容的 Prompt Injection；
 - 人工审批点。
+
+业务 Event 只保存产品历史和必要摘要，不能原样持久化 SDK 的完整思考过程、网页正文、终端输出或敏感 Tool 参数。
 
 ## 9. 状态与持久化原则
 
@@ -596,7 +634,7 @@ PostgreSQL 保存：
 - Conversation 和 Message；
 - Run、Attempt、Step、Event；
 - Evidence、Citation；
-- ToolExecution；
+- Agent 扩展的 ToolExecution 或等价审计记录；
 - Artifact 元数据；
 - Token/费用使用；
 - 幂等记录。
@@ -654,7 +692,7 @@ WAITING_INPUT → CANCELLED
 - 文档解析和索引进度；
 - 模型请求完成和 Usage；
 - Retrieval 摘要；
-- Tool Call 生命周期；
+- Agent 扩展的 Runtime/Tool Call 生命周期；
 - Artifact 创建；
 - 等待和完成人工输入；
 - 重试、取消和错误。
@@ -668,7 +706,7 @@ Event Payload 只保存前端和审计需要的信息，不保存完整 Prompt�
 1. API 提交幂等；
 2. Job 执行幂等；
 3. LangGraph Node/Task 幂等；
-4. Tool 副作用幂等；
+4. Agent 扩展的 Tool/Browser 副作用幂等；
 5. Artifact 提交幂等；
 6. 文献和 Embedding 去重。
 
@@ -764,13 +802,15 @@ Paper
 
 ### 12.3 外部 URL
 
-首版优先调用固定学术 API，不提供任意 URL 抓取。后续增加 URL Tool 时必须考虑 SSRF、DNS 重绑定、Redirect 和内网地址阻断。
+Core v1 只调用固定学术 API，不提供任意 URL 抓取。后续 Agent 增加 Browser 或 URL Tool 时，必须考虑 SSRF、DNS 重绑定、Redirect、内网地址阻断、下载大小与类型、恶意文件、Prompt Injection 和网络外泄。
+
+Agent 浏览器首版只访问公开资源，优先发现论文官方项目页、代码仓库、开放数据集和补充材料。涉及登录、用户凭据、付费墙、CAPTCHA、对外提交或不可逆操作时必须拒绝或进入人工审批，不能通过自动化规避站点限制。
 
 ### 12.4 代码执行
 
-首版先提供固定图表工具，不提供任意代码。
+Core v1 不提供任意代码执行。固定图表或导出能力应优先作为确定性的应用服务运行，并使用结构化输入 Schema。
 
-后期 `run_python_analysis` 必须通过 Sandbox Adapter，限制：
+是否开放 `run_python_analysis` 由 Agent SDK 选型后的阶段 Spec 和 ADR 决定。若开放，必须通过选定 Runtime 的 Sandbox Adapter 或经评审的独立 Sandbox，限制：
 
 - 非 root；
 - 独立临时 Workspace；
@@ -805,20 +845,23 @@ models
 health / readiness / metrics
 ```
 
+`agent-runs` 属于 Research Agent Extension，不是 Core v1 API 的完成条件。
+
 长任务创建返回 `202 Accepted` 和稳定 `run_id`。查询和事件接口使用业务 ID，不暴露 ARQ 或 LangGraph 内部表。
 
 ### 13.2 Web 页面
 
-首版页面：
+Core v1 页面：
 
 - Project 列表和详情；
 - Literature Library；
 - Paper 详情和 PDF 阅读；
 - RAG Chat；
 - Review 创建和 Run 详情；
-- Research Agent；
 - Artifact 查看和下载；
 - 设置和模型配置。
+
+Research Agent、Browser、Workspace 和审批详情页面在 Agent SDK 完成选型并验证事件契约后加入，不提前复制 SDK 自带 UI 或内部状态模型。
 
 Run Detail 是核心页面，应展示：
 
@@ -854,7 +897,7 @@ run_id
 attempt_id
 step_id
 thread_id
-tool_execution_id
+tool_execution_id  # 仅 Agent 扩展存在
 ```
 
 高基数 ID 可以进入日志和 Trace，不能直接作为 Prometheus Label。
@@ -875,11 +918,11 @@ tool_execution_id
 - Token/费用；
 - Retrieval 延迟；
 - PDF 解析失败；
-- Sandbox 超时和拒绝。
+- Agent Runtime、Tool 和 Sandbox 超时与拒绝（仅 Agent 扩展）。
 
 ### 14.4 Trace
 
-使用 OpenTelemetry 连接 API、Queue、Worker、LangGraph Node、模型、Retrieval 和 Tool。LangSmith 可以在开发阶段用于 Graph 调试，但不作为系统唯一的业务审计或生产可观测性来源。
+Core v1 使用 OpenTelemetry 连接 API、Queue、Worker、LangGraph Node、模型和 Retrieval。Agent 扩展再连接 Runtime、Browser、Tool 和 Sandbox Span。LangSmith 或 SDK 自带 Trace 可以用于运行时调试，但不作为系统唯一的业务审计或生产可观测性来源。
 
 ## 15. 建议仓库结构
 
@@ -900,8 +943,8 @@ literature-agent/
 │  │  ├─ runs/
 │  │  ├─ events/
 │  │  ├─ workflows/
-│  │  ├─ agents/
-│  │  ├─ tools/
+│  │  ├─ agents/              # Phase 5/6 按验证结果创建
+│  │  ├─ tools/               # Phase 5/6 按验证结果创建
 │  │  ├─ evidence/
 │  │  ├─ artifacts/
 │  │  ├─ providers/
@@ -916,7 +959,7 @@ literature-agent/
 ├─ contracts/
 │  ├─ openapi/
 │  ├─ events/
-│  └─ tools/
+│  └─ tools/                  # Agent Extension 契约，Core v1 不预建
 ├─ evals/
 │  ├─ datasets/
 │  ├─ fixtures/
@@ -989,7 +1032,7 @@ literature-agent/
 - 取消竞争；
 - LangGraph Interrupt/Resume；
 - Citation Validator；
-- Tool Schema、权限和预算；
+- Agent 扩展的 Runtime/Tool 契约、权限和预算；
 - 用户和 Project 隔离；
 - Bug 修复。
 
@@ -997,11 +1040,11 @@ literature-agent/
 
 ## 17. 分阶段实施路线
 
-### Phase 0：项目重置、技术验证与开发基线
+### Phase 0：技术学习与隔离验证（已完成）
 
 #### 目标
 
-建立新的 Python 技术方向和快速反馈环境，不开发文献业务功能。
+完成 Python 后端方向所需的概念学习和隔离实验，不开发文献业务功能，也不把 Notebook 实验直接视为生产实现。
 
 #### 需要学习
 
@@ -1014,15 +1057,10 @@ literature-agent/
 
 #### 交付内容
 
-- Python/FastAPI 后端骨架；
-- React/Vite Web 骨架；
-- PostgreSQL/pgvector 和 Valkey Compose；
-- Alembic 初始迁移；
-- API 与 Worker 健康检查；
-- Fake Chat、Fake Embedding、Fake Queue/Sandbox；
-- 格式化、静态检查、单元和集成测试命令；
-- CI；
-- Phase 0 Spec 和学习复盘。
+- 八个主题的学习记录和隔离实验；
+- Python 3.13、uv 和最小后端包基线；
+- Phase 0 Spec 和学习复盘；
+- 后续生产切片需要验证的工程验收清单。
 
 #### 不做
 
@@ -1033,18 +1071,18 @@ literature-agent/
 
 #### 阶段出口
 
-- API、Worker、PostgreSQL 和 Valkey 可通过 Compose 启动；
-- CI 无外部模型 Key 也能通过；
-- 数据库迁移可重复执行；
-- 一个测试 Job 能被 Worker 消费；
-- 一个最小 LangGraph 可以使用测试 Checkpointer 暂停和恢复；
-- 开发者能画出 API、Queue、Worker、数据库和 LangGraph 的边界。
+- 开发者能解释 API、Queue、Worker、数据库和 LangGraph 的状态所有权与失败边界；
+- FastAPI、asyncio、SQLAlchemy、ARQ、LangGraph 和 Compose 的关键概念已通过隔离实验学习；
+- 实验记录保存在本地学习目录，不进入生产源码和 CI；
+- API、Worker、迁移、Compose、测试和前端骨架在后续实际垂直切片需要时实现并记录正式测试证据。
 
 ### Phase 1：Project、文献库与可靠异步导入
 
 #### 目标
 
 用户创建 Project、上传 PDF，并看到文档解析和索引任务从创建到成功、失败或取消的完整过程。
+
+本阶段开始时先落地支撑该垂直切片所需的最小生产工程基线：FastAPI 存活/就绪检查、PostgreSQL/Valkey Compose、Alembic、Worker 启动、测试和质量命令。只实现当前切片需要的部分，不重新建设独立的“大而全 Phase 0”。
 
 #### 需要学习
 
@@ -1188,115 +1226,116 @@ literature-agent/
 - 输出包含检索和纳入文献清单；
 - 学习笔记能解释 Checkpoint 为什么不等同于业务 Run 数据。
 
-### Phase 4：受限 Research Agent 与 Artifact 工具
+### Phase 4：Core Research Backend 产品闭环、可靠性与评测
 
 #### 目标
 
-用户提供开放研究任务，Agent 可以在限制内选择文献工具、分析数据、生成图表并输出文件。
+在引入开放式 Agent Runtime 之前，将文献导入、RAG 和固定 Review Workflow 做成可演示、可诊断、可恢复并具有评测证据的独立产品。
+
+Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Extension 不阻塞该里程碑。
 
 #### 需要学习
 
-- Agent Loop 的图表示；
-- Tool Schema 和 Tool Registry；
-- Tool 副作用与幂等；
-- Agent 预算；
-- 重复调用和无进展检测；
-- Artifact Workspace；
-- Tool Event 和可观察性。
-
-#### 初始工具
-
-- 搜索文献；
-- 获取并校验文献元数据；
-- 检索 Project Evidence；
-- 读取 Evidence；
-- 创建或更新大纲；
-- 写 Markdown Artifact；
-- 使用固定 Schema 生成图表；
-- 导出引用数据。
-
-#### 阶段出口
-
-- Agent 只能看到注册且授权的工具；
-- 所有 Tool 参数经过 JSON Schema 校验；
-- ToolExecution 可查询并与 Run/Step 关联；
-- 最大步骤、Token、时间和 Tool Call 数生效；
-- 重复调用达到阈值后终止或要求调整；
-- Artifact 写入使用受控 Workspace 和稳定 ID；
-- Agent 取消后不再发起新的 Tool Call；
-- 学习笔记能解释为什么 Agent Runtime 不能直接访问数据库和宿主文件系统。
-
-### Phase 5：Sandbox、安全与可靠性强化
-
-#### 目标
-
-在不扩大 Agent 权限的前提下加入受限 Python 分析能力，并系统验证重试、崩溃、取消和隔离行为。
-
-#### 需要学习
-
-- 容器和真正 Sandbox 的区别；
-- 系统调用、网络和资源限制；
-- SSRF；
-- Tool 审批；
-- Transactional Outbox 或等价一致性方案；
-- Lease/Heartbeat；
-- 故障注入；
-- 安全日志和 Secret 管理。
-
-#### 主要内容
-
-- Dify Sandbox Adapter 或经评审的等价服务；
-- `run_python_analysis` Tool；
-- 代码、输入文件和输出 Artifact 契约；
-- Tool 风险等级和审批；
-- API/Worker/Provider/Sandbox 故障注入；
-- Event 通知丢失恢复；
-- 安全和跨用户隔离测试。
-
-#### 阶段出口
-
-- 代码执行默认禁网、限制资源且不接触宿主 Secret；
-- Sandbox 超时和异常有稳定错误分类；
-- 重复 Sandbox Job 不会重复提交最终 Artifact；
-- Queue、Worker、数据库、Provider 和通知故障均有测试证据；
-- 用户 A 无法读取用户 B 的文献、Run、Evidence 和 Artifact；
-- 学习笔记能解释 Exactly Once 的限制和当前 Effectively Once 方案。
-
-### Phase 6：产品闭环、可观测性与评测
-
-#### 目标
-
-完成可演示、可诊断、可复盘的端到端产品，并形成简历和面试材料。
-
-#### 需要学习
-
-- OpenTelemetry Trace；
-- Prometheus 指标设计；
-- 高基数问题；
-- RAG/Agent 评测集；
+- OpenTelemetry Trace 和 Prometheus 指标设计；
+- 高基数与 Correlation；
+- RAG、Retrieval、Citation 和 Workflow 评测；
 - E2E 测试边界；
-- 单机部署、备份和恢复；
+- Lease/Heartbeat、故障注入和恢复对账；
+- 单机部署、备份与恢复；
 - 性能基线和容量假设。
 
 #### 主要内容
 
-- 完整 Project、Library、Chat、Review、Agent、Run 和 Artifact UI；
+- 完整 Project、Library、Chat、Review、Run 和 Artifact UI；
 - JSON 日志、Metrics 和 Trace；
-- 固定评测集及结果报告；
+- 固定 Retrieval/Citation/Workflow 评测集及结果报告；
+- Queue、Worker、数据库、Provider、Checkpoint 和 Event 通知故障注入；
+- 用户与 Project 隔离测试；
 - Docker Compose 部署和运维文档；
 - PostgreSQL 和 Artifact 备份恢复演练；
-- 关键 E2E；
-- 项目架构说明和面试笔记。
+- 关键 E2E、项目架构说明和面试笔记。
 
 #### 阶段出口
 
-- 三条核心用户旅程可以从 UI 完成；
+- 文献导入、RAG 和 Review Workflow 三条核心用户旅程可以从 UI 完成；
+- Worker 崩溃、重复 Job、Provider 临时错误、取消竞争和 SSE 断线均有恢复测试；
+- 用户 A 无法读取用户 B 的文献、Run、Evidence 和 Artifact；
 - 每个用户可见错误可以通过 Correlation ID 诊断；
 - 有真实执行得到的性能和评测基线，不使用虚构指标；
 - 全新环境能够按文档启动和运行；
 - 备份和恢复流程至少演练一次；
-- 每个核心模块有学习笔记和 60 秒面试说明；
-- 已知限制、技术债和下一步扩展明确记录。
+- 每个 Core 模块有学习笔记、已知限制和 60 秒面试说明。
+
+### Phase 5：Research Agent SDK 选型与集成验证
+
+#### 目标
+
+围绕一个明确研究任务，对 OpenHands SDK、Deep Agents 或经评审的同类方案进行受限 Spike，形成 ADR，并通过 `ResearchAgentRuntime` Adapter 打通最小端到端 Agent Run。本阶段不自行开发通用 Agent Harness，也不以完整 Agent 产品为目标。
+
+#### 候选用户故事
+
+用户选择一个 Project 和研究目标，Agent 基于已有 Paper/Evidence 发现论文官方项目页、代码仓库、开放数据集和补充材料，生成 Resource Manifest 与带来源报告，并将一个公开资源作为隔离 Artifact 交回现有导入或 Artifact 流程。
+
+#### 需要学习和验证
+
+- OpenHands SDK 与 Deep Agents 的运行模型、许可、版本和部署边界；
+- SDK Conversation/Thread/Checkpoint/Workspace 与业务 Run 的区别；
+- Runtime 事件、Usage、错误、审批和 Artifact 的归一化；
+- ARQ、本系统 Run Control 与 SDK 内部重试/恢复的所有权；
+- Browser、MCP、自定义 Tool 和 Sandbox 能力；
+- Runtime 取消、超时、断连和结果对账；
+- Prompt Injection、网络外泄和下载风险。
+
+#### 最小垂直切片
+
+```text
+创建 AgentRun
+  → Worker 调用 ResearchAgentRuntime Adapter
+  → Runtime 读取最小授权的 Project/Evidence Context
+  → 浏览一个允许访问的公开资源
+  → 生成 Resource Manifest
+  → 下载一个受策略限制的公开文件
+  → 提交隔离 Artifact 和来源信息
+  → 平台归一化 Event 并完成 Run
+```
+
+#### 阶段出口
+
+- ADR 记录候选方案、实验证据、选择理由和被拒绝方案；
+- `ResearchAgentRuntime` 契约不泄漏具体 SDK 类型到 Domain 和公开 API；
+- 业务 `AgentRun` 与 SDK Conversation/Thread/Workspace ID 有稳定映射；
+- SDK 事件被筛选并映射为版本化业务 Event，不保存完整思考过程和敏感输出；
+- 取消、超时、Runtime 断连和“SDK 成功但本地响应丢失”至少各有一次验证；
+- 下载 Artifact 具有来源、内容哈希、大小、类型和 Project 所有权；
+- 明确是否进入 Phase 6；若用例或运行时不成立，Core v1 仍保持完整可交付。
+
+### Phase 6：SDK 驱动的 Research Agent 与安全强化
+
+#### 目标
+
+基于 Phase 5 选定的 Agent SDK，将已验证的研究任务扩展为可用、受限、可观察的 Research Agent，并系统验证 Browser、Tool、Workspace 和 Sandbox 的安全与可靠性。
+
+#### 主要内容
+
+- Research Agent 创建、详情、事件、审批、取消和 Artifact UI；
+- Paper/Evidence、公开项目页、代码仓库、数据集和补充材料工具；
+- Browser/URL Allow Policy、Redirect/SSRF 防护和下载隔离；
+- Runtime Tool Policy、预算、重复或无进展检测；
+- Workspace/Sandbox 生命周期、文件传输和资源限制；
+- Agent Event、Usage、ToolExecution 和 Artifact 审计；
+- Runtime 升级兼容测试、故障注入和 Agent 评测集；
+- 如确有用户价值，再通过 ADR 加入受限 `run_python_analysis`。
+
+#### 阶段出口
+
+- Agent 只能访问当前 Run 授权的 Project Context、工具、网络目标和 Workspace；
+- 不绕过登录、付费墙或 CAPTCHA，危险下载和不可逆操作必须审批；
+- 网页、论文和仓库内容按不可信输入处理，Prompt Injection 不会获得平台 Secret 或数据库权限；
+- 最大步骤、Token、费用、墙钟时间、Tool Call 和输出大小限制生效；
+- Runtime 取消后不再发起新操作，重复执行不会重复提交最终 Artifact；
+- Sandbox 默认不接触宿主文件和 Secret，网络与资源策略有测试证据；
+- SDK 升级由契约测试保护，公开 API 不暴露 SDK 内部模型；
+- Core 与 Agent 两组用户旅程、评测、运维文档和已知限制均完成。
 
 ## 18. 学习笔记规划
 
@@ -1312,11 +1351,13 @@ docs/learning-journal/modules/
 ├─ 06-evidence-and-citation-integrity.md
 ├─ 07-langgraph-checkpoint-and-resume.md
 ├─ 08-human-in-the-loop.md
-├─ 09-tool-runtime-and-budget.md
-├─ 10-sandbox-and-side-effects.md
-├─ 11-sse-replay-and-frontend-state.md
-└─ 12-observability-and-evaluation.md
+├─ 09-sse-replay-and-frontend-state.md
+├─ 10-observability-and-evaluation.md
+├─ 11-agent-runtime-sdk-integration.md
+└─ 12-browser-sandbox-and-side-effects.md
 ```
+
+前 10 份属于 Core Research Backend；第 11、12 份只在 Agent Extension 对应模块实际完成后编写。
 
 每份笔记至少说明：
 
@@ -1343,7 +1384,7 @@ docs/learning-journal/modules/
 - Repository Integration Test：真实 PostgreSQL 和约束；
 - Queue/Worker Integration Test：重复 Job、失败和恢复；
 - LangGraph Test：Node、Route、Interrupt、Resume 和 Checkpoint；
-- Contract Test：HTTP、Event、Tool 和模型结构化输出；
+- Contract Test：HTTP、Event 和模型结构化输出；Agent 扩展再增加 Runtime/Tool 契约；
 - UI Component Test：用户可见状态和无障碍；
 - E2E：少量关键旅程；
 - Evaluation：RAG、Citation 和综述质量数据集。
@@ -1363,7 +1404,7 @@ docs/learning-journal/modules/
 
 ### 19.3 故障测试
 
-至少覆盖：
+Core Research Backend 至少覆盖：
 
 - Worker 在步骤前后退出；
 - Provider 超时、429 和 5xx；
@@ -1374,9 +1415,18 @@ docs/learning-journal/modules/
 - SSE 断线重连；
 - 用户取消与步骤成功并发；
 - Checkpoint 后恢复；
-- Parser 和 Sandbox 超时；
+- Parser 超时；
 - 跨用户访问；
 - 无效或伪造 Citation。
+
+Agent Extension 另需覆盖：
+
+- Runtime 断连、超时、取消和升级不兼容；
+- SDK 成功但本地响应丢失；
+- Browser Redirect、SSRF、Prompt Injection 和网络外泄；
+- 下载大小、类型、恶意文件和重复 Artifact；
+- Sandbox 超时、资源耗尽和跨 Workspace 访问；
+- Tool 审批、预算和重复副作用。
 
 ## 20. 架构决策触发条件
 
@@ -1386,6 +1436,11 @@ docs/learning-journal/modules/
 - PostgreSQL 向量检索更换为专用向量数据库；
 - 本地文件存储更换为 S3；
 - 模块化单体拆分为独立服务；
+- 选择或更换 OpenHands、Deep Agents 等 Agent Runtime；
+- 引入外部 Agent Server、Browser 或 Sandbox 服务；
+- 修改业务 Run 与 SDK Conversation/Thread/Checkpoint/Workspace 的所有权或映射；
+- 修改 SDK 原始 Event 到业务 Event 的归一化规则；
+- 扩大 Agent 网络、凭据、文件或下载权限；
 - 引入任意代码执行；
 - Workflow 从固定图升级为用户自定义图；
 - 新增多 Agent；
@@ -1408,29 +1463,53 @@ docs/learning-journal/modules/
 - LangGraph 的精确 State 与 Node 列表；
 - Prompt 文本；
 - 人工筛选和大纲确认的 UI；
-- Sandbox 的最终部署参数；
 - Citation Style 和 DOCX 模板；
 - Metrics Bucket 和告警阈值。
+
+以下决策明确推迟到 Phase 5/6，而不是在 Core v1 中预先固定：
+
+- Agent 的最终用户故事和是否进入正式产品；
+- OpenHands、Deep Agents 或其他 Runtime 的选择与版本；
+- Runtime 部署在 Worker 内、独立 Agent Server 还是托管服务；
+- SDK Thread、Checkpoint、Conversation 和 Workspace 的生命周期；
+- Browser、MCP、Tool、网络和下载策略；
+- Sandbox Provider、生命周期和最终部署参数；
+- 是否开放受限 `run_python_analysis`。
 
 这些决定应基于当前阶段的真实需求、实验和测试，而不是在尚未实现基础链路时猜测。
 
 ## 22. 完成定义
 
-项目总体完成需要同时满足：
+### 22.1 Core Research Backend v1
 
-- 文献导入、RAG、Workflow 和 Agent 三种路径可运行；
+Core v1 完成需要同时满足：
+
+- 文献导入、有引用 RAG 和固定 Review Workflow 三条路径可运行；
 - 长任务可查询、重试、取消、暂停和恢复；
 - Worker/HTTP 进程重启不会破坏业务事实；
 - Event 可重放，页面刷新可恢复；
-- 引用可定位到 Paper Version 和 Evidence；
-- Tool 和代码执行受 Schema、权限、预算和资源限制；
-- 用户数据隔离有自动测试；
-- 关键行为不依赖真实模型即可测试；
+- 重要 Claim 的引用可定位到 Paper Version 和 Evidence；
+- 用户和 Project 数据隔离有自动测试；
+- 关键行为不依赖真实模型或实时学术 API 即可测试；
 - Docker Compose 可复现启动；
 - 关键日志、指标和 Trace 可用于诊断；
-- 评测结果来自真实运行且可复现；
-- 每个阶段完成 Spec、测试证据、模块笔记和复盘；
+- Retrieval、Citation 和 Workflow 评测结果来自真实运行且可复现；
+- Phase 1 至 Phase 4 的阶段 Spec、测试证据、模块笔记和复盘完成；
 - 开发者能够不依赖 AI 解释核心架构、失败语义和设计取舍。
+
+达到以上条件即可将项目作为完整的 Core Research Backend 交付，Research Agent Extension 不阻塞该结论。
+
+### 22.2 Research Agent Extension
+
+若 Phase 5 选型验证通过并继续 Phase 6，Agent 扩展完成还需要：
+
+- 至少一个明确的论文相关资源发现用户故事端到端可运行；
+- Agent SDK 通过 `ResearchAgentRuntime` Adapter 接入，不污染 Domain 和公开 API；
+- 业务 Run、SDK Runtime、Workspace、Event 和 Artifact 的所有权清晰；
+- Browser、Tool、下载和代码执行受 Schema、权限、审批、预算、网络与资源策略限制；
+- Runtime 重试、取消、断连、恢复和重复副作用有测试证据；
+- Agent 不能接触未授权 Project 数据、平台数据库、宿主文件或 Secret；
+- Agent 评测、运维文档、模块笔记和已知限制完成。
 
 ## 23. 建议学习节奏
 
@@ -1443,17 +1522,21 @@ docs/learning-journal/modules/
 | 3 | 文档结构、Embedding、检索 | 可评测的文献检索 |
 | 4 | Evidence、Citation、SSE | 有引用的 RAG 问答 |
 | 5 | LangGraph、Checkpoint、Interrupt | 可暂停恢复的综述 Workflow |
-| 6 | Tool、预算、副作用 | 受限 Research Agent |
-| 7 | Sandbox、安全、故障注入 | 受控 Python 分析和可靠性报告 |
-| 8 | Observability、E2E、评测 | 可部署、可演示、可复盘的项目 |
+| 6 | Observability、E2E、评测、故障恢复 | 可部署、可演示、可复盘的 Core v1 |
+| 7 | Agent SDK、Runtime Adapter、所有权 | 有 ADR 和运行证据的 Agent 集成 Spike |
+| 8 | Browser、Tool、Sandbox、安全 | 受限且可观察的 Research Agent Extension |
 
 如果某阶段无法用自己的话解释状态所有权和失败行为，应暂停增加功能，先完成实验和笔记。
 
 ## 24. 最终面试叙事
 
-项目完成后，推荐使用下面的主线介绍：
+Core Research Backend 完成后，推荐使用下面的主线介绍：
 
-> 我实现了一个面向文献综述的单节点 Agent 后端。FastAPI 负责 API 和 SSE，ARQ/Valkey 负责异步任务投递，PostgreSQL 保存业务 Run、事件、文献和向量，LangGraph 管理综述工作流与 Agent 的 Checkpoint 和暂停恢复。系统将业务 Run 与 LangGraph State 分离，按至少一次执行设计，通过状态条件更新、唯一约束、幂等键和内容哈希避免重复副作用。生成过程采用 Evidence-first，所有主要 Claim 都绑定具体论文版本、页码和证据，并在导出前进行引用校验。Agent 只能调用注册工具，代码分析通过受限沙箱执行。整个系统可以演示任务重试、取消、SSE 重放、人工确认和 Worker 崩溃恢复。
+> 我实现了一个面向文献综述的可靠研究后端。FastAPI 负责 API 和 SSE，ARQ/Valkey 负责异步任务投递，PostgreSQL 保存业务 Run、Event、文献、Evidence 和向量，LangGraph 管理固定综述 Workflow 的 Checkpoint、Interrupt 和 Resume。系统将业务 Run 与 LangGraph State 分离，按至少一次执行设计，通过条件更新、唯一约束、幂等键和内容哈希避免重复副作用。RAG 和综述生成采用 Evidence-first，重要 Claim 绑定具体论文版本、页码和证据，并在输出前进行引用校验。系统可以演示任务重试、取消、SSE 重放、人工确认、Worker 崩溃恢复和可复现评测。
+
+Research Agent Extension 完成后，可以追加：
+
+> 在核心后端稳定后，我没有重新实现通用 Agent Harness，而是通过 `ResearchAgentRuntime` Adapter 接入经过 Spike 和 ADR 选定的 Agent SDK。SDK 负责规划、浏览器和隔离 Workspace，本系统继续拥有业务 Run、权限、Event、Evidence 和 Artifact，从而让开放式 Agent 也能复用相同的可靠执行和审计能力。
 
 后续追问应能够展开：
 
@@ -1467,7 +1550,9 @@ docs/learning-journal/modules/
 - Citation 如何防止模型伪造来源；
 - 为什么第一版不用独立向量数据库；
 - 为什么第一版不实现通用 Workflow Builder；
-- Sandbox 与普通 Docker 容器有什么差别。
+- 为什么不自行开发通用 Agent Loop；
+- 业务 Run 与 SDK Conversation/Thread/Workspace 如何映射；
+- Sandbox 能解决什么、不能解决哪些 Prompt Injection 和网络风险。
 
 ## 25. 技术参考
 
@@ -1482,4 +1567,8 @@ docs/learning-journal/modules/
 - [Docling](https://github.com/docling-project/docling)
 - [OpenAlex API](https://developers.openalex.org/api-reference/introduction)
 - [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/)
-- [Dify Sandbox](https://github.com/langgenius/dify-sandbox)
+- [OpenHands Software Agent SDK](https://docs.openhands.dev/sdk/index)
+- [OpenHands Agent Server](https://docs.openhands.dev/sdk/guides/agent-server/overview)
+- [OpenHands Browser Use](https://docs.openhands.dev/sdk/guides/agent-browser-use)
+- [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
+- [Deep Agents Sandboxes](https://docs.langchain.com/oss/python/deepagents/sandboxes)
