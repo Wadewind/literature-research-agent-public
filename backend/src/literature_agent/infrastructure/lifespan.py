@@ -22,8 +22,8 @@ from literature_agent.infrastructure.storage.local_storage import LocalFileStora
 class AppState:
     """应用运行期间存活资源的容器。
 
-    lifespan 上下文管理器在启动时创建一个实例并交给 FastAPI，
-    FastAPI 将其存入 ``app.state``。
+    lifespan 上下文管理器在启动时创建一个实例，
+    存入 ``app.state.app_state``（同时产出 lifespan state 映射）。
 
     ``queue`` 的 Valkey 连接在首次投递时惰性建立，
     因此 API 启动不强依赖 Valkey 可用。
@@ -45,7 +45,7 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
 
     产出:
         一个映射，其 ``app_state`` 键存放已填充的 ``AppState``。
-        FastAPI 会将该映射合并到 ``app.state``。
+        同时直接写入 ``app.state.app_state`` 供依赖项访问。
     """
     settings = Settings.from_env()
     engine = create_engine(settings)
@@ -60,6 +60,9 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
         queue=queue,
     )
     try:
+        # 显式写入 app.state：lifespan 产出的映射只会进入请求 scope["state"]，
+        # 依赖项通过 request.app.state 访问，二者不是同一对象。
+        app.state.app_state = state
         yield {"app_state": state}
     finally:
         await queue.aclose()
