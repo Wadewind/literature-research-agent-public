@@ -1,6 +1,6 @@
 """PaperVersion Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.paper_version_repository import (
@@ -20,6 +20,7 @@ def _to_domain(orm: PaperVersionORM) -> PaperVersion:
         size_bytes=orm.size_bytes,
         content_type=orm.content_type,
         created_at=orm.created_at,
+        current_parse_revision_id=orm.current_parse_revision_id,
     )
 
 
@@ -68,3 +69,11 @@ class SqlalchemyPaperVersionRepository(PaperVersionRepository):
             .order_by(PaperVersionORM.created_at.desc()),
         )
         return [_to_domain(row) for row in result.scalars().all()]
+
+    async def set_current_parse_revision(self, version_id: str, revision_id: str) -> None:
+        """更新 Version 的当前 Parse Revision 指针。"""
+        await self._session.execute(
+            update(PaperVersionORM)
+            .where(PaperVersionORM.version_id == version_id)
+            .values(current_parse_revision_id=revision_id),
+        )

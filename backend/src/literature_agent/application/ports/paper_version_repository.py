@@ -19,3 +19,7 @@ class PaperVersionRepository(Protocol):
     async def list_by_paper(self, paper_id: str) -> list[PaperVersion]:
         """按 Paper ID 列出所有版本。"""
         ...
+
+    async def set_current_parse_revision(self, version_id: str, revision_id: str) -> None:
+        """把 Version 的当前 Parse Revision 指针指向指定 Revision。"""
+        ...

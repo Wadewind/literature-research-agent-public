@@ -24,3 +24,12 @@ class FakePaperVersionRepository(PaperVersionRepository):
     async def list_by_paper(self, paper_id: str) -> list[PaperVersion]:
         """返回指定 Paper 的版本列表。"""
         return [v for v in self._versions.values() if v.paper_id == paper_id]
+
+    async def set_current_parse_revision(self, version_id: str, revision_id: str) -> None:
+        """更新 Version 的当前 Parse Revision 指针。"""
+        from dataclasses import replace
+
+        version = self._versions[version_id]
+        self._versions[version_id] = replace(
+            version, current_parse_revision_id=revision_id
+        )

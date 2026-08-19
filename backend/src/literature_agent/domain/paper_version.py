@@ -16,6 +16,7 @@ class PaperVersion:
         storage_key: 文件在 Storage 中的键。
         size_bytes: 文件字节大小。
         content_type: 文件 MIME 类型。
+        current_parse_revision_id: 当前生效的 Parse Revision，未解析为 None。
         created_at: 创建时间（UTC）。
     """
 
@@ -26,6 +27,7 @@ class PaperVersion:
     size_bytes: int
     content_type: str
     created_at: datetime
+    current_parse_revision_id: str | None = None
 
 
 def create_paper_version(

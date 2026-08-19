@@ -141,11 +141,110 @@ class PaperVersionORM(Base):
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     size_bytes: Mapped[int] = mapped_column(nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    current_parse_revision_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("document_parse_revisions.revision_id", use_alter=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+
+class DocumentParseRevisionORM(Base):
+    """Document Parse Revision 的持久化映射。"""
+
+    __tablename__ = "document_parse_revisions"
+
+    revision_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    version_id: Mapped[str] = mapped_column(
+        ForeignKey("paper_versions.version_id"),
+        index=True,
+        nullable=False,
+    )
+    parser_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    parser_profile_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    config: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "version_id",
+            "parser_profile_hash",
+            name="uq_parse_revisions_version_profile",
+        ),
+    )
+
+
+class DocumentElementORM(Base):
+    """Document Element 的持久化映射。"""
+
+    __tablename__ = "document_elements"
+
+    element_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    revision_id: Mapped[str] = mapped_column(
+        ForeignKey("document_parse_revisions.revision_id"),
+        index=True,
+        nullable=False,
+    )
+    element_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    parent_element_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("document_elements.element_id", use_alter=True),
+        nullable=True,
+    )
+    section_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    warnings: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("revision_id", "sequence", name="uq_elements_revision_sequence"),
+    )
+
+
+class ElementSourceLocationORM(Base):
+    """Element 来源定位的持久化映射。"""
+
+    __tablename__ = "element_source_locations"
+
+    location_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    element_id: Mapped[str] = mapped_column(
+        ForeignKey("document_elements.element_id"),
+        index=True,
+        nullable=False,
+    )
+    page: Mapped[int] = mapped_column(nullable=False)
+    bbox: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    parser_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    char_range: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
 
 class QueueOutboxORM(Base):
