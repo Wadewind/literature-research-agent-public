@@ -241,6 +241,8 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 
 已完成切片的详细契约保留如下，作为实现记录和后续切片的参照。
 
+已完成切片的详细契约保留如下，作为实现记录和后续切片的参照。
+
 ### 切片 4：上传与版本
 
 #### 目标
@@ -441,6 +443,81 @@ Worker 用真实 PDF 解析替换 Fake Parser：Docling 标准 Pipeline 产出�
 - Fallback 组合：Docling 结构异常 → pypdf 成功且 degraded；超时/资源异常 → 直接 FAILED；pypdf 也失败 → FAILED；
 - 执行器：小超时值触发 `parser_timeout` → FAILED；`degraded`/`warnings` 写入 Revision 并在 document API 可见；
 - 冒烟：本机真实 Docling 解析一个合成 PDF（允许首次下载模型），结果记入模块笔记。
+
+### 切片 8：取消/恢复（Attempt + lease/heartbeat + 对账）
+
+#### 目标
+
+Worker 崩溃、临时错误或机器故障不再让 Run 永久卡在 `RUNNING`：每次执行有 Attempt 记录与心跳，lease 过期后由对账循环把 Run 重新入队或按预算失败；临时错误自动按退避重试，永久错误直接 FAILED。
+
+#### 范围
+
+- **包含**：`RunAttempt` 领域模型/ORM/迁移；认领时创建 Attempt、执行期间心跳（30s）、终态关闭；执行器失败路径按错误分类——永久错误 → FAILED，临时错误且预算内 → `RETRY_WAIT` + Outbox 重置重投（退避），预算耗尽 → FAILED；派发循环投递前把 `RETRY_WAIT` 条件转回 `QUEUED`；Worker 对账循环把 lease 过期（600s 无心跳）的 `RUNNING` Run 收回重投或失败。
+- **不包含**：跨 Worker 任务抢占的精确一次性语义；Human-in-the-loop 审批；LangGraph checkpoint（Phase 1 不用 LangGraph）。
+
+#### 数据模型
+
+新增表 `run_attempts`：
+
+- `attempt_id`（PK）、`run_id`（FK → runs，index）、`attempt_number`、`worker_id`、`status`（`running`/`succeeded`/`failed`/`cancelled`）、`started_at`、`heartbeat_at`、`finished_at`、`error`（JSONB 可空）；
+- 唯一约束 `(run_id, attempt_number)`。
+
+`queue_outbox` 复用不变：重试通过把记录条件重置为 `pending` + 推迟 `scheduled_at` 实现，不新增行（`run_id` 唯一约束保持不变）。
+
+#### 关键不变量
+
+1. 认领 Run（QUEUED → RUNNING）与创建 Attempt 在同一事务；
+2. 心跳只更新 `heartbeat_at`，是 fire-and-forget 的短事务，失败不影响执行主路径；
+3. 错误分类：永久错误（`InvalidPdfInputError` 等输入类、文件校验类）→ FAILED；临时错误（`parser_timeout`、`ParserResourceError`、未知异常、基础设施错误）→ 预算内 RETRY_WAIT 重试；
+4. 重试预算 `max_run_attempts`（默认 3，含首次执行）；退避沿用 Outbox 参数（1s 起指数、上限 60s）；
+5. 对账只收回 `heartbeat_at < now - worker_lease_seconds` 的 RUNNING Run，条件更新保证多实例对账不产生重复终态；
+6. 复活的原 Worker 提交结果时，条件更新失败（Run 已非 RUNNING 或已被收回），不产生第二个终态；
+7. `RETRY_WAIT` 可被取消（已有转换）；重投后重复 Job 仍由认领幂等兜底。
+
+#### 实现决策记录（最小实现，2026-08-20）
+
+- **重投复用 Outbox 行**：不给 Run 加重试字段，RETRY_WAIT 的唤醒时间用 `outbox.scheduled_at` 表达；派发循环看到 pending 记录时若 Run 处于 RETRY_WAIT 先条件转 QUEUED 再投递。权衡：少一张表/少一次建模，代价是 Outbox 语义从"首次投递"扩展为"投递/重投记录"。
+- **对账循环放在 Worker 进程**：不单独部署 Reconciler；多实例并发对账由条件更新兜底（与派发循环同一决策）。
+- **Attempt 关闭是 best effort**：执行器终态后由 RunExecutionService 关闭 Attempt；崩溃场景由对账循环关闭。不要求 Attempt 状态与 Run 终态同事务（Attempt 是运维记录，不是业务事实）。
+- **错误分类表最小化**：只分永久/临时两类，映射表集中在领域函数 `classify_error`，不引入错误码注册表。
+
+#### 测试要点
+
+- Domain：Attempt 生命周期、`classify_error` 分类表；
+- Application：临时错误 → RETRY_WAIT + Outbox 重置 + 事件；预算耗尽 → FAILED；永久错误直接 FAILED；RETRY_WAIT → QUEUED 条件转换；
+- PostgreSQL：Attempt 唯一约束、心跳更新、按 lease 过期查询；
+- Worker 集成：flaky Parser 第一次失败第二次成功 → Run 最终 SUCCEEDED 且事件含重试记录；模拟 lease 过期 → 对账收回重投。
+
+### 切片 9：Event/SSE（历史分页 + 断线重放）
+
+#### 目标
+
+前端可以可靠地跟随一个 Run 的进度：历史事件按 Sequence 游标分页查询，SSE 流先重放后实时推送，通知丢失或断线重连不丢事件。
+
+#### 范围
+
+- **包含**：`GET /runs/{run_id}/events` 增加 `after_sequence` 游标与 `limit`（默认 100、上限 500）；`GET /runs/{run_id}/events/stream` SSE 端点（`Last-Event-ID` 断线重放、心跳注释、终态收束关闭）；`EventNotifier` Port + Valkey Pub/Sub 实现（channel `run-events:{run_id}`，Payload 只有 run_id，可丢失）；应用服务在事件提交后通知；SSE 以 PostgreSQL 为事实来源，轮询兜底（1s）。
+- **不包含**：跨进程消息广播的 Exactly Once；事件过滤/投影；WebSocket。
+
+#### 关键不变量
+
+1. SSE 的事件永远从 PostgreSQL 读取，Pub/Sub 通知只触发"去查库"，丢失通知由 1s 轮询兜底收敛；
+2. `Last-Event-ID` 携带已收到的最大 Sequence，重连后重放其后全部历史，不重不漏；
+3. Run 到达终态且所有事件已发送后关闭流；
+4. 通知发生在事务提交之后，publish 失败只记日志不影响业务；
+5. SSE 连接不持有数据库事务；每次轮询用独立短事务。
+
+#### 实现决策记录（最小实现，2026-08-20）
+
+- **轮询兜底而非纯 Pub/Sub 驱动**：Pub/Sub 只降延迟，正确性完全由 DB 轮询保证。权衡：多一次/s/连接的查询，换实现简单和通知丢失自愈。
+- **通知注入点在应用服务**：四个写事件的服务（IngestionService、RunService、RunExecutionService、IngestionExecutor）在 commit 后调用 `EventNotifier.notify(run_id)`；API 侧与测试默认注入 Noop。权衡：侵入四个构造函数，换来通知点显式可测；替代方案（Repository 层钩子）会把外部调用带进事务，违反边界。
+- **SSE id 直接用 Sequence 字符串**：不引入全局 event UUID 游标，重放语义与 Run 内顺序一致。
+
+#### 测试要点
+
+- API：`after_sequence`/`limit` 分页、越权 404；
+- SSE：重放历史、Last-Event-ID 续传、终态关闭、通知丢失时轮询收敛（不发布通知也能收到事件）；
+- Notifier：commit 后发布、publish 失败不影响响应。
 
 ## 测试方式
 
