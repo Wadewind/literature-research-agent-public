@@ -8,5 +8,36 @@ uv sync
 uv run agent-service
 ```
 
-The service is built through Phase 1 vertical slices. The current minimal slice exposes a FastAPI application factory, lifespan-managed application state, and `GET /health/live`. Databases, queues, and worker infrastructure are introduced in later slices.
+The service is built through Phase 1 vertical slices. The current slice exposes:
+
+- FastAPI application factory with lifespan-managed application state
+- `GET /health/live`
+- Project CRUD API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/{project_id}`)
+- PostgreSQL persistence with SQLAlchemy 2.0 Async and Alembic migrations
+- Actor Context with ownership filtering
+
+Queues, workers, and ingestion workflows are introduced in later slices.
+
+## 本地开发
+
+启动 PostgreSQL：
+
+```bash
+cd deploy/compose
+docker compose up -d
+```
+
+执行迁移：
+
+```bash
+cd backend
+uv run alembic upgrade head
+```
+
+运行测试：
+
+```bash
+cd backend
+uv run pytest
+```
 
