@@ -346,6 +346,52 @@ Run 创建后能被可靠地交给后台 Worker 执行：数据库提交与队�
 - Queue/Worker 集成（Valkey + ARQ）：Outbox → ARQ → Worker → Run SUCCEEDED 闭环、队列故障恢复补投、相同 Job ID 去重。
 
 6. **Fake Parser 闭环**：Run → Parse Revision → Element/来源定位 → 成功；
+
+### 切片 6：Fake Parser 闭环
+
+#### 目标
+
+Worker 收到 Ingestion Run 后真正走完解析流水线：`DocumentParser` Port 由确定性 Fake Parser 实现，产出 `DocumentParseRevision`、`DocumentElement` 和 `ElementSourceLocation` 并原子提交；用户可通过 API 按页码/章节查询 Element 并回溯到 PDF 页码。真实 Docling/pypdf 在切片 7 替换 Fake Parser。
+
+#### 范围
+
+- **包含**：`DocumentParseRevision`/`DocumentElement`/`ElementSourceLocation` 领域模型、ORM 与迁移；`paper_versions.current_parse_revision_id` 显式当前指针；`ParseProfile` 与确定性 `parser_profile_hash`；`DocumentParser` Port 与 Fake Parser 适配器；`IngestionExecutor`（进度 Event、事务外解析、原子提交、复用已有成功 Revision、提交前取消检查）；`RunExecutionService` 重构为"认领 + 执行器负责终态"；`GET .../paper-versions/{version_id}/document` 与 `GET .../elements` 查询 API；Worker 接线真实执行器。
+- **不包含**：Docling/pypdf 真实解析、OCR、降级标记真实产生、Attempt/lease、SSE、Markdown 序列化。
+
+#### 数据模型
+
+- `document_parse_revisions`：`revision_id`（PK）、`version_id`（FK）、`parser_name`、`parser_version`、`parser_profile_hash`、`status`（`running`/`succeeded`/`failed`）、`config`（JSONB）、`error`（JSONB 可空）、`created_at`、`completed_at`；唯一约束 `(version_id, parser_profile_hash)`。
+- `paper_versions` 新增 `current_parse_revision_id`（可空 FK → `document_parse_revisions`）。
+- `document_elements`：`element_id`（PK）、`revision_id`（FK）、`element_type`、`sequence`（全文阅读顺序）、`parent_element_id`（可空自引用）、`section_path`、`text`、`payload`（JSONB）、`content_hash`；唯一约束 `(revision_id, sequence)`。
+- `element_source_locations`：`location_id`（PK）、`element_id`（FK）、`page`、`bbox`（JSONB 可空）、`parser_ref`、`char_range`（JSONB 可空）。
+
+#### 关键不变量
+
+1. `parser_profile_hash` 由 `(parser_name, parser_version, config)` 的规范化 JSON 计算，相同输入必须相同；
+2. 相同 `(version_id, parser_profile_hash)` 已有 `succeeded` Revision 时复用，不重复解析（Effectively Once）；
+3. Parser 调用在数据库事务外；Revision/Element/来源定位、当前指针、Run 终态和 `result_committed` Event 在同一事务原子提交，不暴露半成品；
+4. Element `sequence` 在 Revision 内唯一且连续；每个 Element 至少一个带来源页码的 SourceLocation；
+5. 执行器在提交前检查取消：`CANCEL_REQUESTED` 时推进 `CANCELLED`，不提交新结果；
+6. 进度 Event：`parse_started` → `parse_completed` → `normalize_completed` → `result_committed`，与状态同事务、Sequence 严格递增。
+
+#### API 契约
+
+```text
+GET /api/v1/projects/{project_id}/paper-versions/{version_id}/document
+GET /api/v1/projects/{project_id}/paper-versions/{version_id}/elements?page=&section=&type=&limit=&offset=
+```
+
+- `document` 返回当前 Revision 元数据与章节概览；`elements` 返回 Element 及来源定位，支持页码/章节前缀/类型过滤与 `limit/offset` 分页；
+- 无当前 Revision 时 `document` 返回 404（`document_not_ready`）；越权或不存在资源一律 404。
+
+#### 测试要点
+
+- Domain：Profile 哈希确定性、Element 顺序/内容哈希、Revision 状态；
+- Application：执行器全链路事件序列、复用路径、取消竞争、Parser 失败 → FAILED；
+- PostgreSQL：唯一约束、当前指针、按页/章节查询；
+- API：契约、过滤分页、越权 404；
+- 端到端：上传 → Worker 消费 → elements 可查（Fake Parser，不依赖真实 PDF 解析）。
+
 7. **真实 Parser**：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
 8. **取消/恢复**：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
 9. **Event/SSE**：历史分页、Sequence 游标、通知丢失和断线重放；
