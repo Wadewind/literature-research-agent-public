@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: agent-service-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent_service
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_service"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 5s
+    stop_grace_period: 10s
+
+volumes:
+  postgres_data:
