@@ -89,7 +89,9 @@ class RunExecutionService:
                     "message": str(exc)[:_ERROR_MESSAGE_MAX_LENGTH],
                 }
             }
-            await self._finish(run_id, RunStatus.FAILED, "run_failed", error_payload, correlation_id)
+            await self._finish(
+                run_id, RunStatus.FAILED, "run_failed", error_payload, correlation_id
+            )
             return ExecutionOutcome.FAILED
 
         finished = await self._finish(

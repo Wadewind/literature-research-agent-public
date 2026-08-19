@@ -1,7 +1,7 @@
 """Outbox 派发应用服务测试。"""
 
-from datetime import UTC, datetime, timedelta
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
