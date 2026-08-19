@@ -61,7 +61,7 @@ HTTP Route (api/paper_files.py)
 - `tests/api/test_paper_files.py`：HTTP 202/400/404/409 契约。
 - `tests/integration/test_paper_repository.py`、`test_paper_version_repository.py`、`test_idempotency_repository.py`：PostgreSQL 持久化、唯一约束、外键隔离。
 
-当前全部通过：`uv run pytest -q` 90 passed。
+当前全部通过：`uv run pytest -q` 113 passed（切片 6 完成后）。
 
 ## 代码入口
 
@@ -75,7 +75,7 @@ HTTP Route (api/paper_files.py)
 ## 已知限制
 
 - Storage 写入在 DB 事务内，若 DB 回滚可能产生孤儿文件。
-- Worker 执行体仍是占位实现（仅推进状态），真实 PDF 解析在切片 6 接入。
+- Worker 执行体已接入 `IngestionExecutor` + Fake Parser（切片 6），真实 PDF 解析在切片 7 接入。
 - 未实现跨上传的内容去重；相同 PDF 多次上传会创建多个 PaperVersion。
 - 未实现 SSE/实时通知，用户需轮询 Run 状态。
 - 本地文件存储，未替换为 S3 等对象存储。

@@ -18,8 +18,8 @@ Worker 进程（python -m literature_agent.worker）│
   └─ ARQ Job execute_run(run_id)
        → RunExecutionService.execute
             → 条件认领 QUEUED → RUNNING（+ run_started Event）
-            → 事务外执行占位执行体（切片 6 接入真实解析）
-            → 条件推进 RUNNING → SUCCEEDED/FAILED（+ 对应 Event）
+            → 事务外调用执行器（切片 6 起为 IngestionExecutor + Fake Parser）
+            → 执行器负责推进 RUNNING → SUCCEEDED/FAILED/CANCELLED（+ 对应 Event）
 ```
 
 - 数据库提交与队列投递之间不假设原子性：Outbox 是持久化间隙，崩溃后下一轮派发循环补投；
@@ -64,7 +64,7 @@ Worker 进程（python -m literature_agent.worker）│
 - `tests/integration/test_outbox_repository.py`：PostgreSQL 唯一约束、外键、到期查询、`try_mark_dispatched` 条件更新。
 - `tests/integration/test_queue_worker.py`：Valkey + ARQ + PostgreSQL 端到端——Outbox → ARQ → Worker → Run SUCCEEDED；队列故障后恢复补投；相同 Job ID 去重。
 
-当前全部通过：`uv run pytest -q` 90 passed，`ruff check` 与 `pyright` 无告警。
+当前全部通过：`uv run pytest -q` 113 passed（切片 6 完成后），`ruff check` 与 `pyright` 无告警。
 
 ## 代码入口
 
@@ -78,7 +78,7 @@ Worker 进程（python -m literature_agent.worker）│
 
 ## 已知限制
 
-- 执行体仍是占位实现，不解析 PDF（切片 6）。
+- 执行体已接入 `IngestionExecutor` + Fake Parser（切片 6，见 document-parsing 笔记），真实 Docling 解析在切片 7 接入。
 - 没有 Attempt/lease：`RUNNING` 状态的 Run 在 Worker 崩溃后不会自动对账（切片 8）。
 - 单实例派发循环；多实例派发依赖 Job ID 去重和条件更新，未使用 SKIP LOCKED 认领。
 - Outbox `failed` 终态暂无自动告警和人工重放入口。

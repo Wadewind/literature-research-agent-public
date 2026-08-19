@@ -15,9 +15,10 @@ The service is built through Phase 1 vertical slices. The current slices expose:
 - Project CRUD API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/{project_id}`)
 - Paper file upload API (`POST /api/v1/projects/{project_id}/paper-files`) with idempotency
 - Run/Event API (`GET /api/v1/runs/{run_id}`, `POST /api/v1/runs/{run_id}/cancel`, `GET /api/v1/runs/{run_id}/events`)
+- Document query API (`GET /api/v1/projects/{project_id}/paper-versions/{version_id}/document`, `GET .../elements`) with page/section/type filters
 - PostgreSQL persistence with SQLAlchemy 2.0 Async and Alembic migrations
 - Actor Context with ownership filtering
-- Queue Outbox + ARQ Worker reliable dispatch (placeholder executor until slice 6)
+- Queue Outbox + ARQ Worker reliable dispatch with Fake Parser ingestion executor (slice 6)
 
 Run the ARQ worker (dispatches the queue outbox and executes run jobs):
 
