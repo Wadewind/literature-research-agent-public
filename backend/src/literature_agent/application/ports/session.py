@@ -17,3 +17,7 @@ class Session(Protocol):
     async def commit(self) -> None:
         """提交当前事务。"""
         ...
+
+    async def rollback(self) -> None:
+        """回滚当前事务。"""
+        ...
