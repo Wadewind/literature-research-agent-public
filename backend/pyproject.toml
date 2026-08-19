@@ -7,11 +7,13 @@ requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.16.5",
     "arq>=0.28,<0.29",
+    "docling>=2.120.3",
     "fastapi>=0.141.1",
     "httpx2>=2.10.0",
     "langgraph>=1.2.10",
     "psycopg[binary]>=3.2.9",
     "pydantic>=2,<3",
+    "pypdf>=6.16.1",
     "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.43",
     "uvicorn[standard]>=0.52.2",
