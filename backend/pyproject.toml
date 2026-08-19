@@ -12,6 +12,7 @@ dependencies = [
     "langgraph>=1.2.10",
     "psycopg[binary]>=3.2.9",
     "pydantic>=2,<3",
+    "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.43",
     "uvicorn[standard]>=0.52.2",
 ]
