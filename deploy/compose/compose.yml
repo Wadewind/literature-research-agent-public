@@ -19,5 +19,40 @@ services:
       start_period: 5s
     stop_grace_period: 10s
 
+  valkey:
+    image: valkey/valkey:9
+    container_name: agent-service-valkey
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
+
+  worker:
+    build:
+      context: ../../backend
+    container_name: agent-service-worker
+    restart: unless-stopped
+    command: ["uv", "run", "--no-sync", "python", "-m", "literature_agent.worker"]
+    environment:
+      AGENT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agent_service
+      AGENT_REDIS_URL: redis://valkey:6379/0
+      AGENT_STORAGE_ROOT: /data/storage
+    volumes:
+      - storage_data:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  valkey_data:
+  storage_data:
