@@ -7,14 +7,13 @@
 - 相同 Job ID 的重复投递被队列去重。
 """
 
-import pytest
+from datetime import UTC, datetime, timedelta
+
 import pytest_asyncio
 from arq.connections import RedisSettings, create_pool
 from arq.worker import Worker
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from testcontainers.community.redis import RedisContainer
-
-from datetime import UTC, datetime, timedelta
 
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.application.run_execution_service import RunExecutionService
@@ -70,7 +69,9 @@ def _session_factory(db_engine):
     return async_sessionmaker(db_engine, expire_on_commit=False)
 
 
-async def test_dispatch_to_worker_completes_run(db_engine, valkey_url: str, queued_run: str) -> None:
+async def test_dispatch_to_worker_completes_run(
+    db_engine, valkey_url: str, queued_run: str
+) -> None:
     """完整闭环：Outbox → ARQ → Worker → Run SUCCEEDED。"""
     queue = ArqRunQueue(valkey_url)
     session_factory = _session_factory(db_engine)
