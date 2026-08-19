@@ -25,3 +25,6 @@ notebook/
 # Local PDF fixtures may contain copyrighted or private papers.
 backend/tests/fixtures/pdfs/local/*
 !backend/tests/fixtures/pdfs/local/README.md
+
+# 本地运行时的上传文件存储，不提交。
+backend/data/
