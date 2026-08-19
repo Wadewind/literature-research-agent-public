@@ -13,6 +13,7 @@ from literature_agent.domain.project import create_project
 from literature_agent.main import create_app
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_idempotency_repository import FakeIdempotencyRepository
+from tests.fakes.fake_outbox_repository import FakeOutboxRepository
 from tests.fakes.fake_paper_repository import FakePaperRepository
 from tests.fakes.fake_paper_version_repository import FakePaperVersionRepository
 from tests.fakes.fake_project_repository import FakeProjectRepository, fake_session
@@ -27,6 +28,7 @@ def _build_fake_service(
     paper_repo = FakePaperRepository()
     paper_version_repo = FakePaperVersionRepository()
     idempotency_repo = FakeIdempotencyRepository()
+    outbox_repo = FakeOutboxRepository()
     run_repo = FakeRunRepository()
     event_repo = FakeEventRepository()
     storage = FakeStorage()
@@ -40,6 +42,7 @@ def _build_fake_service(
         idempotency_repo_factory=lambda _session: idempotency_repo,
         run_repo_factory=lambda _session: run_repo,
         event_repo_factory=lambda _session: event_repo,
+        outbox_repo_factory=lambda _session: outbox_repo,
         storage=storage,
     )
 

@@ -12,6 +12,7 @@ from literature_agent.application.ports.idempotency_repository import (
     IdempotencyRecord,
     IdempotencyRepository,
 )
+from literature_agent.application.ports.outbox_repository import OutboxRepository
 from literature_agent.application.ports.paper_repository import PaperRepository
 from literature_agent.application.ports.paper_version_repository import (
     PaperVersionRepository,
@@ -30,6 +31,7 @@ from literature_agent.domain.exceptions import (
 )
 from literature_agent.domain.paper import create_paper
 from literature_agent.domain.paper_version import create_paper_version
+from literature_agent.domain.queue_outbox import create_outbox_entry
 from literature_agent.domain.run import Run, create_run
 
 TSession = TypeVar("TSession", bound=Session)
@@ -91,6 +93,7 @@ class IngestionService:
         idempotency_repo_factory: Callable[[TSession], IdempotencyRepository],
         run_repo_factory: Callable[[TSession], RunRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
+        outbox_repo_factory: Callable[[TSession], OutboxRepository],
         storage: Storage,
     ) -> None:
         """初始化 IngestionService。
@@ -104,6 +107,7 @@ class IngestionService:
             idempotency_repo_factory: 根据 session 创建 IdempotencyRepository 的工厂。
             run_repo_factory: 根据 session 创建 RunRepository 的工厂。
             event_repo_factory: 根据 session 创建 EventRepository 的工厂。
+            outbox_repo_factory: 根据 session 创建 OutboxRepository 的工厂。
             storage: 文件存储适配器。
         """
         self._max_upload_size_bytes = max_upload_size_bytes
@@ -114,6 +118,7 @@ class IngestionService:
         self._idempotency_repo_factory = idempotency_repo_factory
         self._run_repo_factory = run_repo_factory
         self._event_repo_factory = event_repo_factory
+        self._outbox_repo_factory = outbox_repo_factory
         self._storage = storage
 
     async def upload_paper_file(
@@ -208,6 +213,8 @@ class IngestionService:
             await self._run_repo_factory(session).add(updated_run)
             await session.flush()
             await self._event_repo_factory(session).add(created_event)
+            # Run、Event 与 Outbox 在同一事务提交：派发器崩溃后仍可补投
+            await self._outbox_repo_factory(session).add(create_outbox_entry(run.run_id))
             await self._storage.write(storage_key, content)
 
             record = IdempotencyRecord(

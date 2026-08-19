@@ -13,6 +13,7 @@ from literature_agent.domain.exceptions import (
 from literature_agent.domain.project import create_project
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_idempotency_repository import FakeIdempotencyRepository
+from tests.fakes.fake_outbox_repository import FakeOutboxRepository
 from tests.fakes.fake_paper_repository import FakePaperRepository
 from tests.fakes.fake_paper_version_repository import FakePaperVersionRepository
 from tests.fakes.fake_project_repository import FakeProjectRepository, fake_session
@@ -57,6 +58,12 @@ def event_repo() -> FakeEventRepository:
 
 
 @pytest.fixture
+def outbox_repo() -> FakeOutboxRepository:
+    """提供 Fake Outbox Repository。"""
+    return FakeOutboxRepository()
+
+
+@pytest.fixture
 def storage() -> FakeStorage:
     """提供 Fake Storage。"""
     return FakeStorage()
@@ -70,6 +77,7 @@ async def service(
     idempotency_repo: FakeIdempotencyRepository,
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
+    outbox_repo: FakeOutboxRepository,
     storage: FakeStorage,
 ) -> IngestionService:
     """提供使用 Fake Repository 的 IngestionService。"""
@@ -82,6 +90,7 @@ async def service(
         idempotency_repo_factory=lambda _session: idempotency_repo,
         run_repo_factory=lambda _session: run_repo,
         event_repo_factory=lambda _session: event_repo,
+        outbox_repo_factory=lambda _session: outbox_repo,
         storage=storage,
     )
 
@@ -131,6 +140,30 @@ async def test_upload_valid_pdf_creates_run(
     assert result.paper_id
     assert result.version_id
     assert result.run_id
+
+
+@pytest.mark.asyncio
+async def test_upload_creates_outbox_entry_in_same_flow(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    outbox_repo: FakeOutboxRepository,
+) -> None:
+    """上传成功应同时创建一条 PENDING 的 Outbox 记录。"""
+    result = await service.upload_paper_file(
+        actor=actor,
+        project_id=project.project_id,
+        filename="test.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="key-outbox",
+        correlation_id="corr-1",
+    )
+
+    entry = await outbox_repo.get_by_run_id(result.run_id)
+    assert entry is not None
+    assert entry.status.value == "pending"
+    assert entry.attempt_count == 0
 
 
 @pytest.mark.asyncio

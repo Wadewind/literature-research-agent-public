@@ -17,6 +17,9 @@ from literature_agent.infrastructure.persistence.event_repository import (
 from literature_agent.infrastructure.persistence.idempotency_repository import (
     SqlalchemyIdempotencyRepository,
 )
+from literature_agent.infrastructure.persistence.outbox_repository import (
+    SqlalchemyOutboxRepository,
+)
 from literature_agent.infrastructure.persistence.paper_repository import (
     SqlalchemyPaperRepository,
 )
@@ -45,6 +48,7 @@ def get_ingestion_service(request: Request) -> IngestionService:
         idempotency_repo_factory=SqlalchemyIdempotencyRepository,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
         storage=app_state.storage,
     )
 
