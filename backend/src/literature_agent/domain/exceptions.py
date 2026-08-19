@@ -54,3 +54,19 @@ class IdempotencyConflictError(Exception):
     def __init__(self, idempotency_key: str) -> None:
         self.idempotency_key = idempotency_key
         super().__init__(f"Idempotency-Key {idempotency_key} 已用于不同请求")
+
+
+class PaperVersionNotFoundError(Exception):
+    """Paper Version 不存在或不属于当前 actor 可见范围。"""
+
+    def __init__(self, version_id: str) -> None:
+        self.version_id = version_id
+        super().__init__(f"PaperVersion {version_id} 不存在")
+
+
+class DocumentNotReadyError(Exception):
+    """Paper Version 尚无当前 Parse Revision，文档内容不可用。"""
+
+    def __init__(self, version_id: str) -> None:
+        self.version_id = version_id
+        super().__init__(f"PaperVersion {version_id} 尚未完成解析")

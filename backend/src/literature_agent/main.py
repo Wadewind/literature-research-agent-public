@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from literature_agent.api.documents import router as documents_router
 from literature_agent.api.health import router as health_router
 from literature_agent.api.paper_files import router as paper_files_router
 from literature_agent.api.projects import router as projects_router
@@ -23,4 +24,5 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(runs_router)
     app.include_router(paper_files_router)
+    app.include_router(documents_router)
     return app
