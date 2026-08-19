@@ -8,5 +8,5 @@ uv sync
 uv run agent-service
 ```
 
-The current entry point is only a project-layout smoke test. FastAPI and Worker processes will be introduced through Phase 0 vertical slices.
+The service is built through Phase 1 vertical slices. The current minimal slice exposes a FastAPI application factory, lifespan-managed application state, and `GET /health/live`. Databases, queues, and worker infrastructure are introduced in later slices.
 

@@ -1,0 +1,20 @@
+"""FastAPI 应用工厂。"""
+
+from fastapi import FastAPI
+
+from literature_agent.api.health import router as health_router
+from literature_agent.infrastructure.lifespan import app_lifespan
+
+
+def create_app() -> FastAPI:
+    """创建并配置一个 FastAPI 应用实例。
+
+    工厂本身无状态：所有应用级资源都由 lifespan 上下文管理器创建和回收。
+    这样测试不会依赖全局单例，也便于重复创建应用实例。
+    """
+    app = FastAPI(
+        title="Literature Review Agent",
+        lifespan=app_lifespan,
+    )
+    app.include_router(health_router, prefix="/health")
+    return app
