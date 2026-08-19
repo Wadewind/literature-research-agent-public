@@ -92,6 +92,6 @@ def test_normalize_parsed_document_assigns_ids_and_order() -> None:
     assert all(len(e.content_hash) == 64 for e in elements)
 
     assert len(locations) == 3
-    paragraph_locations = [l for l in locations if l.element_id == elements[1].element_id]
-    assert [l.page for l in paragraph_locations] == [1, 2]
+    paragraph_locations = [loc for loc in locations if loc.element_id == elements[1].element_id]
+    assert [loc.page for loc in paragraph_locations] == [1, 2]
     assert paragraph_locations[0].bbox == [10.0, 20.0, 30.0, 40.0]

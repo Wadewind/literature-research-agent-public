@@ -50,3 +50,7 @@ class FakeElementRepository(ElementRepository):
     async def list_locations(self, element_ids: list[str]) -> list[ElementSourceLocation]:
         """按 Element ID 列表返回来源定位。"""
         return [loc for loc in self._locations if loc.element_id in element_ids]
+
+    async def count_by_revision(self, revision_id: str) -> int:
+        """统计 Revision 下的 Element 数量。"""
+        return sum(1 for e in self._elements.values() if e.revision_id == revision_id)

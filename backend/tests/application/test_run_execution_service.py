@@ -6,6 +6,7 @@ from literature_agent.application.run_execution_service import (
     ExecutionOutcome,
     RunExecutionService,
 )
+from literature_agent.domain.event import create_event
 from literature_agent.domain.run import Run, RunStatus, create_run
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_project_repository import fake_session
@@ -24,23 +25,44 @@ def event_repo() -> FakeEventRepository:
     return FakeEventRepository()
 
 
-async def _placeholder_work(_run: Run) -> dict:
-    """占位执行体：直接返回固定结果。"""
-    return {"executor": "placeholder"}
-
-
 def _make_service(
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
-    work=_placeholder_work,
+    executor,
 ) -> RunExecutionService:
     """构建使用 Fake 依赖的 RunExecutionService。"""
     return RunExecutionService(
         session_factory=fake_session,
         run_repo_factory=lambda _session: run_repo,
         event_repo_factory=lambda _session: event_repo,
-        work=work,
+        executor=executor,
     )
+
+
+def _completing_executor(
+    run_repo: FakeRunRepository,
+    event_repo: FakeEventRepository,
+):
+    """模拟自行推进终态的执行器（RUNNING → SUCCEEDED + 事件）。"""
+
+    async def _execute(run: Run, correlation_id: str) -> None:
+        loaded = await run_repo.get_by_id(run.run_id)
+        assert loaded is not None
+        await run_repo.update_status(
+            run.run_id, RunStatus.RUNNING, RunStatus.SUCCEEDED, loaded.event_sequence + 1
+        )
+        await event_repo.add(
+            create_event(
+                run_id=run.run_id,
+                sequence=loaded.event_sequence,
+                event_type="result_committed",
+                actor_type="system",
+                correlation_id=correlation_id,
+                payload={},
+            )
+        )
+
+    return _execute
 
 
 async def _add_run(
@@ -75,9 +97,9 @@ async def test_execute_queued_run_completes(
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
 ) -> None:
-    """QUEUED 的 Run 应被推进到 SUCCEEDED 并写入开始/完成事件。"""
+    """QUEUED 的 Run 应被认领并交给执行器推进到 SUCCEEDED。"""
     run = await _add_run(run_repo)
-    service = _make_service(run_repo, event_repo)
+    service = _make_service(run_repo, event_repo, _completing_executor(run_repo, event_repo))
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
@@ -85,26 +107,29 @@ async def test_execute_queued_run_completes(
     loaded = await run_repo.get_by_id(run.run_id)
     assert loaded is not None
     assert loaded.status == RunStatus.SUCCEEDED
-    assert _event_types(event_repo, run.run_id) == ["run_started", "run_completed"]
+    assert _event_types(event_repo, run.run_id) == ["run_started", "result_committed"]
 
 
 async def test_execute_duplicate_job_is_skipped(
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
 ) -> None:
-    """重复 Job 不应重复推进状态或写入事件。"""
+    """重复 Job 不应重复认领或重复执行。"""
     run = await _add_run(run_repo)
-    service = _make_service(run_repo, event_repo)
+    calls: list[str] = []
+
+    async def _tracking_executor(run: Run, correlation_id: str) -> None:
+        calls.append(run.run_id)
+        await _completing_executor(run_repo, event_repo)(run, correlation_id)
+
+    service = _make_service(run_repo, event_repo, _tracking_executor)
 
     first = await service.execute(run.run_id, correlation_id="job-1")
     second = await service.execute(run.run_id, correlation_id="job-1")
 
     assert first == ExecutionOutcome.COMPLETED
     assert second == ExecutionOutcome.SKIPPED
-    loaded = await run_repo.get_by_id(run.run_id)
-    assert loaded is not None
-    assert loaded.status == RunStatus.SUCCEEDED
-    assert _event_types(event_repo, run.run_id) == ["run_started", "run_completed"]
+    assert calls == [run.run_id]
 
 
 async def test_execute_missing_run(
@@ -112,7 +137,7 @@ async def test_execute_missing_run(
     event_repo: FakeEventRepository,
 ) -> None:
     """Run 不存在时返回 MISSING，不写事件。"""
-    service = _make_service(run_repo, event_repo)
+    service = _make_service(run_repo, event_repo, _completing_executor(run_repo, event_repo))
 
     outcome = await service.execute("no-such-run", correlation_id="job-1")
 
@@ -126,7 +151,7 @@ async def test_execute_cancelled_run_is_skipped(
 ) -> None:
     """已取消的 Run 不应被执行。"""
     run = await _add_run(run_repo, status=RunStatus.CANCELLED)
-    service = _make_service(run_repo, event_repo)
+    service = _make_service(run_repo, event_repo, _completing_executor(run_repo, event_repo))
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
@@ -134,17 +159,17 @@ async def test_execute_cancelled_run_is_skipped(
     assert _event_types(event_repo, run.run_id) == []
 
 
-async def test_execute_work_failure_marks_failed(
+async def test_execute_executor_error_marks_failed(
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
 ) -> None:
-    """执行体抛错时 Run 应进入 FAILED 并写入 run_failed 事件。"""
+    """执行器抛错时由 RunExecutionService 兜底推进 FAILED。"""
 
-    async def _failing_work(_run: Run) -> dict:
+    async def _failing_executor(_run: Run, _correlation_id: str) -> None:
         raise ValueError("解析失败")
 
     run = await _add_run(run_repo)
-    service = _make_service(run_repo, event_repo, work=_failing_work)
+    service = _make_service(run_repo, event_repo, _failing_executor)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
@@ -159,13 +184,37 @@ async def test_execute_work_failure_marks_failed(
     assert failed_event.payload["error"]["message"] == "解析失败"
 
 
+async def test_execute_cancelled_during_execution_is_skipped(
+    run_repo: FakeRunRepository,
+    event_repo: FakeEventRepository,
+) -> None:
+    """执行期间被并发取消（执行器推进 CANCELLED）时返回 SKIPPED。"""
+
+    async def _cancelling_executor(run: Run, correlation_id: str) -> None:
+        loaded = await run_repo.get_by_id(run.run_id)
+        assert loaded is not None
+        await run_repo.update_status(
+            run.run_id, RunStatus.RUNNING, RunStatus.CANCELLED, loaded.event_sequence + 1
+        )
+
+    run = await _add_run(run_repo)
+    service = _make_service(run_repo, event_repo, _cancelling_executor)
+
+    outcome = await service.execute(run.run_id, correlation_id="job-1")
+
+    assert outcome == ExecutionOutcome.SKIPPED
+    loaded = await run_repo.get_by_id(run.run_id)
+    assert loaded is not None
+    assert loaded.status == RunStatus.CANCELLED
+
+
 async def test_concurrent_executions_only_one_completes(
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
 ) -> None:
     """两个并发执行同一 Run 时只有一个能完成，另一个跳过。"""
     run = await _add_run(run_repo)
-    service = _make_service(run_repo, event_repo)
+    service = _make_service(run_repo, event_repo, _completing_executor(run_repo, event_repo))
 
     # Fake 无真实并发，顺序模拟：第一次认领成功后第二次应跳过
     first = await service.execute(run.run_id, correlation_id="job-a")

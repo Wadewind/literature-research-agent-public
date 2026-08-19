@@ -16,13 +16,22 @@ from typing import Any
 from arq.connections import RedisSettings
 from arq.worker import run_worker
 
+from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.application.run_execution_service import RunExecutionService
-from literature_agent.domain.run import Run
+from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.infrastructure.config import Settings
+from literature_agent.infrastructure.parsing.fake_parser import (
+    PARSER_NAME,
+    PARSER_VERSION,
+    FakeDocumentParser,
+)
 from literature_agent.infrastructure.persistence.database import (
     create_engine,
     create_session_factory,
+)
+from literature_agent.infrastructure.persistence.element_repository import (
+    SqlalchemyElementRepository,
 )
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
@@ -30,18 +39,18 @@ from literature_agent.infrastructure.persistence.event_repository import (
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
 )
+from literature_agent.infrastructure.persistence.paper_version_repository import (
+    SqlalchemyPaperVersionRepository,
+)
+from literature_agent.infrastructure.persistence.parse_revision_repository import (
+    SqlalchemyParseRevisionRepository,
+)
 from literature_agent.infrastructure.persistence.run_repository import (
     SqlalchemyRunRepository,
 )
 from literature_agent.infrastructure.queue.arq_run_queue import ArqRunQueue
 
 logger = logging.getLogger(__name__)
-
-
-async def placeholder_work(run: Run) -> dict:
-    """占位执行体：真实 PDF 解析在切片 6 接入。"""
-    logger.info("占位执行 Run: run_id=%s type=%s", run.run_id, run.run_type)
-    return {"executor": "placeholder", "detail": "解析执行体将在切片 6 接入"}
 
 
 async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
@@ -90,7 +99,16 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
-        work=placeholder_work,
+        executor=IngestionExecutor(
+            session_factory=session_factory,
+            run_repo_factory=SqlalchemyRunRepository,
+            event_repo_factory=SqlalchemyEventRepository,
+            paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+            parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+            element_repo_factory=SqlalchemyElementRepository,
+            parser=FakeDocumentParser(),
+            profile=ParseProfile(PARSER_NAME, PARSER_VERSION, {}),
+        ).execute,
     )
     ctx["dispatch_task"] = asyncio.create_task(_dispatch_loop(ctx))
 

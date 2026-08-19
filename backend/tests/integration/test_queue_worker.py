@@ -15,16 +15,37 @@ from arq.worker import Worker
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from testcontainers.community.redis import RedisContainer
 
+from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.application.run_execution_service import RunExecutionService
+from literature_agent.domain.paper import create_paper
+from literature_agent.domain.paper_version import create_paper_version
+from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.project import create_project
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import RunStatus, create_run
+from literature_agent.infrastructure.parsing.fake_parser import (
+    PARSER_NAME,
+    PARSER_VERSION,
+    FakeDocumentParser,
+)
+from literature_agent.infrastructure.persistence.element_repository import (
+    SqlalchemyElementRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
+)
+from literature_agent.infrastructure.persistence.paper_repository import (
+    SqlalchemyPaperRepository,
+)
+from literature_agent.infrastructure.persistence.paper_version_repository import (
+    SqlalchemyPaperVersionRepository,
+)
+from literature_agent.infrastructure.persistence.parse_revision_repository import (
+    SqlalchemyParseRevisionRepository,
 )
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
@@ -33,7 +54,7 @@ from literature_agent.infrastructure.persistence.run_repository import (
     SqlalchemyRunRepository,
 )
 from literature_agent.infrastructure.queue.arq_run_queue import ArqRunQueue
-from literature_agent.worker import execute_run, placeholder_work
+from literature_agent.worker import execute_run
 
 
 @pytest_asyncio.fixture
@@ -47,15 +68,29 @@ async def valkey_url():
 
 @pytest_asyncio.fixture
 async def queued_run(db_engine) -> str:
-    """在数据库中创建 Project、QUEUED Run 和对应 Outbox 记录，返回 run_id。"""
+    """创建 Project/Paper/Version、QUEUED Run 和 Outbox 记录，返回 run_id。"""
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         project = create_project(owner_id="user-1", name="测试项目", description="")
         await SqlalchemyProjectRepository(session).add(project)
+        # UOW 不感知表级 FK 的插入顺序，逐层 flush
+        await session.flush()
+        paper = create_paper(owner_id="user-1", project_id=project.project_id)
+        await SqlalchemyPaperRepository(session).add(paper)
+        await session.flush()
+        version = create_paper_version(
+            paper_id=paper.paper_id,
+            file_hash="b" * 64,
+            storage_key="user-1/proj/paper/paper.pdf",
+            size_bytes=100,
+            content_type="application/pdf",
+        )
+        await SqlalchemyPaperVersionRepository(session).add(version)
         run = create_run(
             project_id=project.project_id,
             owner_id="user-1",
             run_type="ingestion",
+            input_payload={"paper_id": paper.paper_id, "version_id": version.version_id},
         )
         await SqlalchemyRunRepository(session).add(run)
         await session.flush()
@@ -69,10 +104,29 @@ def _session_factory(db_engine):
     return async_sessionmaker(db_engine, expire_on_commit=False)
 
 
+def _make_execution_service(session_factory) -> RunExecutionService:
+    """构建与 Worker 进程一致的真实执行链路（Fake Parser）。"""
+    return RunExecutionService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        executor=IngestionExecutor(
+            session_factory=session_factory,
+            run_repo_factory=SqlalchemyRunRepository,
+            event_repo_factory=SqlalchemyEventRepository,
+            paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+            parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+            element_repo_factory=SqlalchemyElementRepository,
+            parser=FakeDocumentParser(),
+            profile=ParseProfile(PARSER_NAME, PARSER_VERSION, {}),
+        ).execute,
+    )
+
+
 async def test_dispatch_to_worker_completes_run(
     db_engine, valkey_url: str, queued_run: str
 ) -> None:
-    """完整闭环：Outbox → ARQ → Worker → Run SUCCEEDED。"""
+    """完整闭环：Outbox → ARQ → Worker → 解析产物与 Run SUCCEEDED。"""
     queue = ArqRunQueue(valkey_url)
     session_factory = _session_factory(db_engine)
     dispatch_service = OutboxDispatchService(
@@ -89,19 +143,13 @@ async def test_dispatch_to_worker_completes_run(
     # 重复派发同一 run_id：Outbox 已标记，不会重复投递
     assert await dispatch_service.dispatch_pending() == 0
 
-    execution_service = RunExecutionService(
-        session_factory=session_factory,
-        run_repo_factory=SqlalchemyRunRepository,
-        event_repo_factory=SqlalchemyEventRepository,
-        work=placeholder_work,
-    )
     worker = Worker(
         redis_settings=RedisSettings.from_dsn(valkey_url),
         functions=[execute_run],
         burst=True,
         handle_signals=False,
         max_tries=1,
-        ctx={"run_execution_service": execution_service},
+        ctx={"run_execution_service": _make_execution_service(session_factory)},
     )
     await worker.async_run()
 
@@ -110,7 +158,29 @@ async def test_dispatch_to_worker_completes_run(
         assert run is not None
         assert run.status == RunStatus.SUCCEEDED
         events = await SqlalchemyEventRepository(session).list_by_run(queued_run)
-        assert [e.event_type for e in events] == ["run_started", "run_completed"]
+        assert [e.event_type for e in events] == [
+            "run_started",
+            "parse_started",
+            "parse_completed",
+            "normalize_completed",
+            "result_committed",
+        ]
+        # 解析产物：Revision、Element、当前指针
+        version_id = run.input_payload["version_id"]
+        version = await SqlalchemyPaperVersionRepository(session).get_by_id(version_id)
+        assert version is not None
+        assert version.current_parse_revision_id is not None
+        revision = await SqlalchemyParseRevisionRepository(session).get_by_id(
+            version.current_parse_revision_id
+        )
+        assert revision is not None
+        assert revision.status.value == "succeeded"
+        assert (
+            await SqlalchemyElementRepository(session).count_by_revision(
+                revision.revision_id
+            )
+            == 8
+        )
 
     await queue.aclose()
 

@@ -1,6 +1,6 @@
 """Document Element Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.element_repository import ElementRepository
@@ -131,3 +131,12 @@ class SqlalchemyElementRepository(ElementRepository):
             ),
         )
         return [_location_to_domain(row) for row in result.scalars().all()]
+
+    async def count_by_revision(self, revision_id: str) -> int:
+        """统计 Revision 下的 Element 数量。"""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(DocumentElementORM)
+            .where(DocumentElementORM.revision_id == revision_id),
+        )
+        return result.scalar_one()

@@ -39,3 +39,7 @@ class ElementRepository(Protocol):
     async def list_locations(self, element_ids: list[str]) -> list[ElementSourceLocation]:
         """按 Element ID 列表查询来源定位。"""
         ...
+
+    async def count_by_revision(self, revision_id: str) -> int:
+        """统计 Revision 下的 Element 数量。"""
+        ...
