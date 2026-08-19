@@ -1,0 +1,41 @@
+"""Run Repository 端口。"""
+
+from typing import Protocol
+
+from literature_agent.domain.run import Run, RunStatus
+
+
+class RunRepository(Protocol):
+    """Run 持久化的抽象端口。"""
+
+    async def add(self, run: Run) -> Run:
+        """保存 Run。"""
+        ...
+
+    async def get_by_id(self, run_id: str) -> Run | None:
+        """按 ID 查询 Run；不校验所有权。"""
+        ...
+
+    async def get_by_id_for_update(
+        self,
+        run_id: str,
+        owner_id: str,
+    ) -> Run | None:
+        """在事务内锁定并查询 Run，同时校验所有权。
+
+        返回 None 表示 Run 不存在或不属于指定 owner。
+        """
+        ...
+
+    async def update_status(
+        self,
+        run_id: str,
+        expected_status: RunStatus,
+        new_status: RunStatus,
+        new_event_sequence: int,
+    ) -> bool:
+        """条件更新 Run 状态与下一个 Event sequence。
+
+        仅当当前状态等于 ``expected_status`` 时才更新。返回是否成功。
+        """
+        ...
