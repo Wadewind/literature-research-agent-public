@@ -63,7 +63,7 @@ HTTP Route (api/runs.py)
 - `tests/integration/test_run_repository.py`：PostgreSQL 查询与条件更新。
 - `tests/integration/test_run_concurrency.py`：并发 start_run 仅一个成功。
 
-当前全部通过：`uv run pytest -v` 62 passed。
+当前全部通过：`uv run pytest -q` 90 passed。
 
 ## 代码入口
 
@@ -75,9 +75,10 @@ HTTP Route (api/runs.py)
 
 ## 已知限制
 
-- 尚未接入 ARQ Worker、Queue Outbox 和 SSE。
+- Queue Outbox 与 ARQ Worker 已接入（见 `queue-outbox.md`）；尚未接入 SSE。
 - 没有 Attempt 和 Step 抽象，复杂长任务的可观察粒度后续补充。
 - 当前取消为协作式：RUNNING 状态写入 CANCEL_REQUESTED 后，需 Worker 在检查点响应。
+- Worker 崩溃导致 Run 停留在 RUNNING 的 lease 对账恢复在切片 8 实现。
 
 ## 60 秒面试说明
 

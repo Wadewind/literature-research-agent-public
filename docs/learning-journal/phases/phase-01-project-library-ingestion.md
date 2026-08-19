@@ -2,7 +2,7 @@
 
 ## 状态
 
-待实现。Spec 初版日期：2026-08-13。
+进行中。切片 1–5（工程基线、Project、Run/Event、上传与版本、可靠投递）已完成。Spec 初版日期：2026-08-13。
 
 本阶段是第一个正式业务阶段。
 
@@ -232,6 +232,7 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 3. **Run/Event 核心**：状态机、Event Sequence、事务 Repository 和并发测试；
 4. **上传与版本**：流式校验、Storage、Paper/Paper Version、哈希和 API 幂等；
 
+
 ### 切片 4：上传与版本
 
 #### 目标
@@ -305,7 +306,45 @@ Body:
 - Project 不存在或不属于当前 actor 返回 `404`；
 - Repository 层唯一约束、跨用户隔离；
 - Storage Adapter 路径穿越防护。
+
 5. **可靠投递**：Queue Outbox、`run_id` Job、重复 Job 和投递故障；
+
+### 切片 5：可靠投递（Queue Outbox + ARQ Worker）
+
+#### 目标
+
+Run 创建后能被可靠地交给后台 Worker 执行：数据库提交与队列投递之间有持久化 Outbox，Worker 崩溃、队列故障或重复投递不产生重复执行或丢失任务。本切片执行体为占位实现（QUEUED → RUNNING → SUCCEEDED/FAILED），真实解析在切片 6 接入。
+
+#### 范围
+
+- **包含**：`QueueOutbox` 领域模型/ORM/迁移；上传事务内写入 Outbox；`RunQueue` Port 与 ARQ 适配器；Outbox 派发服务（轮询、退避、最大尝试次数）；`RunExecutionService` 幂等执行；`python -m literature_agent.worker` Worker 入口（ARQ Job + 派发循环）；lifespan 注入队列；Compose 增加 valkey 与 worker。
+- **不包含**：真实 Parser 执行体、Attempt/lease、Worker 崩溃后 RUNNING Run 的对账恢复（切片 8）、SSE 通知。
+
+#### 数据模型
+
+新增表 `queue_outbox`：
+
+- `outbox_id`（PK）、`run_id`（FK → runs，唯一）、`status`（`pending`/`dispatched`/`failed`）；
+- `attempt_count`、`scheduled_at`（下一次允许派发的最早时间）、`dispatched_at`、`created_at`、`updated_at`；
+- `run_id` 唯一约束保证一个 Run 最多一条投递记录。
+
+#### 关键不变量
+
+1. Run、`run_created` Event 和 Outbox 记录在同一事务提交；
+2. ARQ Job 只携带 `run_id`，并以 `run:<run_id>` 作为 Job ID 在队列内去重；
+3. 外部队列调用不发生在数据库事务内；每条 Outbox 记录的标记独立提交；
+4. 投递成功但标记前崩溃 → 记录保持 `pending`，下一轮补投，重复 Job 安全；
+5. 投递失败按指数退避（1s 起、上限 60s）推迟，达到 `outbox_max_attempts` 后进入 `failed` 终态；
+6. Worker 只认领 `QUEUED` 的 Run，重复 Job 跳过；执行期间并发取消不产生第二个终态；
+7. ARQ `max_tries = 1`，重试只有 Outbox 退避一层主导，ARQ Result 不作为业务事实。
+
+#### 测试要点
+
+- Domain：Outbox 创建、标记投递、失败退避和终态；
+- Application：派发成功/失败/退避/上限、崩溃后补投、执行体成功/失败/重复 Job/已取消跳过；
+- PostgreSQL：唯一约束、外键、到期查询排序、`try_mark_dispatched` 条件更新；
+- Queue/Worker 集成（Valkey + ARQ）：Outbox → ARQ → Worker → Run SUCCEEDED 闭环、队列故障恢复补投、相同 Job ID 去重。
+
 6. **Fake Parser 闭环**：Run → Parse Revision → Element/来源定位 → 成功；
 7. **真实 Parser**：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
 8. **取消/恢复**：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；

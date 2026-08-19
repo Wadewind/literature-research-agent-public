@@ -13,7 +13,7 @@ HTTP Route (api/paper_files.py)
       → 校验 Project 所有权
         → 创建 Paper + PaperVersion
           → 写入 Storage
-            → 创建 Run + Event
+            → 创建 Run + Event + Queue Outbox（同一事务）
               → 写入 IdempotencyKey
                 → commit
 ```
@@ -36,7 +36,7 @@ HTTP Route (api/paper_files.py)
 
 - 使用系统生成的 `storage_key`（`owner_id/project_id/paper_id/paper.pdf`），避免文件名注入和路径穿越。
 - 先写 Storage 再 commit DB：存储失败不创建业务记录；DB 回滚时可能遗留文件（当前接受，后续可对账清理）。
-- Paper/PaperVersion 与 Run/Event 在同一事务创建，保证上传结果与任务历史一致。
+- Paper/PaperVersion 与 Run/Event/Queue Outbox 在同一事务创建，保证上传结果、任务历史和投递记录一致。
 - 先查 Idempotency 记录再插入， race 场景由数据库唯一约束兜底。
 
 ## 失败、重试、重复和取消行为
@@ -45,7 +45,7 @@ HTTP Route (api/paper_files.py)
 - Project 不存在或不属于当前 actor：`ProjectNotFoundError` → HTTP 404。
 - 同一 `Idempotency-Key` 但不同请求指纹：`IdempotencyConflictError` → HTTP 409。
 - 同一 key + 同一请求指纹：直接返回已创建 Run 的信息，业务上 Effectively Once。
-- Run 创建后处于 `QUEUED`，等待 Worker 消费；本切片不实现 Worker/Outbox。
+- Run 创建后处于 `QUEUED`，由 Outbox 派发循环投递给 Worker（切片 5 起）；重复 Job 由 Worker 幂等执行兜底。
 
 ## 安全和可观测性
 
@@ -61,12 +61,12 @@ HTTP Route (api/paper_files.py)
 - `tests/api/test_paper_files.py`：HTTP 202/400/404/409 契约。
 - `tests/integration/test_paper_repository.py`、`test_paper_version_repository.py`、`test_idempotency_repository.py`：PostgreSQL 持久化、唯一约束、外键隔离。
 
-当前全部通过：`uv run pytest -v` 62 passed。
+当前全部通过：`uv run pytest -q` 90 passed。
 
 ## 代码入口
 
 - 领域：`backend/src/literature_agent/domain/paper.py`、`paper_version.py`、`exceptions.py`
-- 端口：`backend/src/literature_agent/application/ports/storage.py`、`paper_repository.py`、`paper_version_repository.py`、`idempotency_repository.py`
+- 端口：`backend/src/literature_agent/application/ports/storage.py`、`paper_repository.py`、`paper_version_repository.py`、`idempotency_repository.py`、`outbox_repository.py`
 - 服务：`backend/src/literature_agent/application/ingestion_service.py`
 - 适配器：`backend/src/literature_agent/infrastructure/storage/local_storage.py`、`infrastructure/persistence/paper_repository.py`、`paper_version_repository.py`、`idempotency_repository.py`
 - 路由：`backend/src/literature_agent/api/paper_files.py`
@@ -75,7 +75,7 @@ HTTP Route (api/paper_files.py)
 ## 已知限制
 
 - Storage 写入在 DB 事务内，若 DB 回滚可能产生孤儿文件。
-- 尚未接入 Worker，Run 不会自动进入解析阶段。
+- Worker 执行体仍是占位实现（仅推进状态），真实 PDF 解析在切片 6 接入。
 - 未实现跨上传的内容去重；相同 PDF 多次上传会创建多个 PaperVersion。
 - 未实现 SSE/实时通知，用户需轮询 Run 状态。
 - 本地文件存储，未替换为 S3 等对象存储。
