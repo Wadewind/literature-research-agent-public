@@ -70,3 +70,19 @@ class DocumentNotReadyError(Exception):
     def __init__(self, version_id: str) -> None:
         self.version_id = version_id
         super().__init__(f"PaperVersion {version_id} 尚未完成解析")
+
+
+class ParserError(Exception):
+    """解析失败的基类，按子类决定降级与重试策略。"""
+
+
+class InvalidPdfInputError(ParserError):
+    """输入类错误：文件损坏、加密或结构异常。
+
+    主 Parser（Docling）抛出时触发 pypdf 降级；降级 Parser 再次抛出时
+    视为永久输入错误，直接失败。
+    """
+
+
+class ParserResourceError(ParserError):
+    """资源类错误（内存、进程等）：不降级，直接失败并交由重试策略处理。"""

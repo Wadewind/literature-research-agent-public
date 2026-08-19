@@ -47,6 +47,8 @@ class DocumentOverview:
     status: str
     completed_at: datetime | None
     element_count: int
+    degraded: bool = False
+    warnings: list[str] = field(default_factory=list)
     sections: list[SectionInfo] = field(default_factory=list)
 
 
@@ -115,6 +117,8 @@ class DocumentQueryService[TSession: Session]:
                 status=revision.status.value,
                 completed_at=revision.completed_at,
                 element_count=element_count,
+                degraded=revision.degraded,
+                warnings=list(revision.warnings),
                 sections=sections,
             )
 

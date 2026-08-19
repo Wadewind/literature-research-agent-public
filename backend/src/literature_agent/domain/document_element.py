@@ -123,9 +123,29 @@ class ParsedElement:
 
 @dataclass(frozen=True, slots=True)
 class ParsedDocument:
-    """Parser 一次解析的完整输出。"""
+    """Parser 一次解析的完整输出。
+
+    属性:
+        elements: 规范化前的文档单元列表。
+        degraded: 是否为降级解析结果（例如 pypdf 回退，只有页级定位）。
+        warnings: 文档级警告（例如能力缺失标记），由应用层写入 Revision。
+    """
 
     elements: list[ParsedElement]
+    degraded: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+
+def detect_document_warnings(parsed: ParsedDocument) -> list[str]:
+    """根据解析结果计算文档级警告。
+
+    当前规则：全文文本长度为 0 时给出 ``possibly_scanned``，
+    提示可能是扫描件，可用 OCR Profile 重跑。空文档本身仍是合法结果。
+    """
+    total_text = sum(len(e.text or "") for e in parsed.elements)
+    if total_text == 0:
+        return ["possibly_scanned"]
+    return []
 
 
 def normalize_parsed_document(

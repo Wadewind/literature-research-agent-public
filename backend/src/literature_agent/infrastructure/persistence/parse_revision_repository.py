@@ -24,6 +24,8 @@ def _to_domain(orm: DocumentParseRevisionORM) -> DocumentParseRevision:
         status=ParseRevisionStatus(orm.status),
         config=orm.config,
         error=orm.error,
+        degraded=orm.degraded,
+        warnings=list(orm.warnings),
         created_at=orm.created_at,
         completed_at=orm.completed_at,
     )
@@ -40,6 +42,8 @@ def _to_orm(revision: DocumentParseRevision) -> DocumentParseRevisionORM:
         status=revision.status.value,
         config=revision.config,
         error=revision.error,
+        degraded=revision.degraded,
+        warnings=list(revision.warnings),
         created_at=revision.created_at,
         completed_at=revision.completed_at,
     )
@@ -96,4 +100,6 @@ class SqlalchemyParseRevisionRepository(ParseRevisionRepository):
         orm = result.scalar_one()
         orm.status = revision.status.value
         orm.error = revision.error
+        orm.degraded = revision.degraded
+        orm.warnings = list(revision.warnings)
         orm.completed_at = revision.completed_at

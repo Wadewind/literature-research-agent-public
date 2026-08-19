@@ -73,7 +73,8 @@ def parser() -> _StubParser:
 
 
 def _make_executor(
-    run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+    run_repo, event_repo, version_repo, revision_repo, element_repo, parser,
+    parser_timeout_seconds: float = 300.0,
 ) -> IngestionExecutor:
     """构建使用 Fake 依赖的 IngestionExecutor。"""
     return IngestionExecutor(
@@ -85,6 +86,7 @@ def _make_executor(
         element_repo_factory=lambda _s: element_repo,
         parser=parser,
         profile=_PROFILE,
+        parser_timeout_seconds=parser_timeout_seconds,
     )
 
 
@@ -335,3 +337,107 @@ async def test_retry_after_failure_reuses_revision_row(
     ]
     assert len(revisions) == 1
     assert revisions[0].status == ParseRevisionStatus.SUCCEEDED
+
+
+async def test_parser_timeout_marks_failed_without_fallback(
+    run_repo, event_repo, version_repo, revision_repo, element_repo
+) -> None:
+    """解析超过配置的超时：Run/Revision FAILED，error.type=parser_timeout。"""
+    import asyncio
+
+    class _SlowParser:
+        """永远超时的 Parser 桩。"""
+
+        async def parse(self, storage_key: str, profile: ParseProfile):
+            await asyncio.sleep(10)
+            raise AssertionError("不应到达")
+
+    version_id = await _add_version(version_repo)
+    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    executor = _make_executor(
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        _SlowParser(), parser_timeout_seconds=0.05,
+    )
+    service = _make_service(executor, run_repo, event_repo)
+
+    outcome = await service.execute(run.run_id, correlation_id="job-1")
+
+    assert outcome == ExecutionOutcome.FAILED
+    loaded_run = await run_repo.get_by_id(run.run_id)
+    assert loaded_run is not None
+    assert loaded_run.status == RunStatus.FAILED
+    revision = await revision_repo.get_by_version_and_profile(
+        version_id, _PROFILE.profile_hash
+    )
+    assert revision is not None
+    assert revision.status == ParseRevisionStatus.FAILED
+    assert revision.error is not None
+    assert revision.error["type"] == "parser_timeout"
+
+
+async def test_degraded_result_is_persisted_on_revision(
+    run_repo, event_repo, version_repo, revision_repo, element_repo
+) -> None:
+    """降级解析结果：Revision 持久化 degraded 标记与文档级警告。"""
+    from dataclasses import replace
+
+    class _DegradedParser:
+        """返回降级 ParsedDocument 的 Parser 桩（模拟 pypdf 回退）。"""
+
+        async def parse(self, storage_key: str, profile: ParseProfile):
+            parsed = await FakeDocumentParser().parse(storage_key, profile)
+            return replace(parsed, degraded=True, warnings=["layout_missing"])
+
+    version_id = await _add_version(version_repo)
+    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    executor = _make_executor(
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        _DegradedParser(),
+    )
+    service = _make_service(executor, run_repo, event_repo)
+
+    outcome = await service.execute(run.run_id, correlation_id="job-1")
+
+    assert outcome == ExecutionOutcome.COMPLETED
+    revision = await revision_repo.get_by_version_and_profile(
+        version_id, _PROFILE.profile_hash
+    )
+    assert revision is not None
+    assert revision.status == ParseRevisionStatus.SUCCEEDED
+    assert revision.degraded is True
+    assert revision.warnings == ["layout_missing"]
+
+
+async def test_empty_text_document_gets_possibly_scanned_warning(
+    run_repo, event_repo, version_repo, revision_repo, element_repo
+) -> None:
+    """全文文本长度为 0：解析成功但带 possibly_scanned 警告。"""
+    from dataclasses import replace
+
+    from literature_agent.domain.document_element import ParsedDocument
+
+    class _EmptyParser:
+        """返回无文本元素的 Parser 桩（模拟扫描件）。"""
+
+        async def parse(self, storage_key: str, profile: ParseProfile):
+            parsed = await FakeDocumentParser().parse(storage_key, profile)
+            empty = [replace(e, text=None) for e in parsed.elements]
+            return ParsedDocument(elements=empty)
+
+    version_id = await _add_version(version_repo)
+    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    executor = _make_executor(
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        _EmptyParser(),
+    )
+    service = _make_service(executor, run_repo, event_repo)
+
+    outcome = await service.execute(run.run_id, correlation_id="job-1")
+
+    assert outcome == ExecutionOutcome.COMPLETED
+    revision = await revision_repo.get_by_version_and_profile(
+        version_id, _PROFILE.profile_hash
+    )
+    assert revision is not None
+    assert revision.degraded is False
+    assert revision.warnings == ["possibly_scanned"]

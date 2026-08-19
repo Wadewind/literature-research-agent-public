@@ -54,6 +54,8 @@ class DocumentResponse(BaseModel):
     status: str
     completed_at: datetime | None
     element_count: int
+    degraded: bool
+    warnings: list[str]
     sections: list[SectionResponse]
 
 
@@ -107,6 +109,8 @@ def _document_to_response(overview: DocumentOverview) -> DocumentResponse:
         status=overview.status,
         completed_at=overview.completed_at,
         element_count=overview.element_count,
+        degraded=overview.degraded,
+        warnings=overview.warnings,
         sections=[
             SectionResponse(section_path=s.section_path, title=s.title)
             for s in overview.sections

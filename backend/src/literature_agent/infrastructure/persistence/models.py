@@ -174,6 +174,8 @@ class DocumentParseRevisionORM(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     config: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    degraded: Mapped[bool] = mapped_column(default=False, nullable=False)
+    warnings: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

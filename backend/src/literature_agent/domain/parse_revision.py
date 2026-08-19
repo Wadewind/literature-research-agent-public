@@ -31,6 +31,8 @@ class DocumentParseRevision:
         status: 解析状态。
         config: 解析配置。
         error: 失败信息（类型与截断消息），未失败为 None。
+        degraded: 是否为降级解析结果（例如 pypdf 回退）。
+        warnings: 解析质量/能力缺失警告（例如 ``possibly_scanned``）。
         created_at: 创建时间（UTC）。
         completed_at: 完成时间，未完成为 None。
     """
@@ -43,11 +45,19 @@ class DocumentParseRevision:
     status: ParseRevisionStatus
     config: dict = field(default_factory=dict)
     error: dict | None = None
+    degraded: bool = False
+    warnings: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
 
-    def mark_succeeded(self, now: datetime) -> "DocumentParseRevision":
-        """返回标记为成功的新 Revision。"""
+    def mark_succeeded(
+        self,
+        now: datetime,
+        *,
+        degraded: bool = False,
+        warnings: list[str] | None = None,
+    ) -> "DocumentParseRevision":
+        """返回标记为成功的新 Revision，可携带降级标记与文档级警告。"""
         return DocumentParseRevision(
             revision_id=self.revision_id,
             version_id=self.version_id,
@@ -57,6 +67,8 @@ class DocumentParseRevision:
             status=ParseRevisionStatus.SUCCEEDED,
             config=self.config,
             error=None,
+            degraded=degraded,
+            warnings=list(warnings) if warnings else [],
             created_at=self.created_at,
             completed_at=now,
         )
@@ -72,6 +84,8 @@ class DocumentParseRevision:
             status=ParseRevisionStatus.FAILED,
             config=self.config,
             error=error,
+            degraded=self.degraded,
+            warnings=list(self.warnings),
             created_at=self.created_at,
             completed_at=now,
         )

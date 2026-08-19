@@ -8,7 +8,8 @@ _DEFAULT_DATABASE_URL = "postgresql+psycopg://agent:agent@127.0.0.1:5432/agent_s
 _DEFAULT_REDIS_URL = "redis://127.0.0.1:6379/0"
 _DEFAULT_DEV_ACTOR_ID = "dev-user"
 _DEFAULT_STORAGE_ROOT = "data/storage"
-_DEFAULT_MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024  # 50 MiB
+_DEFAULT_MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024  # 50 MiB（2026-08-20 定稿）
+_DEFAULT_PARSER_TIMEOUT_SECONDS = 300.0  # 2026-08-20 定稿
 _DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS = 1.0
 _DEFAULT_OUTBOX_MAX_ATTEMPTS = 10
 _DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE = 20
@@ -30,6 +31,8 @@ class Settings:
     dev_actor_id: str = field(default=_DEFAULT_DEV_ACTOR_ID)
     storage_root: str = field(default=_DEFAULT_STORAGE_ROOT)
     max_upload_size_bytes: int = field(default=_DEFAULT_MAX_UPLOAD_SIZE_BYTES)
+    parser_timeout_seconds: float = field(default=_DEFAULT_PARSER_TIMEOUT_SECONDS)
+    parser_backend: str = field(default="docling")
     outbox_poll_interval_seconds: float = field(default=_DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS)
     outbox_max_attempts: int = field(default=_DEFAULT_OUTBOX_MAX_ATTEMPTS)
     outbox_dispatch_batch_size: int = field(default=_DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE)
@@ -39,6 +42,12 @@ class Settings:
         """根据环境变量创建设置对象。"""
         raw_max_upload = os.getenv("AGENT_MAX_UPLOAD_SIZE_BYTES")
         max_upload_size = int(raw_max_upload) if raw_max_upload else _DEFAULT_MAX_UPLOAD_SIZE_BYTES
+        raw_parser_timeout = os.getenv("AGENT_PARSER_TIMEOUT_SECONDS")
+        parser_timeout = (
+            float(raw_parser_timeout)
+            if raw_parser_timeout
+            else _DEFAULT_PARSER_TIMEOUT_SECONDS
+        )
         raw_poll_interval = os.getenv("AGENT_OUTBOX_POLL_INTERVAL_SECONDS")
         poll_interval = (
             float(raw_poll_interval)
@@ -59,6 +68,8 @@ class Settings:
             dev_actor_id=os.getenv("AGENT_DEV_ACTOR_ID", _DEFAULT_DEV_ACTOR_ID),
             storage_root=os.getenv("AGENT_STORAGE_ROOT", _DEFAULT_STORAGE_ROOT),
             max_upload_size_bytes=max_upload_size,
+            parser_timeout_seconds=parser_timeout,
+            parser_backend=os.getenv("AGENT_PARSER_BACKEND", "docling"),
             outbox_poll_interval_seconds=poll_interval,
             outbox_max_attempts=max_attempts,
             outbox_dispatch_batch_size=batch_size,

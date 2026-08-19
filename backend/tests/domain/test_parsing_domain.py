@@ -8,6 +8,7 @@ from literature_agent.domain.document_element import (
     ParsedElement,
     ParsedLocation,
     compute_content_hash,
+    detect_document_warnings,
     normalize_parsed_document,
 )
 from literature_agent.domain.parse_profile import ParseProfile, compute_profile_hash
@@ -95,3 +96,32 @@ def test_normalize_parsed_document_assigns_ids_and_order() -> None:
     paragraph_locations = [loc for loc in locations if loc.element_id == elements[1].element_id]
     assert [loc.page for loc in paragraph_locations] == [1, 2]
     assert paragraph_locations[0].bbox == [10.0, 20.0, 30.0, 40.0]
+
+
+def test_mark_succeeded_carries_degraded_and_warnings() -> None:
+    """mark_succeeded 应记录降级标记与文档级警告。"""
+    revision = create_parse_revision("v-1", "pypdf", "6", "h")
+    succeeded = revision.mark_succeeded(
+        datetime.now(UTC), degraded=True, warnings=["layout_missing"]
+    )
+
+    assert succeeded.status == ParseRevisionStatus.SUCCEEDED
+    assert succeeded.degraded is True
+    assert succeeded.warnings == ["layout_missing"]
+    # 默认路径保持非降级
+    plain = revision.mark_succeeded(datetime.now(UTC))
+    assert plain.degraded is False
+    assert plain.warnings == []
+
+
+def test_detect_document_warnings_flags_empty_text() -> None:
+    """全文文本长度为 0 时应给出 possibly_scanned 警告。"""
+    empty = ParsedDocument(
+        elements=[ParsedElement(element_type=ElementType.PARAGRAPH, sequence=1, text=None)]
+    )
+    assert detect_document_warnings(empty) == ["possibly_scanned"]
+
+    with_text = ParsedDocument(
+        elements=[ParsedElement(element_type=ElementType.PARAGRAPH, sequence=1, text="内容")]
+    )
+    assert detect_document_warnings(with_text) == []

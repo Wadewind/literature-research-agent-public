@@ -155,6 +155,8 @@ def test_get_document_returns_overview(client) -> None:
     assert data["parser_name"] == "fake"
     assert data["status"] == "succeeded"
     assert data["element_count"] == 3
+    assert data["degraded"] is False
+    assert data["warnings"] == []
     assert data["sections"] == [{"section_path": "1", "title": "1 引言"}]
 
 

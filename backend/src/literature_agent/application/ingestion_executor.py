@@ -1,9 +1,12 @@
 """Ingestion 执行器：把一次文献导入 Run 推进到终态。
 
 流程：复用检查 → 解析（事务外）→ 规范化 → 原子提交结果与 Run 终态。
-真正的 Parser 由 ``DocumentParser`` Port 注入（切片 6 为 Fake Parser）。
+真正的 Parser 由 ``DocumentParser`` Port 注入（切片 6 为 Fake Parser，
+切片 7 起为 Docling + pypdf 降级组合）。Parser 超时在本层通过
+``asyncio.wait_for`` 统一施加，适配器不自行实现超时。
 """
 
+import asyncio
 import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -21,7 +24,11 @@ from literature_agent.application.ports.parse_revision_repository import (
 )
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
-from literature_agent.domain.document_element import normalize_parsed_document
+from literature_agent.domain.document_element import (
+    ParsedDocument,
+    detect_document_warnings,
+    normalize_parsed_document,
+)
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import RunConcurrentModificationError
 from literature_agent.domain.parse_profile import ParseProfile
@@ -60,6 +67,7 @@ class IngestionExecutor[TSession: Session]:
         element_repo_factory: Callable[[TSession], ElementRepository],
         parser: DocumentParser,
         profile: ParseProfile,
+        parser_timeout_seconds: float = 300.0,
     ) -> None:
         """初始化 IngestionExecutor。
 
@@ -72,6 +80,7 @@ class IngestionExecutor[TSession: Session]:
             element_repo_factory: 根据 session 创建 ElementRepository 的工厂。
             parser: 文档解析器实现。
             profile: 解析配置画像。
+            parser_timeout_seconds: 单次解析的超时秒数，超时按 FAILED 处理且不降级。
         """
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -81,6 +90,7 @@ class IngestionExecutor[TSession: Session]:
         self._element_repo_factory = element_repo_factory
         self._parser = parser
         self._profile = profile
+        self._parser_timeout_seconds = parser_timeout_seconds
 
     async def execute(self, run: Run, correlation_id: str) -> None:
         """执行一次导入 Run，自行推进终态。
@@ -98,9 +108,25 @@ class IngestionExecutor[TSession: Session]:
             return
         revision, storage_key = prepared
 
-        # 事务外：调用 Parser
+        # 事务外：调用 Parser（超时在本层统一施加，不触发降级）
         try:
-            parsed = await self._parser.parse(storage_key, self._profile)
+            parsed = await asyncio.wait_for(
+                self._parser.parse(storage_key, self._profile),
+                timeout=self._parser_timeout_seconds,
+            )
+        except TimeoutError:
+            logger.warning("解析超时: run_id=%s", run.run_id)
+            await self._mark_failed(
+                run,
+                revision,
+                None,
+                correlation_id,
+                error={
+                    "type": "parser_timeout",
+                    "message": f"解析超过 {self._parser_timeout_seconds} 秒",
+                },
+            )
+            return
         except Exception as exc:
             logger.warning("解析失败: run_id=%s", run.run_id, exc_info=True)
             await self._mark_failed(run, revision, exc, correlation_id)
@@ -119,7 +145,7 @@ class IngestionExecutor[TSession: Session]:
             return  # 执行期间被取消
 
         # 事务 C：原子提交解析产物与 Run 终态
-        await self._commit_success(run, revision, normalized, correlation_id)
+        await self._commit_success(run, revision, parsed, normalized, correlation_id)
 
     async def _prepare(
         self,
@@ -223,12 +249,15 @@ class IngestionExecutor[TSession: Session]:
         self,
         run: Run,
         revision: DocumentParseRevision,
+        parsed: ParsedDocument,
         normalized: tuple[list, list],
         correlation_id: str,
     ) -> None:
         """事务 C：原子提交解析产物、当前指针、Run 终态和 result_committed 事件。"""
         elements, locations = normalized
         now = datetime.now(UTC)
+        # 文档级警告 = Parser 自报（降级能力缺失等）+ 领域规则（possibly_scanned）
+        warnings = [*parsed.warnings, *detect_document_warnings(parsed)]
         async with self._session_factory() as session:
             run_repo = self._run_repo_factory(session)
             run_row = await run_repo.get_by_id_for_update(run.run_id, run.owner_id)
@@ -241,7 +270,7 @@ class IngestionExecutor[TSession: Session]:
             await self._element_repo_factory(session).add_many(elements)
             await self._element_repo_factory(session).add_locations(locations)
             await self._parse_revision_repo_factory(session).save(
-                revision.mark_succeeded(now)
+                revision.mark_succeeded(now, degraded=parsed.degraded, warnings=warnings)
             )
             await self._paper_version_repo_factory(session).set_current_parse_revision(
                 revision.version_id, revision.revision_id
@@ -261,15 +290,19 @@ class IngestionExecutor[TSession: Session]:
         self,
         run: Run,
         revision: DocumentParseRevision,
-        exc: Exception,
+        exc: Exception | None,
         correlation_id: str,
+        *,
+        error: dict | None = None,
     ) -> None:
         """解析失败：Revision 标记 FAILED，Run 条件推进 FAILED。"""
         now = datetime.now(UTC)
-        error = {
-            "type": type(exc).__name__,
-            "message": str(exc)[:_ERROR_MESSAGE_MAX_LENGTH],
-        }
+        if error is None:
+            assert exc is not None
+            error = {
+                "type": type(exc).__name__,
+                "message": str(exc)[:_ERROR_MESSAGE_MAX_LENGTH],
+            }
         async with self._session_factory() as session:
             revision_repo = self._parse_revision_repo_factory(session)
             await revision_repo.save(revision.mark_failed(error, now))
