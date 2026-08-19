@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from literature_agent.api.health import router as health_router
+from literature_agent.api.projects import router as projects_router
 from literature_agent.infrastructure.lifespan import app_lifespan
 
 
@@ -17,4 +18,5 @@ def create_app() -> FastAPI:
         lifespan=app_lifespan,
     )
     app.include_router(health_router, prefix="/health")
+    app.include_router(projects_router)
     return app
