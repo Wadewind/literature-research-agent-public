@@ -97,3 +97,75 @@ class EventORM(Base):
     )
 
     __table_args__ = (UniqueConstraint("run_id", "sequence", name="uq_events_run_id_sequence"),)
+
+
+class PaperORM(Base):
+    """Paper 的持久化映射。"""
+
+    __tablename__ = "papers"
+
+    paper_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"),
+        index=True,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class PaperVersionORM(Base):
+    """PaperVersion 的持久化映射。"""
+
+    __tablename__ = "paper_versions"
+
+    version_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    paper_id: Mapped[str] = mapped_column(
+        ForeignKey("papers.paper_id"),
+        index=True,
+        nullable=False,
+    )
+    file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class IdempotencyKeyORM(Base):
+    """API 幂等键的持久化映射。"""
+
+    __tablename__ = "idempotency_keys"
+
+    owner_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"),
+        nullable=False,
+    )
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )

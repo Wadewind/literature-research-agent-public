@@ -38,3 +38,19 @@ class RunConcurrentModificationError(Exception):
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         super().__init__(f"Run {run_id} 并发修改冲突")
+
+
+class FileValidationError(Exception):
+    """上传文件校验失败（类型、大小、损坏等）。"""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+class IdempotencyConflictError(Exception):
+    """相同幂等键对应不同请求。"""
+
+    def __init__(self, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__(f"Idempotency-Key {idempotency_key} 已用于不同请求")
