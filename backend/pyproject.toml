@@ -36,6 +36,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-httpx2>=1.0.0",
     "ruff>=0.16.2",
+    "testcontainers[postgres]>=4.10.0",
 ]
 
 [tool.pytest.ini_options]
