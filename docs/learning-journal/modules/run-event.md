@@ -9,10 +9,15 @@
 ```text
 HTTP Route (api/runs.py)
   → RunService (application/run_service.py)
-    → create_run / start_run / complete_run / fail_run / cancel_run
+    → create_run / cancel_run / list_events(after_sequence, limit)
       → RunRepository + EventRepository
         → PostgreSQL Adapter
           → runs / events 表
+
+SSE (GET /runs/{run_id}/events/stream)
+  → 每轮：独立短事务读 Run 状态 + list_after(last_sequence)
+  → Valkey Pub/Sub 通知（run-events:{run_id}，可丢失）只用于降延迟
+  → 1s 轮询兜底；终态且事件全部发送后关闭流
 ```
 
 - `Run` 表示用户可见的任务，`Event` 表示任务历史中的事实。
@@ -37,6 +42,9 @@ HTTP Route (api/runs.py)
 
 ## 关键决定与替代方案
 
+- **SSE 以 PostgreSQL 为事实来源**（切片 9）：事件永远从数据库读取，Valkey Pub/Sub 通知只触发"去查库"，丢失通知由 1s 轮询兜底收敛；不追求跨进程 Exactly Once。
+- **SSE id 直接用 sequence 字符串**：`Last-Event-ID` 携带已收到的最大 sequence，重连后重放其后全部历史，不重不漏；不引入全局 event UUID 游标。
+- **通知注入点在应用服务**（切片 9）：写事件的服务在 commit 后调用 `EventNotifier.notify(run_id)`（publish 失败只记日志）；替代方案（Repository 层钩子）会把外部调用带进事务，违反边界。
 - 状态机在领域对象中实现，而非散落在 Service 或数据库触发器，便于测试和保证不变量。
 - 使用 `event_version` 为 Event 契约预留版本化空间。
 - 用 `RunRepository.update_status` 做条件更新，捕获并发冲突并映射为 `RunConcurrentModificationError`。
@@ -48,6 +56,8 @@ HTTP Route (api/runs.py)
 - 并发修改（行锁后发现状态与预期不符）抛出 `RunConcurrentModificationError`。
 - `cancel_run`：QUEUED/RETRY_WAIT 直接 CANCELLED；RUNNING 先进入 CANCEL_REQUESTED；CANCEL_REQUESTED 再次取消进入 CANCELLED。
 - 本切片不触发真实 Worker，Run 创建后停留在 QUEUED；重复 API 调用或重复 Job 由后续幂等和 Outbox 机制处理。
+- SSE 连接不持有数据库事务；每轮轮询是独立短事务。
+- SSE 收束判断先读 Run 状态再读事件：终态与终态事件同事务提交，该顺序保证不重不漏。
 
 ## 安全和可观测性
 
@@ -62,8 +72,12 @@ HTTP Route (api/runs.py)
 - `tests/api/test_runs.py`：HTTP 路由映射。
 - `tests/integration/test_run_repository.py`：PostgreSQL 查询与条件更新。
 - `tests/integration/test_run_concurrency.py`：并发 start_run 仅一个成功。
+- `tests/api/test_runs.py`：事件 `after_sequence`/`limit` 分页与参数校验。
+- `tests/api/test_run_events_stream.py`：SSE 历史重放、Last-Event-ID 续传、终态关闭、通知丢失时轮询收敛、404/400。
+- `tests/application/test_event_notification.py`：commit 后通知、publish 失败不影响业务。
+- `tests/integration/test_event_notifier.py`：Valkey Pub/Sub 发布订阅回环（channel 按 run_id 隔离）。
 
-当前全部通过：`uv run pytest -q` 90 passed。
+当前全部通过：`uv run pytest -q` 159 passed + 2 skipped（切片 9 完成后，跳过项为显式启用的 Docling 真实解析组）。
 
 ## 代码入口
 
@@ -75,11 +89,11 @@ HTTP Route (api/runs.py)
 
 ## 已知限制
 
-- Queue Outbox 与 ARQ Worker 已接入（见 `queue-outbox.md`）；尚未接入 SSE。
-- 没有 Attempt 和 Step 抽象，复杂长任务的可观察粒度后续补充。
+- Queue Outbox、ARQ Worker 与 Attempt/lease 对账已接入（见 `queue-outbox.md`）。
+- 没有 Step 抽象，复杂长任务的可观察粒度后续补充。
 - 当前取消为协作式：RUNNING 状态写入 CANCEL_REQUESTED 后，需 Worker 在检查点响应。
-- Worker 崩溃导致 Run 停留在 RUNNING 的 lease 对账恢复在切片 8 实现。
+- SSE 单连接每秒一次轮询查询，连接数大时需再评估（读扩散）。
 
 ## 60 秒面试说明
 
-"Run/Event 模块是系统的可靠执行核心。领域层定义状态机和严格转换规则，Service 层通过行锁和条件更新处理并发，状态和事件在同一事务提交。Event 序列号保证历史顺序，用户查询和后续 SSE 重放都以此为游标。这样断线或 Worker 重启后，仍能从 PostgreSQL 恢复准确状态。"
+"Run/Event 模块是系统的可靠执行核心。领域层定义状态机和严格转换规则，Service 层通过行锁和条件更新处理并发，状态和事件在同一事务提交。Event 序列号保证历史顺序，REST 分页、SSE 重放和 Last-Event-ID 续传都以它为游标。SSE 的事件永远从 PostgreSQL 读，Valkey 通知只降延迟、丢了也有轮询兜底，所以断线或 Worker 重启后仍能从数据库恢复准确状态，不重不漏。"

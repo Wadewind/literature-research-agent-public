@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中。切片 1–7（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环、真实 Parser）已完成。Spec 初版日期：2026-08-13。
+进行中。切片 1–9（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环、真实 Parser、取消/恢复、Event/SSE）已完成。Spec 初版日期：2026-08-13。
 
 本阶段是第一个正式业务阶段。
 
@@ -234,12 +234,10 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 5. **可靠投递**（已完成）：Queue Outbox、`run_id` Job、重复 Job 和投递故障；
 6. **Fake Parser 闭环**（已完成）：Run → Parse Revision → Element/来源定位 → 成功；
 7. **真实 Parser**（已完成）：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
-8. **取消/恢复**：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
-9. **Event/SSE**：历史分页、Sequence 游标、通知丢失和断线重放；
+8. **取消/恢复**（已完成）：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
+9. **Event/SSE**（已完成）：历史分页、Sequence 游标、通知丢失和断线重放；
 10. **最小 Web UI**：Project、Library、上传、Run Detail、取消和 Element/PDF 来源预览；
 11. **验收复盘**：Compose Smoke、E2E、故障注入和模块学习笔记。
-
-已完成切片的详细契约保留如下，作为实现记录和后续切片的参照。
 
 已完成切片的详细契约保留如下，作为实现记录和后续切片的参照。
 
@@ -479,7 +477,7 @@ Worker 崩溃、临时错误或机器故障不再让 Run 永久卡在 `RUNNING`�
 - **重投复用 Outbox 行**：不给 Run 加重试字段，RETRY_WAIT 的唤醒时间用 `outbox.scheduled_at` 表达；派发循环看到 pending 记录时若 Run 处于 RETRY_WAIT 先条件转 QUEUED 再投递。权衡：少一张表/少一次建模，代价是 Outbox 语义从"首次投递"扩展为"投递/重投记录"。
 - **对账循环放在 Worker 进程**：不单独部署 Reconciler；多实例并发对账由条件更新兜底（与派发循环同一决策）。
 - **Attempt 关闭是 best effort**：执行器终态后由 RunExecutionService 关闭 Attempt；崩溃场景由对账循环关闭。不要求 Attempt 状态与 Run 终态同事务（Attempt 是运维记录，不是业务事实）。
-- **错误分类表最小化**：只分永久/临时两类，映射表集中在领域函数 `classify_error`，不引入错误码注册表。
+- **错误分类表最小化**：只分永久/临时两类，映射表集中在领域函数 `is_permanent_error`（`domain/retry_policy.py`），不引入错误码注册表。
 
 #### 测试要点
 
@@ -582,11 +580,15 @@ Worker 崩溃、临时错误或机器故障不再让 Run 永久卡在 `RUNNING`�
 已完成模块的学习笔记（随实现同步更新，内容以实际代码和测试为准）：
 
 - `docs/learning-journal/modules/project.md`：Project 闭环与 Actor Context；
-- `docs/learning-journal/modules/run-event.md`：Run 状态机与 Event 顺序；
+- `docs/learning-journal/modules/run-event.md`：Run 状态机、Event 顺序与 SSE 重放；
 - `docs/learning-journal/modules/paper-upload.md`：上传校验、版本与幂等；
-- `docs/learning-journal/modules/queue-outbox.md`：Queue Outbox + ARQ Worker 可靠投递；
+- `docs/learning-journal/modules/queue-outbox.md`：Queue Outbox + ARQ Worker 可靠投递、Attempt/lease 与对账恢复；
 - `docs/learning-journal/modules/document-parsing.md`：Parse Revision、Element 与 Fake Parser 闭环。
 
 后续模块笔记在对应切片真正完成后撰写，不预建空模板。
 
-当前进行切片 7（真实 Parser）→ 已完成。下一步是切片 8（取消/恢复）：实现错误分类驱动的重试、Attempt、Worker lease/heartbeat（600s/30s，默认值已定稿）和异常 Run 对账，先写契约章节再按"确认不变量 → 失败测试 → 最小实现"推进。
+切片 8（取消/恢复）→ 已完成（2026-08-20）：`run_attempts` 表 + Attempt 生命周期（认领创建、30s 心跳、终态关闭）、错误分类（永久 → FAILED，临时 → RETRY_WAIT + Outbox 重置退避重投，预算 3 次）、派发循环 RETRY_WAIT → QUEUED 重投、Worker 对账循环（lease 600s 过期收回）。验证：pytest 148 passed + 2 skipped，ruff/pyright 全绿。
+
+切片 9（Event/SSE）→ 已完成（2026-08-20）：events 端点 `after_sequence`/`limit` 游标分页；`EventNotifier` Port + Valkey Pub/Sub（channel `run-events:{run_id}`，payload 只有 run_id）+ Noop 默认；四个写事件服务 commit 后通知（失败只记日志）；SSE `GET /runs/{run_id}/events/stream`（Last-Event-ID 续传、先重放后实时、15s 心跳注释、终态收束关闭、1s 轮询兜底）。
+
+下一步是切片 10（前端 UI 演示闭环）：React + Vite + TS strict + TanStack Query，覆盖 Project 创建、PDF 上传、Run 进度 SSE 跟随、Element 按结构预览并跳转页码。
