@@ -227,11 +227,19 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 
 每个切片遵循“确认契约与不变量 → 失败测试 → 最小实现 → 重构 → 验证 → 更新进度”。
 
-1. **工程基线**：FastAPI、配置/Lifespan、live/ready、Compose、SQLAlchemy/Alembic、ARQ 和质量命令；
-2. **Project 闭环**：Actor Context、Domain/Repository/Application/API 和隔离测试；
-3. **Run/Event 核心**：状态机、Event Sequence、事务 Repository 和并发测试；
-4. **上传与版本**：流式校验、Storage、Paper/Paper Version、哈希和 API 幂等；
+1. **工程基线**（已完成）：FastAPI、配置/Lifespan、live/ready、Compose、SQLAlchemy/Alembic、ARQ 和质量命令；
+2. **Project 闭环**（已完成）：Actor Context、Domain/Repository/Application/API 和隔离测试；
+3. **Run/Event 核心**（已完成）：状态机、Event Sequence、事务 Repository 和并发测试；
+4. **上传与版本**（已完成）：流式校验、Storage、Paper/Paper Version、哈希和 API 幂等；
+5. **可靠投递**（已完成）：Queue Outbox、`run_id` Job、重复 Job 和投递故障；
+6. **Fake Parser 闭环**（已完成）：Run → Parse Revision → Element/来源定位 → 成功；
+7. **真实 Parser**：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
+8. **取消/恢复**：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
+9. **Event/SSE**：历史分页、Sequence 游标、通知丢失和断线重放；
+10. **最小 Web UI**：Project、Library、上传、Run Detail、取消和 Element/PDF 来源预览；
+11. **验收复盘**：Compose Smoke、E2E、故障注入和模块学习笔记。
 
+已完成切片的详细契约保留如下，作为实现记录和后续切片的参照。
 
 ### 切片 4：上传与版本
 
@@ -307,8 +315,6 @@ Body:
 - Repository 层唯一约束、跨用户隔离；
 - Storage Adapter 路径穿越防护。
 
-5. **可靠投递**：Queue Outbox、`run_id` Job、重复 Job 和投递故障；
-
 ### 切片 5：可靠投递（Queue Outbox + ARQ Worker）
 
 #### 目标
@@ -344,8 +350,6 @@ Run 创建后能被可靠地交给后台 Worker 执行：数据库提交与队�
 - Application：派发成功/失败/退避/上限、崩溃后补投、执行体成功/失败/重复 Job/已取消跳过；
 - PostgreSQL：唯一约束、外键、到期查询排序、`try_mark_dispatched` 条件更新；
 - Queue/Worker 集成（Valkey + ARQ）：Outbox → ARQ → Worker → Run SUCCEEDED 闭环、队列故障恢复补投、相同 Job ID 去重。
-
-6. **Fake Parser 闭环**：Run → Parse Revision → Element/来源定位 → 成功；
 
 ### 切片 6：Fake Parser 闭环
 
@@ -391,12 +395,6 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/elements?page=&sec
 - PostgreSQL：唯一约束、当前指针、按页/章节查询；
 - API：契约、过滤分页、越权 404；
 - 端到端：上传 → Worker 消费 → elements 可查（Fake Parser，不依赖真实 PDF 解析）。
-
-7. **真实 Parser**：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
-8. **取消/恢复**：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
-9. **Event/SSE**：历史分页、Sequence 游标、通知丢失和断线重放；
-10. **最小 Web UI**：Project、Library、上传、Run Detail、取消和 Element/PDF 来源预览；
-11. **验收复盘**：Compose Smoke、E2E、故障注入和模块学习笔记。
 
 ## 测试方式
 
@@ -458,6 +456,14 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/elements?page=&sec
 
 ## 学习笔记和下一步
 
-模块完成后按实际代码逐步形成异步 API/Worker、Run/Event、PostgreSQL 幂等、文档导入/版本和 SSE 相关笔记，不预建空模板。
+已完成模块的学习笔记（随实现同步更新，内容以实际代码和测试为准）：
 
-下一步从切片 1 开始：先确定最小配置、健康检查和 Compose 契约，编写 live/ready 与依赖故障测试，再实现 FastAPI 和基础设施生命周期。
+- `docs/learning-journal/modules/project.md`：Project 闭环与 Actor Context；
+- `docs/learning-journal/modules/run-event.md`：Run 状态机与 Event 顺序；
+- `docs/learning-journal/modules/paper-upload.md`：上传校验、版本与幂等；
+- `docs/learning-journal/modules/queue-outbox.md`：Queue Outbox + ARQ Worker 可靠投递；
+- `docs/learning-journal/modules/document-parsing.md`：Parse Revision、Element 与 Fake Parser 闭环。
+
+后续模块笔记在对应切片真正完成后撰写，不预建空模板。
+
+下一步从切片 7（真实 Parser）开始：先确定“实现前仍需确定”中的第 1–3 项（Parser 超时默认值、Docling Pipeline/OCR Profile 与降级分类、Element 最低 Payload），用固定 PDF Fixture 编写 Parser 契约测试，再实现 Docling 主适配器和 pypdf 降级适配器替换 Fake Parser。
