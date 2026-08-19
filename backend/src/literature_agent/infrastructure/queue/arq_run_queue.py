@@ -35,7 +35,7 @@ class ArqRunQueue(RunQueue):
     async def aclose(self) -> None:
         """关闭连接池。"""
         if self._pool is not None:
-            await self._pool.close()
+            await self._pool.aclose()
             self._pool = None
 
     async def _get_pool(self) -> ArqRedis:
