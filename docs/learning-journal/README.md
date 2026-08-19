@@ -22,4 +22,4 @@ learning-journal/
 
 ## 当前阶段
 
-[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)的学习与隔离实验已经完成，当前正在准备正式功能开发；进入下一阶段前需先确定对应 Phase Spec。
+[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)的学习与隔离实验已经完成。当前进入 [Phase 1：Project、文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)，从支撑 PDF 导入闭环所需的最小生产工程基线开始实现。

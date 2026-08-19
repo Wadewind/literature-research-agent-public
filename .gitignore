@@ -21,3 +21,7 @@ build/
 
 # folder
 notebook/
+
+# Local PDF fixtures may contain copyrighted or private papers.
+backend/tests/fixtures/pdfs/local/*
+!backend/tests/fixtures/pdfs/local/README.md
