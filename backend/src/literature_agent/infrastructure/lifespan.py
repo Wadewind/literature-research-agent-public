@@ -7,11 +7,13 @@ from dataclasses import dataclass
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from literature_agent.application.ports.storage import Storage
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.persistence.database import (
     create_engine,
     create_session_factory,
 )
+from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
 
 
 @dataclass
@@ -25,6 +27,7 @@ class AppState:
     settings: Settings
     engine: AsyncEngine
     session_factory: async_sessionmaker
+    storage: Storage
 
 
 @asynccontextmanager
@@ -41,10 +44,12 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
     settings = Settings.from_env()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
+    storage = LocalFileStorage(settings.storage_root)
     state = AppState(
         settings=settings,
         engine=engine,
         session_factory=session_factory,
+        storage=storage,
     )
     try:
         yield {"app_state": state}
