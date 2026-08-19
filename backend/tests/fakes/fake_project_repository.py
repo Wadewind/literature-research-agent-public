@@ -26,10 +26,20 @@ class FakeProjectRepository(ProjectRepository):
         return self._projects.get(project_id)
 
 
+class _FakeSession:
+    """模拟具有 flush/commit 方法的异步会话。"""
+
+    async def flush(self) -> None:
+        """空刷新。"""
+
+    async def commit(self) -> None:
+        """空提交。"""
+
+
 @asynccontextmanager
 async def fake_session():
     """模拟 AsyncSession 的异步上下文管理器。"""
-    yield None
+    yield _FakeSession()
 
 
 def fake_repo_factory(_session: object) -> FakeProjectRepository:

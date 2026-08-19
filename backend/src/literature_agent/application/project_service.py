@@ -5,11 +5,12 @@ from contextlib import AbstractAsyncContextManager
 from typing import TypeVar
 
 from literature_agent.application.ports.project_repository import ProjectRepository
+from literature_agent.application.ports.session import Session
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import ProjectNotFoundError
 from literature_agent.domain.project import Project, create_project
 
-TSession = TypeVar("TSession")
+TSession = TypeVar("TSession", bound=Session)
 
 
 class ProjectService:
@@ -53,6 +54,7 @@ class ProjectService:
         async with self._session_factory() as session:
             repo = self._repo_factory(session)
             await repo.add(project)
+            await session.commit()
         return project
 
     async def list_projects(self, actor: ActorContext) -> list[Project]:

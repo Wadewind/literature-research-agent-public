@@ -1,7 +1,5 @@
 """Project API 路由测试。"""
 
-from contextlib import asynccontextmanager
-
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
@@ -11,19 +9,13 @@ from literature_agent.application.project_service import ProjectService
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.project import create_project
 from literature_agent.main import create_app
-from tests.fakes.fake_project_repository import FakeProjectRepository
-
-
-@asynccontextmanager
-async def _fake_session():
-    """模拟异步会话上下文。"""
-    yield None
+from tests.fakes.fake_project_repository import FakeProjectRepository, fake_session
 
 
 def _build_fake_service(fake_repo: FakeProjectRepository) -> ProjectService:
     """基于 Fake Repository 构建 ProjectService。"""
     return ProjectService(
-        session_factory=_fake_session,
+        session_factory=fake_session,
         repo_factory=lambda _session: fake_repo,
     )
 
