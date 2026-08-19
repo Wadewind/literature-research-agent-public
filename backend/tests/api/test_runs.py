@@ -116,3 +116,41 @@ def test_list_events(client) -> None:
     data = response.json()
     assert len(data) == 1
     assert data[0]["event_type"] == "run_created"
+
+
+def test_list_events_pagination(client) -> None:
+    """GET /events 支持 after_sequence 游标与 limit 上限。"""
+    test_client, fake_run_repo, fake_event_repo = client
+    from literature_agent.domain.event import create_event
+    from literature_agent.domain.run import create_run
+
+    run = create_run(project_id="p1", owner_id="user-1", run_type="ingestion")
+    fake_run_repo._runs[run.run_id] = run
+    for seq in range(1, 6):
+        fake_event_repo._events.append(
+            create_event(run.run_id, seq, f"event_{seq}", "user", "corr-1")
+        )
+
+    response = test_client.get(
+        f"/api/v1/runs/{run.run_id}/events",
+        params={"after_sequence": 2, "limit": 2},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [e["sequence"] for e in data] == [3, 4]
+
+
+def test_list_events_limit_validation(client) -> None:
+    """limit 超过上限返回 422。"""
+    test_client, fake_run_repo, _ = client
+    from literature_agent.domain.run import create_run
+
+    run = create_run(project_id="p1", owner_id="user-1", run_type="ingestion")
+    fake_run_repo._runs[run.run_id] = run
+
+    response = test_client.get(
+        f"/api/v1/runs/{run.run_id}/events", params={"limit": 501}
+    )
+
+    assert response.status_code == 422

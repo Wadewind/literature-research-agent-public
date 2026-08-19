@@ -21,11 +21,16 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeVar
 
+from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.failure_policy import (
     RunFailureOutcome,
     apply_run_failure,
 )
 from literature_agent.application.ports.attempt_repository import AttemptRepository
+from literature_agent.application.ports.event_notifier import (
+    EventNotifier,
+    NoopEventNotifier,
+)
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.outbox_repository import OutboxRepository
 from literature_agent.application.ports.run_repository import RunRepository
@@ -72,6 +77,7 @@ class RunExecutionService:
         worker_id: str,
         heartbeat_interval_seconds: float = 30.0,
         max_run_attempts: int = 3,
+        event_notifier: EventNotifier | None = None,
     ) -> None:
         """初始化 RunExecutionService。
 
@@ -85,6 +91,7 @@ class RunExecutionService:
             worker_id: 当前 Worker 标识（写入 Attempt）。
             heartbeat_interval_seconds: 心跳间隔秒数。
             max_run_attempts: 最大执行尝试次数（含首次）。
+            event_notifier: 事件通知器，默认 Noop（切片 9，SSE 降延迟用）。
         """
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -95,6 +102,7 @@ class RunExecutionService:
         self._worker_id = worker_id
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._max_run_attempts = max_run_attempts
+        self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def execute(self, run_id: str, correlation_id: str) -> ExecutionOutcome:
         """执行一个 Run：认领 QUEUED → RUNNING，然后交给执行器。
@@ -177,18 +185,20 @@ class RunExecutionService:
             )
             await self._event_repo_factory(session).add(event)
             await session.commit()
-            return Run(
-                run_id=new_run.run_id,
-                project_id=new_run.project_id,
-                owner_id=new_run.owner_id,
-                run_type=new_run.run_type,
-                status=new_run.status,
-                input_payload=new_run.input_payload,
-                result_payload=new_run.result_payload,
-                event_sequence=new_run.event_sequence + 1,
-                created_at=new_run.created_at,
-                updated_at=new_run.updated_at,
-            ), attempt
+        await notify_run_event(self._event_notifier, run_id)
+        claimed_run = Run(
+            run_id=new_run.run_id,
+            project_id=new_run.project_id,
+            owner_id=new_run.owner_id,
+            run_type=new_run.run_type,
+            status=new_run.status,
+            input_payload=new_run.input_payload,
+            result_payload=new_run.result_payload,
+            event_sequence=new_run.event_sequence + 1,
+            created_at=new_run.created_at,
+            updated_at=new_run.updated_at,
+        )
+        return claimed_run, attempt
 
     async def _heartbeat_loop(self, attempt_id: str) -> None:
         """周期性更新 Attempt 心跳；失败只记日志，不影响执行主路径。"""
@@ -267,6 +277,8 @@ class RunExecutionService:
                     max_run_attempts=self._max_run_attempts,
                 )
             await session.commit()
+        if outcome != RunFailureOutcome.SKIPPED:
+            await notify_run_event(self._event_notifier, run_id)
         attempt_status = (
             AttemptStatus.FAILED
             if outcome != RunFailureOutcome.SKIPPED

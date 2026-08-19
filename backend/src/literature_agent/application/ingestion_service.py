@@ -7,6 +7,11 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import TypeVar
 
+from literature_agent.application.event_notification import notify_run_event
+from literature_agent.application.ports.event_notifier import (
+    EventNotifier,
+    NoopEventNotifier,
+)
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.idempotency_repository import (
     IdempotencyRecord,
@@ -95,6 +100,7 @@ class IngestionService:
         event_repo_factory: Callable[[TSession], EventRepository],
         outbox_repo_factory: Callable[[TSession], OutboxRepository],
         storage: Storage,
+        event_notifier: EventNotifier | None = None,
     ) -> None:
         """初始化 IngestionService。
 
@@ -109,6 +115,7 @@ class IngestionService:
             event_repo_factory: 根据 session 创建 EventRepository 的工厂。
             outbox_repo_factory: 根据 session 创建 OutboxRepository 的工厂。
             storage: 文件存储适配器。
+            event_notifier: 事件通知器，默认 Noop（切片 9，SSE 降延迟用）。
         """
         self._max_upload_size_bytes = max_upload_size_bytes
         self._session_factory = session_factory
@@ -120,6 +127,7 @@ class IngestionService:
         self._event_repo_factory = event_repo_factory
         self._outbox_repo_factory = outbox_repo_factory
         self._storage = storage
+        self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def upload_paper_file(
         self,
@@ -231,6 +239,7 @@ class IngestionService:
                 await session.rollback()
                 raise
 
+        await notify_run_event(self._event_notifier, updated_run.run_id)
         return UploadResult(
             run_id=updated_run.run_id,
             paper_id=paper.paper_id,

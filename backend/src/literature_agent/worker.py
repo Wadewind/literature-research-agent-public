@@ -56,6 +56,9 @@ from literature_agent.infrastructure.persistence.run_repository import (
     SqlalchemyRunRepository,
 )
 from literature_agent.infrastructure.queue.arq_run_queue import ArqRunQueue
+from literature_agent.infrastructure.queue.valkey_event_notifier import (
+    ValkeyEventNotifier,
+)
 from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
 
 logger = logging.getLogger(__name__)
@@ -134,10 +137,12 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     queue = ArqRunQueue(settings.redis_url)
+    event_notifier = ValkeyEventNotifier(settings.redis_url)
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     ctx["settings"] = settings
     ctx["engine"] = engine
     ctx["queue"] = queue
+    ctx["event_notifier"] = event_notifier
     ctx["outbox_dispatch_service"] = OutboxDispatchService(
         session_factory=session_factory,
         outbox_repo_factory=SqlalchemyOutboxRepository,
@@ -167,10 +172,12 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
             profile=profile,
             parser_timeout_seconds=settings.parser_timeout_seconds,
             max_run_attempts=settings.max_run_attempts,
+            event_notifier=event_notifier,
         ).execute,
         worker_id=worker_id,
         heartbeat_interval_seconds=settings.worker_heartbeat_interval_seconds,
         max_run_attempts=settings.max_run_attempts,
+        event_notifier=event_notifier,
     )
     ctx["run_reconcile_service"] = RunReconcileService(
         session_factory=session_factory,
@@ -194,6 +201,9 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+    notifier: ValkeyEventNotifier | None = ctx.get("event_notifier")
+    if notifier is not None:
+        await notifier.aclose()
     queue: ArqRunQueue | None = ctx.get("queue")
     if queue is not None:
         await queue.aclose()

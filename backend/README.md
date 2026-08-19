@@ -14,11 +14,12 @@ The service is built through Phase 1 vertical slices. The current slices expose:
 - `GET /health/live`
 - Project CRUD API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/{project_id}`)
 - Paper file upload API (`POST /api/v1/projects/{project_id}/paper-files`) with idempotency
-- Run/Event API (`GET /api/v1/runs/{run_id}`, `POST /api/v1/runs/{run_id}/cancel`, `GET /api/v1/runs/{run_id}/events`)
+- Run/Event API (`GET /api/v1/runs/{run_id}`, `POST /api/v1/runs/{run_id}/cancel`, `GET /api/v1/runs/{run_id}/events?after_sequence=&limit=`) with cursor pagination
+- Run event SSE stream (`GET /api/v1/runs/{run_id}/events/stream`) with `Last-Event-ID` resume, 15s heartbeat comments and terminal close; Valkey Pub/Sub lowers latency while 1s DB polling guarantees convergence
 - Document query API (`GET /api/v1/projects/{project_id}/paper-versions/{version_id}/document`, `GET .../elements`) with page/section/type filters
 - PostgreSQL persistence with SQLAlchemy 2.0 Async and Alembic migrations
 - Actor Context with ownership filtering
-- Queue Outbox + ARQ Worker reliable dispatch
+- Queue Outbox + ARQ Worker reliable dispatch; worker-side Attempt lease/heartbeat (600s/30s) with reconcile loop recovering crashed runs, and error-classified retries (`AGENT_MAX_RUN_ATTEMPTS=3`, `RETRY_WAIT` + outbox redispatch)
 - Real PDF parsing via Docling (standard pipeline, OCR off by default) with pypdf degraded fallback; `AGENT_PARSER_BACKEND=fake` switches to the deterministic Fake parser
 
 Run the ARQ worker (dispatches the queue outbox and executes run jobs):

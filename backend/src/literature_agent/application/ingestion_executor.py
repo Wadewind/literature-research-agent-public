@@ -13,10 +13,15 @@ from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import TypeVar
 
+from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.failure_policy import apply_run_failure
 from literature_agent.application.ports.attempt_repository import AttemptRepository
 from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.ports.element_repository import ElementRepository
+from literature_agent.application.ports.event_notifier import (
+    EventNotifier,
+    NoopEventNotifier,
+)
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.outbox_repository import OutboxRepository
 from literature_agent.application.ports.paper_version_repository import (
@@ -74,6 +79,7 @@ class IngestionExecutor[TSession: Session]:
         profile: ParseProfile,
         parser_timeout_seconds: float = 300.0,
         max_run_attempts: int = 3,
+        event_notifier: EventNotifier | None = None,
     ) -> None:
         """初始化 IngestionExecutor。
 
@@ -90,6 +96,7 @@ class IngestionExecutor[TSession: Session]:
             profile: 解析配置画像。
             parser_timeout_seconds: 单次解析的超时秒数，超时按 FAILED 处理且不降级。
             max_run_attempts: 最大执行尝试次数（含首次），临时错误超出后 FAILED。
+            event_notifier: 事件通知器，默认 Noop（切片 9，SSE 降延迟用）。
         """
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -103,6 +110,7 @@ class IngestionExecutor[TSession: Session]:
         self._profile = profile
         self._parser_timeout_seconds = parser_timeout_seconds
         self._max_run_attempts = max_run_attempts
+        self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def execute(self, run: Run, correlation_id: str) -> None:
         """执行一次导入 Run，自行推进终态。
@@ -185,9 +193,11 @@ class IngestionExecutor[TSession: Session]:
                     raise RunConcurrentModificationError(run.run_id)
                 if await self._finalize_if_cancelled(session, run_row, correlation_id):
                     await session.commit()
+                    await notify_run_event(self._event_notifier, run.run_id)
                     return None
                 await self._commit_reuse(session, run_row, revision, correlation_id)
                 await session.commit()
+                await notify_run_event(self._event_notifier, run.run_id)
                 return None
 
             if revision is None:
@@ -222,13 +232,15 @@ class IngestionExecutor[TSession: Session]:
                 raise RunConcurrentModificationError(run.run_id)
             if await self._finalize_if_cancelled(session, run_row, correlation_id):
                 await session.commit()
+                await notify_run_event(self._event_notifier, run.run_id)
                 return None
             await self._emit_progress(
                 session, run_row, "parse_started",
                 {"revision_id": revision.revision_id}, correlation_id,
             )
             await session.commit()
-            return revision, version.storage_key
+        await notify_run_event(self._event_notifier, run.run_id)
+        return revision, version.storage_key
 
     async def _commit_reuse(
         self,
@@ -277,6 +289,7 @@ class IngestionExecutor[TSession: Session]:
                 raise RunConcurrentModificationError(run.run_id)
             if await self._finalize_if_cancelled(session, run_row, correlation_id):
                 await session.commit()
+                await notify_run_event(self._event_notifier, run.run_id)
                 return
 
             await self._element_repo_factory(session).add_many(elements)
@@ -297,6 +310,7 @@ class IngestionExecutor[TSession: Session]:
                 correlation_id,
             )
             await session.commit()
+        await notify_run_event(self._event_notifier, run.run_id)
 
     async def _mark_failed(
         self,
@@ -338,6 +352,7 @@ class IngestionExecutor[TSession: Session]:
                 now=now,
             )
             await session.commit()
+        await notify_run_event(self._event_notifier, run.run_id)
 
     async def _finalize_if_cancelled(
         self,
@@ -429,6 +444,7 @@ class IngestionExecutor[TSession: Session]:
                 raise RunConcurrentModificationError(run.run_id)
             if await self._finalize_if_cancelled(session, run_row, correlation_id):
                 await session.commit()
+                await notify_run_event(self._event_notifier, run.run_id)
                 return True
             for event_type, payload in events:
                 await self._emit_progress(session, run_row, event_type, payload, correlation_id)
@@ -436,4 +452,5 @@ class IngestionExecutor[TSession: Session]:
                 fresh = await run_repo.get_by_id(run.run_id)
                 run_row = fresh if fresh is not None else run_row
             await session.commit()
-            return False
+        await notify_run_event(self._event_notifier, run.run_id)
+        return False

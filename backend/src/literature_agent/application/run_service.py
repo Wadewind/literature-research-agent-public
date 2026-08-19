@@ -4,6 +4,11 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import TypeVar
 
+from literature_agent.application.event_notification import notify_run_event
+from literature_agent.application.ports.event_notifier import (
+    EventNotifier,
+    NoopEventNotifier,
+)
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
@@ -26,6 +31,7 @@ class RunService:
         session_factory: Callable[[], AbstractAsyncContextManager[TSession]],
         run_repo_factory: Callable[[TSession], RunRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
+        event_notifier: EventNotifier | None = None,
     ) -> None:
         """初始化 RunService。
 
@@ -33,10 +39,12 @@ class RunService:
             session_factory: 返回异步上下文管理器的工厂，用于控制事务。
             run_repo_factory: 根据 session 创建 RunRepository 的工厂。
             event_repo_factory: 根据 session 创建 EventRepository 的工厂。
+            event_notifier: 事件通知器，默认 Noop（切片 9，SSE 降延迟用）。
         """
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
         self._event_repo_factory = event_repo_factory
+        self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def create_run(
         self,
@@ -86,6 +94,7 @@ class RunService:
             await session.flush()
             await event_repo.add(created_event)
             await session.commit()
+        await notify_run_event(self._event_notifier, updated_run.run_id)
         return updated_run
 
     async def get_run(self, actor: ActorContext, run_id: str) -> Run:
@@ -101,12 +110,25 @@ class RunService:
                 raise RunNotFoundError(run_id)
             return run
 
-    async def list_events(self, actor: ActorContext, run_id: str) -> list:
-        """列出当前 actor 可见 Run 的所有 Event。"""
+    async def list_events(
+        self,
+        actor: ActorContext,
+        run_id: str,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> list:
+        """列出当前 actor 可见 Run 的 Event，支持 sequence 游标分页。
+
+        参数:
+            actor: 当前请求的可信用户上下文。
+            run_id: 目标 Run 标识符。
+            after_sequence: 只返回 sequence 大于该值的事件（断线重放游标）。
+            limit: 单次返回的最大条数。
+        """
         await self.get_run(actor, run_id)
         async with self._session_factory() as session:
             event_repo = self._event_repo_factory(session)
-            return await event_repo.list_by_run(run_id)
+            return await event_repo.list_after(run_id, after_sequence, limit)
 
     async def start_run(
         self,
@@ -209,7 +231,8 @@ class RunService:
                 payload={},
             )
             await session.commit()
-            return result
+        await notify_run_event(self._event_notifier, run_id)
+        return result
 
     async def _transition(
         self,
@@ -249,7 +272,8 @@ class RunService:
                 result_payload=result_payload,
             )
             await session.commit()
-            return result
+        await notify_run_event(self._event_notifier, run_id)
+        return result
 
     async def _execute_transition(
         self,

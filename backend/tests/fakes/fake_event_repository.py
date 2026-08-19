@@ -21,3 +21,17 @@ class FakeEventRepository(EventRepository):
             [e for e in self._events if e.run_id == run_id],
             key=lambda e: e.sequence,
         )
+
+    async def list_after(
+        self,
+        run_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> list[Event]:
+        """返回 sequence 大于指定值的 Event。"""
+        events = [
+            e
+            for e in await self.list_by_run(run_id)
+            if e.sequence > after_sequence
+        ]
+        return events[:limit]

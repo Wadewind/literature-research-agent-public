@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from literature_agent.application.ports.event_notifier import EventNotifier
 from literature_agent.application.ports.run_queue import RunQueue
 from literature_agent.application.ports.storage import Storage
 from literature_agent.infrastructure.config import Settings
@@ -15,6 +16,9 @@ from literature_agent.infrastructure.persistence.database import (
     create_session_factory,
 )
 from literature_agent.infrastructure.queue.arq_run_queue import ArqRunQueue
+from literature_agent.infrastructure.queue.valkey_event_notifier import (
+    ValkeyEventNotifier,
+)
 from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
 
 
@@ -34,6 +38,7 @@ class AppState:
     session_factory: async_sessionmaker
     storage: Storage
     queue: RunQueue
+    event_notifier: EventNotifier
 
 
 @asynccontextmanager
@@ -52,12 +57,14 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
     session_factory = create_session_factory(engine)
     storage = LocalFileStorage(settings.storage_root)
     queue = ArqRunQueue(settings.redis_url)
+    event_notifier = ValkeyEventNotifier(settings.redis_url)
     state = AppState(
         settings=settings,
         engine=engine,
         session_factory=session_factory,
         storage=storage,
         queue=queue,
+        event_notifier=event_notifier,
     )
     try:
         # 显式写入 app.state：lifespan 产出的映射只会进入请求 scope["state"]，
@@ -65,5 +72,6 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
         app.state.app_state = state
         yield {"app_state": state}
     finally:
+        await event_notifier.aclose()
         await queue.aclose()
         await engine.dispose()

@@ -60,3 +60,21 @@ class SqlalchemyEventRepository(EventRepository):
             select(EventORM).where(EventORM.run_id == run_id).order_by(EventORM.sequence.asc()),
         )
         return [_to_domain(row) for row in result.scalars().all()]
+
+    async def list_after(
+        self,
+        run_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> list[Event]:
+        """列出 sequence 大于指定值的 Event，按 sequence 升序。"""
+        result = await self._session.execute(
+            select(EventORM)
+            .where(
+                EventORM.run_id == run_id,
+                EventORM.sequence > after_sequence,
+            )
+            .order_by(EventORM.sequence.asc())
+            .limit(limit),
+        )
+        return [_to_domain(row) for row in result.scalars().all()]
