@@ -10,6 +10,10 @@ _DEFAULT_DEV_ACTOR_ID = "dev-user"
 _DEFAULT_STORAGE_ROOT = "data/storage"
 _DEFAULT_MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024  # 50 MiB（2026-08-20 定稿）
 _DEFAULT_PARSER_TIMEOUT_SECONDS = 300.0  # 2026-08-20 定稿
+_DEFAULT_WORKER_LEASE_SECONDS = 600.0  # 2026-08-20 定稿
+_DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS = 30.0  # 2026-08-20 定稿
+_DEFAULT_WORKER_RECONCILE_INTERVAL_SECONDS = 30.0
+_DEFAULT_MAX_RUN_ATTEMPTS = 3
 _DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS = 1.0
 _DEFAULT_OUTBOX_MAX_ATTEMPTS = 10
 _DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE = 20
@@ -33,6 +37,14 @@ class Settings:
     max_upload_size_bytes: int = field(default=_DEFAULT_MAX_UPLOAD_SIZE_BYTES)
     parser_timeout_seconds: float = field(default=_DEFAULT_PARSER_TIMEOUT_SECONDS)
     parser_backend: str = field(default="docling")
+    worker_lease_seconds: float = field(default=_DEFAULT_WORKER_LEASE_SECONDS)
+    worker_heartbeat_interval_seconds: float = field(
+        default=_DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS
+    )
+    worker_reconcile_interval_seconds: float = field(
+        default=_DEFAULT_WORKER_RECONCILE_INTERVAL_SECONDS
+    )
+    max_run_attempts: int = field(default=_DEFAULT_MAX_RUN_ATTEMPTS)
     outbox_poll_interval_seconds: float = field(default=_DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS)
     outbox_max_attempts: int = field(default=_DEFAULT_OUTBOX_MAX_ATTEMPTS)
     outbox_dispatch_batch_size: int = field(default=_DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE)
@@ -60,6 +72,24 @@ class Settings:
         batch_size = (
             int(raw_batch_size) if raw_batch_size else _DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE
         )
+        raw_lease = os.getenv("AGENT_WORKER_LEASE_SECONDS")
+        worker_lease = float(raw_lease) if raw_lease else _DEFAULT_WORKER_LEASE_SECONDS
+        raw_heartbeat = os.getenv("AGENT_WORKER_HEARTBEAT_INTERVAL_SECONDS")
+        heartbeat_interval = (
+            float(raw_heartbeat)
+            if raw_heartbeat
+            else _DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS
+        )
+        raw_reconcile = os.getenv("AGENT_WORKER_RECONCILE_INTERVAL_SECONDS")
+        reconcile_interval = (
+            float(raw_reconcile)
+            if raw_reconcile
+            else _DEFAULT_WORKER_RECONCILE_INTERVAL_SECONDS
+        )
+        raw_run_attempts = os.getenv("AGENT_MAX_RUN_ATTEMPTS")
+        max_run_attempts = (
+            int(raw_run_attempts) if raw_run_attempts else _DEFAULT_MAX_RUN_ATTEMPTS
+        )
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -70,6 +100,10 @@ class Settings:
             max_upload_size_bytes=max_upload_size,
             parser_timeout_seconds=parser_timeout,
             parser_backend=os.getenv("AGENT_PARSER_BACKEND", "docling"),
+            worker_lease_seconds=worker_lease,
+            worker_heartbeat_interval_seconds=heartbeat_interval,
+            worker_reconcile_interval_seconds=reconcile_interval,
+            max_run_attempts=max_run_attempts,
             outbox_poll_interval_seconds=poll_interval,
             outbox_max_attempts=max_attempts,
             outbox_dispatch_batch_size=batch_size,

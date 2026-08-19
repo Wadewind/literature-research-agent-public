@@ -1,5 +1,6 @@
 """Outbox Repository 的内存假实现。"""
 
+from dataclasses import replace
 from datetime import datetime
 
 from literature_agent.application.ports.outbox_repository import OutboxRepository
@@ -45,3 +46,20 @@ class FakeOutboxRepository(OutboxRepository):
     async def save(self, entry: QueueOutbox) -> None:
         """保存 Outbox 记录的更新。"""
         self._entries[entry.outbox_id] = entry
+
+    async def reset_for_retry(self, run_id: str, scheduled_at: datetime) -> bool:
+        """仅当记录仍为 DISPATCHED 时重置为待投递。"""
+        for outbox_id, entry in self._entries.items():
+            if entry.run_id == run_id:
+                if entry.status != OutboxStatus.DISPATCHED:
+                    return False
+                self._entries[outbox_id] = replace(
+                    entry,
+                    status=OutboxStatus.PENDING,
+                    attempt_count=entry.attempt_count + 1,
+                    scheduled_at=scheduled_at,
+                    dispatched_at=None,
+                    updated_at=scheduled_at,
+                )
+                return True
+        return False

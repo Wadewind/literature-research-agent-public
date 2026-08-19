@@ -14,10 +14,13 @@ from literature_agent.domain.parse_revision import (
     ParseRevisionStatus,
     create_parse_revision,
 )
+from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import Run, RunStatus, create_run
 from literature_agent.infrastructure.parsing.fake_parser import FakeDocumentParser
+from tests.fakes.fake_attempt_repository import FakeAttemptRepository
 from tests.fakes.fake_element_repository import FakeElementRepository
 from tests.fakes.fake_event_repository import FakeEventRepository
+from tests.fakes.fake_outbox_repository import FakeOutboxRepository
 from tests.fakes.fake_paper_version_repository import FakePaperVersionRepository
 from tests.fakes.fake_parse_revision_repository import FakeParseRevisionRepository
 from tests.fakes.fake_project_repository import fake_session
@@ -68,12 +71,23 @@ def element_repo() -> FakeElementRepository:
 
 
 @pytest.fixture
+def attempt_repo() -> FakeAttemptRepository:
+    return FakeAttemptRepository()
+
+
+@pytest.fixture
+def outbox_repo() -> FakeOutboxRepository:
+    return FakeOutboxRepository()
+
+
+@pytest.fixture
 def parser() -> _StubParser:
     return _StubParser()
 
 
 def _make_executor(
-    run_repo, event_repo, version_repo, revision_repo, element_repo, parser,
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo, parser,
     parser_timeout_seconds: float = 300.0,
 ) -> IngestionExecutor:
     """构建使用 Fake 依赖的 IngestionExecutor。"""
@@ -84,19 +98,27 @@ def _make_executor(
         paper_version_repo_factory=lambda _s: version_repo,
         parse_revision_repo_factory=lambda _s: revision_repo,
         element_repo_factory=lambda _s: element_repo,
+        attempt_repo_factory=lambda _s: attempt_repo,
+        outbox_repo_factory=lambda _s: outbox_repo,
         parser=parser,
         profile=_PROFILE,
         parser_timeout_seconds=parser_timeout_seconds,
     )
 
 
-def _make_service(executor: IngestionExecutor, run_repo, event_repo) -> RunExecutionService:
+def _make_service(
+    executor: IngestionExecutor, run_repo, event_repo, attempt_repo, outbox_repo
+) -> RunExecutionService:
     """构建接入真实执行器的 RunExecutionService。"""
     return RunExecutionService(
         session_factory=fake_session,
         run_repo_factory=lambda _s: run_repo,
         event_repo_factory=lambda _s: event_repo,
+        attempt_repo_factory=lambda _s: attempt_repo,
+        outbox_repo_factory=lambda _s: outbox_repo,
         executor=executor.execute,
+        worker_id="test-worker:1",
+        heartbeat_interval_seconds=3600.0,
     )
 
 
@@ -113,8 +135,8 @@ async def _add_version(version_repo: FakePaperVersionRepository) -> str:
     return version.version_id
 
 
-async def _add_uploaded_run(run_repo, event_repo, version_id: str) -> Run:
-    """模拟上传后的 Run：QUEUED、run_created 事件已写入、sequence 推进到 2。"""
+async def _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id: str) -> Run:
+    """模拟上传并派发后的 Run：QUEUED、run_created 事件、Outbox 已投递。"""
     run = create_run(
         project_id="p-1",
         owner_id="user-1",
@@ -133,6 +155,11 @@ async def _add_uploaded_run(run_repo, event_repo, version_id: str) -> Run:
         )
     )
     await run_repo.update_status(run.run_id, RunStatus.QUEUED, RunStatus.QUEUED, 2)
+    entry = create_outbox_entry(run.run_id)
+    await outbox_repo.add(entry)
+    from datetime import UTC, datetime
+
+    await outbox_repo.try_mark_dispatched(entry.outbox_id, datetime.now(UTC))
     loaded = await run_repo.get_by_id(run.run_id)
     assert loaded is not None
     return loaded
@@ -147,15 +174,17 @@ def _events(event_repo: FakeEventRepository, run_id: str) -> list:
 
 
 async def test_full_pipeline_completes_with_elements(
-    run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo, parser,
 ) -> None:
     """完整闭环：QUEUED → SUCCEEDED，Revision/Element/定位/当前指针齐全。"""
     version_id = await _add_version(version_repo)
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     executor = _make_executor(
-        run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
     )
-    service = _make_service(executor, run_repo, event_repo)
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
@@ -200,7 +229,8 @@ async def test_full_pipeline_completes_with_elements(
 
 
 async def test_existing_succeeded_revision_is_reused(
-    run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo, parser,
 ) -> None:
     """相同 version + profile 已有成功 Revision 时复用，不再调用 Parser。"""
     version_id = await _add_version(version_repo)
@@ -212,11 +242,12 @@ async def test_existing_succeeded_revision_is_reused(
     existing = existing.mark_succeeded(datetime.now(UTC))
     await revision_repo.add(existing)
 
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     executor = _make_executor(
-        run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
     )
-    service = _make_service(executor, run_repo, event_repo)
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
@@ -232,24 +263,26 @@ async def test_existing_succeeded_revision_is_reused(
     assert committed[0].payload["reused"] is True
 
 
-async def test_parser_failure_marks_run_and_revision_failed(
-    run_repo, event_repo, version_repo, revision_repo, element_repo
+async def test_transient_parser_failure_schedules_retry(
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo,
 ) -> None:
-    """Parser 抛错：Revision FAILED、Run FAILED、无 Element、无当前指针。"""
+    """Parser 临时错误：Revision FAILED、Run RETRY_WAIT、Outbox 重置待重投。"""
     parser = _StubParser(fail=True)
     version_id = await _add_version(version_repo)
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     executor = _make_executor(
-        run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
     )
-    service = _make_service(executor, run_repo, event_repo)
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
-    assert outcome == ExecutionOutcome.FAILED
+    assert outcome == ExecutionOutcome.RETRY_SCHEDULED
     loaded_run = await run_repo.get_by_id(run.run_id)
     assert loaded_run is not None
-    assert loaded_run.status == RunStatus.FAILED
+    assert loaded_run.status == RunStatus.RETRY_WAIT
 
     revision = await revision_repo.get_by_version_and_profile(
         version_id, _PROFILE.profile_hash
@@ -265,15 +298,24 @@ async def test_parser_failure_marks_run_and_revision_failed(
     assert version.current_parse_revision_id is None
 
     event_types = [e.event_type for e in _events(event_repo, run.run_id)]
-    assert event_types == ["run_created", "run_started", "parse_started", "run_failed"]
+    assert event_types == [
+        "run_created", "run_started", "parse_started", "run_retry_scheduled",
+    ]
+
+    # Outbox 记录重置为待投递，等待派发循环到点重投
+    entry = await outbox_repo.get_by_run_id(run.run_id)
+    assert entry is not None
+    assert entry.status == OutboxStatus.PENDING
+    assert entry.attempt_count == 1
 
 
 async def test_cancel_during_parse_skips_result_commit(
-    run_repo, event_repo, version_repo, revision_repo, element_repo
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo,
 ) -> None:
     """解析期间收到取消请求：提交前检查命中，推进 CANCELLED，不提交结果。"""
     version_id = await _add_version(version_repo)
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
 
     class _CancellingParser(_StubParser):
         """解析时模拟 API 并发写入 CANCEL_REQUESTED。"""
@@ -289,9 +331,10 @@ async def test_cancel_during_parse_skips_result_commit(
 
     parser = _CancellingParser()
     executor = _make_executor(
-        run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
     )
-    service = _make_service(executor, run_repo, event_repo)
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
@@ -314,21 +357,24 @@ async def test_cancel_during_parse_skips_result_commit(
 
 
 async def test_retry_after_failure_reuses_revision_row(
-    run_repo, event_repo, version_repo, revision_repo, element_repo
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo,
 ) -> None:
     """上次失败的 Revision 行被复用重置，重跑成功后不留下第二行。"""
     parser = _StubParser(fail=True)
     version_id = await _add_version(version_repo)
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     executor = _make_executor(
-        run_repo, event_repo, version_repo, revision_repo, element_repo, parser
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
     )
-    service = _make_service(executor, run_repo, event_repo)
-    assert await service.execute(run.run_id, correlation_id="job-1") == ExecutionOutcome.FAILED
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
+    first = await service.execute(run.run_id, correlation_id="job-1")
+    assert first == ExecutionOutcome.RETRY_SCHEDULED
 
     # 修复 Parser 后重跑同一 version（新 Run）
     parser._fail = False
-    run2 = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run2 = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     outcome = await service.execute(run2.run_id, correlation_id="job-2")
 
     assert outcome == ExecutionOutcome.COMPLETED
@@ -339,10 +385,11 @@ async def test_retry_after_failure_reuses_revision_row(
     assert revisions[0].status == ParseRevisionStatus.SUCCEEDED
 
 
-async def test_parser_timeout_marks_failed_without_fallback(
-    run_repo, event_repo, version_repo, revision_repo, element_repo
+async def test_parser_timeout_schedules_retry_without_fallback(
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo,
 ) -> None:
-    """解析超过配置的超时：Run/Revision FAILED，error.type=parser_timeout。"""
+    """解析超时（临时错误）：Revision FAILED(parser_timeout)，Run RETRY_WAIT 等待重试。"""
     import asyncio
 
     class _SlowParser:
@@ -353,19 +400,19 @@ async def test_parser_timeout_marks_failed_without_fallback(
             raise AssertionError("不应到达")
 
     version_id = await _add_version(version_repo)
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     executor = _make_executor(
         run_repo, event_repo, version_repo, revision_repo, element_repo,
-        _SlowParser(), parser_timeout_seconds=0.05,
+        attempt_repo, outbox_repo, _SlowParser(), parser_timeout_seconds=0.05,
     )
-    service = _make_service(executor, run_repo, event_repo)
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
-    assert outcome == ExecutionOutcome.FAILED
+    assert outcome == ExecutionOutcome.RETRY_SCHEDULED
     loaded_run = await run_repo.get_by_id(run.run_id)
     assert loaded_run is not None
-    assert loaded_run.status == RunStatus.FAILED
+    assert loaded_run.status == RunStatus.RETRY_WAIT
     revision = await revision_repo.get_by_version_and_profile(
         version_id, _PROFILE.profile_hash
     )
@@ -376,7 +423,8 @@ async def test_parser_timeout_marks_failed_without_fallback(
 
 
 async def test_degraded_result_is_persisted_on_revision(
-    run_repo, event_repo, version_repo, revision_repo, element_repo
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo,
 ) -> None:
     """降级解析结果：Revision 持久化 degraded 标记与文档级警告。"""
     from dataclasses import replace
@@ -389,12 +437,12 @@ async def test_degraded_result_is_persisted_on_revision(
             return replace(parsed, degraded=True, warnings=["layout_missing"])
 
     version_id = await _add_version(version_repo)
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     executor = _make_executor(
         run_repo, event_repo, version_repo, revision_repo, element_repo,
-        _DegradedParser(),
+        attempt_repo, outbox_repo, _DegradedParser(),
     )
-    service = _make_service(executor, run_repo, event_repo)
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 
@@ -409,7 +457,8 @@ async def test_degraded_result_is_persisted_on_revision(
 
 
 async def test_empty_text_document_gets_possibly_scanned_warning(
-    run_repo, event_repo, version_repo, revision_repo, element_repo
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo,
 ) -> None:
     """全文文本长度为 0：解析成功但带 possibly_scanned 警告。"""
     from dataclasses import replace
@@ -425,12 +474,12 @@ async def test_empty_text_document_gets_possibly_scanned_warning(
             return ParsedDocument(elements=empty)
 
     version_id = await _add_version(version_repo)
-    run = await _add_uploaded_run(run_repo, event_repo, version_id)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
     executor = _make_executor(
         run_repo, event_repo, version_repo, revision_repo, element_repo,
-        _EmptyParser(),
+        attempt_repo, outbox_repo, _EmptyParser(),
     )
-    service = _make_service(executor, run_repo, event_repo)
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
 
     outcome = await service.execute(run.run_id, correlation_id="job-1")
 

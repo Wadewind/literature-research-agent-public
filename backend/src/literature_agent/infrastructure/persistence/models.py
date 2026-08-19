@@ -287,6 +287,44 @@ class QueueOutboxORM(Base):
     )
 
 
+class RunAttemptORM(Base):
+    """Run Attempt 的持久化映射。"""
+
+    __tablename__ = "run_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id"),
+        index=True,
+        nullable=False,
+    )
+    attempt_number: Mapped[int] = mapped_column(nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        index=True,
+        nullable=False,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "attempt_number", name="uq_run_attempts_run_attempt"),
+    )
+
+
 class IdempotencyKeyORM(Base):
     """API 幂等键的持久化映射。"""
 

@@ -34,3 +34,11 @@ class OutboxRepository(Protocol):
     async def save(self, entry: QueueOutbox) -> None:
         """保存 Outbox 记录的更新（用于记录投递失败）。"""
         ...
+
+    async def reset_for_retry(self, run_id: str, scheduled_at: datetime) -> bool:
+        """把已投递的记录条件重置为待投递（Run 重试用）。
+
+        仅当当前状态为 DISPATCHED 时成功；同时推迟 ``scheduled_at``、
+        ``attempt_count`` 加一。返回是否更新成功。
+        """
+        ...

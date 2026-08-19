@@ -109,3 +109,27 @@ class SqlalchemyOutboxRepository(OutboxRepository):
         orm.scheduled_at = entry.scheduled_at
         orm.dispatched_at = entry.dispatched_at
         orm.updated_at = entry.updated_at
+
+    async def reset_for_retry(self, run_id: str, scheduled_at: datetime) -> bool:
+        """条件重置为待投递；仅 DISPATCHED 状态可更新。"""
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=UTC)
+        now = datetime.now(UTC)
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(QueueOutboxORM)
+                .where(
+                    QueueOutboxORM.run_id == run_id,
+                    QueueOutboxORM.status == OutboxStatus.DISPATCHED.value,
+                )
+                .values(
+                    status=OutboxStatus.PENDING.value,
+                    attempt_count=QueueOutboxORM.attempt_count + 1,
+                    scheduled_at=scheduled_at,
+                    dispatched_at=None,
+                    updated_at=now,
+                ),
+            ),
+        )
+        return result.rowcount == 1

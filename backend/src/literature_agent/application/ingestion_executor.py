@@ -13,9 +13,12 @@ from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import TypeVar
 
+from literature_agent.application.failure_policy import apply_run_failure
+from literature_agent.application.ports.attempt_repository import AttemptRepository
 from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.ports.element_repository import ElementRepository
 from literature_agent.application.ports.event_repository import EventRepository
+from literature_agent.application.ports.outbox_repository import OutboxRepository
 from literature_agent.application.ports.paper_version_repository import (
     PaperVersionRepository,
 )
@@ -65,9 +68,12 @@ class IngestionExecutor[TSession: Session]:
         paper_version_repo_factory: Callable[[TSession], PaperVersionRepository],
         parse_revision_repo_factory: Callable[[TSession], ParseRevisionRepository],
         element_repo_factory: Callable[[TSession], ElementRepository],
+        attempt_repo_factory: Callable[[TSession], AttemptRepository],
+        outbox_repo_factory: Callable[[TSession], OutboxRepository],
         parser: DocumentParser,
         profile: ParseProfile,
         parser_timeout_seconds: float = 300.0,
+        max_run_attempts: int = 3,
     ) -> None:
         """初始化 IngestionExecutor。
 
@@ -78,9 +84,12 @@ class IngestionExecutor[TSession: Session]:
             paper_version_repo_factory: 根据 session 创建 PaperVersionRepository 的工厂。
             parse_revision_repo_factory: 根据 session 创建 ParseRevisionRepository 的工厂。
             element_repo_factory: 根据 session 创建 ElementRepository 的工厂。
+            attempt_repo_factory: 根据 session 创建 AttemptRepository 的工厂。
+            outbox_repo_factory: 根据 session 创建 OutboxRepository 的工厂。
             parser: 文档解析器实现。
             profile: 解析配置画像。
             parser_timeout_seconds: 单次解析的超时秒数，超时按 FAILED 处理且不降级。
+            max_run_attempts: 最大执行尝试次数（含首次），临时错误超出后 FAILED。
         """
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -88,9 +97,12 @@ class IngestionExecutor[TSession: Session]:
         self._paper_version_repo_factory = paper_version_repo_factory
         self._parse_revision_repo_factory = parse_revision_repo_factory
         self._element_repo_factory = element_repo_factory
+        self._attempt_repo_factory = attempt_repo_factory
+        self._outbox_repo_factory = outbox_repo_factory
         self._parser = parser
         self._profile = profile
         self._parser_timeout_seconds = parser_timeout_seconds
+        self._max_run_attempts = max_run_attempts
 
     async def execute(self, run: Run, correlation_id: str) -> None:
         """执行一次导入 Run，自行推进终态。
@@ -295,7 +307,7 @@ class IngestionExecutor[TSession: Session]:
         *,
         error: dict | None = None,
     ) -> None:
-        """解析失败：Revision 标记 FAILED，Run 条件推进 FAILED。"""
+        """解析失败：Revision 标记 FAILED，Run 按错误分类 FAILED 或 RETRY_WAIT。"""
         now = datetime.now(UTC)
         if error is None:
             assert exc is not None
@@ -311,9 +323,19 @@ class IngestionExecutor[TSession: Session]:
             if run_row is None or run_row.status != RunStatus.RUNNING:
                 await session.commit()
                 return
-            await self._finish_run(
-                session, run_row, RunStatus.FAILED, "run_failed",
-                {"error": error}, correlation_id,
+            # 按错误分类：永久输入错误直接 FAILED；临时错误预算内 RETRY_WAIT
+            await apply_run_failure(
+                session,
+                run_repo_factory=self._run_repo_factory,
+                event_repo_factory=self._event_repo_factory,
+                attempt_repo_factory=self._attempt_repo_factory,
+                outbox_repo_factory=self._outbox_repo_factory,
+                run=run_row,
+                error=error,
+                exc=exc,
+                correlation_id=correlation_id,
+                max_run_attempts=self._max_run_attempts,
+                now=now,
             )
             await session.commit()
 

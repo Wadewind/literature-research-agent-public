@@ -10,6 +10,8 @@
 
 import asyncio
 import logging
+import os
+import socket
 from contextlib import suppress
 from typing import Any
 
@@ -20,6 +22,7 @@ from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.run_execution_service import RunExecutionService
+from literature_agent.application.run_reconcile_service import RunReconcileService
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.parsing.fake_parser import (
@@ -27,6 +30,9 @@ from literature_agent.infrastructure.parsing.fake_parser import (
 )
 from literature_agent.infrastructure.parsing.fallback_parser import FallbackDocumentParser
 from literature_agent.infrastructure.parsing.pypdf_parser import PypdfDocumentParser
+from literature_agent.infrastructure.persistence.attempt_repository import (
+    SqlalchemyAttemptRepository,
+)
 from literature_agent.infrastructure.persistence.database import (
     create_engine,
     create_session_factory,
@@ -107,11 +113,28 @@ async def _dispatch_loop(ctx: dict[str, Any]) -> None:
         await asyncio.sleep(settings.outbox_poll_interval_seconds)
 
 
+async def _reconcile_loop(ctx: dict[str, Any]) -> None:
+    """周期性收回 lease 过期的执行中 Run（Worker 崩溃恢复）。"""
+    service: RunReconcileService = ctx["run_reconcile_service"]
+    settings: Settings = ctx["settings"]
+    while True:
+        try:
+            recovered = await service.reconcile_expired()
+            if recovered:
+                logger.info("对账收回 %d 个过期 Run", recovered)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Run 对账循环出错")
+        await asyncio.sleep(settings.worker_reconcile_interval_seconds)
+
+
 async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
-    """Worker 启动：建立数据库、队列依赖并启动派发循环。"""
+    """Worker 启动：建立数据库、队列依赖并启动派发与对账循环。"""
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     queue = ArqRunQueue(settings.redis_url)
+    worker_id = f"{socket.gethostname()}:{os.getpid()}"
     ctx["settings"] = settings
     ctx["engine"] = engine
     ctx["queue"] = queue
@@ -121,12 +144,16 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         queue=queue,
         max_attempts=settings.outbox_max_attempts,
         batch_size=settings.outbox_dispatch_batch_size,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
     )
     parser, profile = _build_parser_and_profile(settings)
     ctx["run_execution_service"] = RunExecutionService(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
         executor=IngestionExecutor(
             session_factory=session_factory,
             run_repo_factory=SqlalchemyRunRepository,
@@ -134,21 +161,39 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
             paper_version_repo_factory=SqlalchemyPaperVersionRepository,
             parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
             element_repo_factory=SqlalchemyElementRepository,
+            attempt_repo_factory=SqlalchemyAttemptRepository,
+            outbox_repo_factory=SqlalchemyOutboxRepository,
             parser=parser,
             profile=profile,
             parser_timeout_seconds=settings.parser_timeout_seconds,
+            max_run_attempts=settings.max_run_attempts,
         ).execute,
+        worker_id=worker_id,
+        heartbeat_interval_seconds=settings.worker_heartbeat_interval_seconds,
+        max_run_attempts=settings.max_run_attempts,
+    )
+    ctx["run_reconcile_service"] = RunReconcileService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        lease_seconds=settings.worker_lease_seconds,
+        max_run_attempts=settings.max_run_attempts,
+        batch_size=settings.outbox_dispatch_batch_size,
     )
     ctx["dispatch_task"] = asyncio.create_task(_dispatch_loop(ctx))
+    ctx["reconcile_task"] = asyncio.create_task(_reconcile_loop(ctx))
 
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
-    """Worker 关闭：取消派发循环并释放连接资源。"""
-    task: asyncio.Task | None = ctx.get("dispatch_task")
-    if task is not None:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+    """Worker 关闭：取消后台循环并释放连接资源。"""
+    for key in ("dispatch_task", "reconcile_task"):
+        task: asyncio.Task | None = ctx.get(key)
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
     queue: ArqRunQueue | None = ctx.get("queue")
     if queue is not None:
         await queue.aclose()

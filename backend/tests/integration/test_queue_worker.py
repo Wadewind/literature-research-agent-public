@@ -29,6 +29,9 @@ from literature_agent.infrastructure.parsing.fake_parser import (
     PARSER_VERSION,
     FakeDocumentParser,
 )
+from literature_agent.infrastructure.persistence.attempt_repository import (
+    SqlalchemyAttemptRepository,
+)
 from literature_agent.infrastructure.persistence.element_repository import (
     SqlalchemyElementRepository,
 )
@@ -110,6 +113,8 @@ def _make_execution_service(session_factory) -> RunExecutionService:
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
         executor=IngestionExecutor(
             session_factory=session_factory,
             run_repo_factory=SqlalchemyRunRepository,
@@ -117,9 +122,13 @@ def _make_execution_service(session_factory) -> RunExecutionService:
             paper_version_repo_factory=SqlalchemyPaperVersionRepository,
             parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
             element_repo_factory=SqlalchemyElementRepository,
+            attempt_repo_factory=SqlalchemyAttemptRepository,
+            outbox_repo_factory=SqlalchemyOutboxRepository,
             parser=FakeDocumentParser(),
             profile=ParseProfile(PARSER_NAME, PARSER_VERSION, {}),
         ).execute,
+        worker_id="test-worker:integration",
+        heartbeat_interval_seconds=3600.0,
     )
 
 
@@ -135,6 +144,8 @@ async def test_dispatch_to_worker_completes_run(
         queue=queue,
         max_attempts=10,
         batch_size=20,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
     )
 
     dispatched = await dispatch_service.dispatch_pending()
@@ -165,6 +176,13 @@ async def test_dispatch_to_worker_completes_run(
             "normalize_completed",
             "result_committed",
         ]
+        # Attempt 运维记录：创建并以 succeeded 关闭
+        attempt = await SqlalchemyAttemptRepository(session).get_latest_by_run(queued_run)
+        assert attempt is not None
+        assert attempt.attempt_number == 1
+        assert attempt.worker_id == "test-worker:integration"
+        assert attempt.status.value == "succeeded"
+        assert attempt.finished_at is not None
         # 解析产物：Revision、Element、当前指针
         version_id = run.input_payload["version_id"]
         version = await SqlalchemyPaperVersionRepository(session).get_by_id(version_id)
@@ -196,6 +214,8 @@ async def test_dispatch_failure_then_recovers(db_engine, valkey_url: str, queued
         queue=broken_queue,
         max_attempts=10,
         batch_size=20,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
     )
 
     assert await dispatch_service.dispatch_pending() == 0
@@ -212,6 +232,8 @@ async def test_dispatch_failure_then_recovers(db_engine, valkey_url: str, queued
         queue=ArqRunQueue(valkey_url),
         max_attempts=10,
         batch_size=20,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
     )
     future = datetime.now(UTC) + timedelta(seconds=5)
     assert await recovered.dispatch_pending(future) == 1
