@@ -27,13 +27,16 @@ class FakeProjectRepository(ProjectRepository):
 
 
 class _FakeSession:
-    """模拟具有 flush/commit 方法的异步会话。"""
+    """模拟具有 flush/commit/rollback 方法的异步会话。"""
 
     async def flush(self) -> None:
         """空刷新。"""
 
     async def commit(self) -> None:
         """空提交。"""
+
+    async def rollback(self) -> None:
+        """空回滚。"""
 
 
 @asynccontextmanager

@@ -1,6 +1,5 @@
 """集成测试共享 fixtures。"""
 
-import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.community.postgres import PostgresContainer
@@ -35,7 +34,7 @@ async def session(db_engine):
         await session.rollback()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def project(session: AsyncSession) -> str:
     """在数据库中创建一个测试 Project 并返回其 ID。"""
     project = create_project(owner_id="user-1", name="测试项目", description="")
