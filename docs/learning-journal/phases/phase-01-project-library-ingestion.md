@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中。切片 1–6（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环）已完成。Spec 初版日期：2026-08-13。
+进行中。切片 1–6（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环）已完成，切片 7（真实 Parser）进行中。Spec 初版日期：2026-08-13。
 
 本阶段是第一个正式业务阶段。
 
@@ -396,6 +396,52 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/elements?page=&sec
 - API：契约、过滤分页、越权 404；
 - 端到端：上传 → Worker 消费 → elements 可查（Fake Parser，不依赖真实 PDF 解析）。
 
+### 切片 7：真实 Parser（Docling + pypdf 降级）
+
+#### 目标
+
+Worker 用真实 PDF 解析替换 Fake Parser：Docling 标准 Pipeline 产出带章节、表格和来源定位的 Element；损坏/加密等结构性失败自动降级 pypdf 并标记 `degraded`；超时、永久输入错误按分类进入明确终态。用户上传真实 PDF 后能通过 document/elements API 看到真实解析结果与降级/警告信息。
+
+#### 范围
+
+- **包含**：`parser_timeout_seconds=300` 等新 Settings（上传 50 MB 已是默认值）；解析错误分类（可降级输入错误/超时/资源/未知）；Docling 适配器（标准 PdfPipeline、默认不开 OCR、`config.ocr_enabled` 开关）；pypdf 降级适配器（页级定位、纯文本）；Fallback 组合（按异常类型决定是否降级）；`document_parse_revisions` 增加 `degraded`/`warnings` 字段并在 document API 暴露；Element Payload 定稿落地；文本长度为 0 → `possibly_scanned` 警告；执行器层统一施加 Parser 超时；合成 PDF Fixtures 与 Parser 契约测试；Worker 通过配置选择 Parser（fake/docling）。
+- **不包含**：OCR 实际启用路径的质量验证（只留开关）；图片抽取与 figure 的 Storage 写入；Attempt/lease 与崩溃对账（切片 8）；前端（切片 10）。
+
+#### 数据模型
+
+- `document_parse_revisions` 新增 `degraded`（bool，默认 false）与 `warnings`（JSONB 字符串列表，默认空）；执行器在提交事务内把 `ParsedDocument` 的文档级标记写入 Revision。
+- Element Payload 定稿：`table` 为 `{"rows": int, "cols": int, "cells": [[str]]}`；`figure` 为 `{"storage_key": str|null}`；`formula` 为 `{"latex": str|null}`；其余类型只用 `text`。
+- document API 响应增加 `degraded` 与 `warnings` 字段。
+
+#### 错误分类与降级
+
+| 分类 | 触发 | 行为 |
+|---|---|---|
+| 可降级输入错误 | Docling 抛损坏/加密/结构类异常 | 尝试 pypdf；成功 → `degraded` + 能力缺失 warning；也失败 → 永久输入错误 FAILED |
+| 超时 | `parser.parse` 超过 `parser_timeout_seconds` | 不降级，FAILED（`error.type=parser_timeout`） |
+| 资源类 | 内存/进程等资源异常 | 不降级，FAILED |
+| 未知异常 | 其他 | 不降级，FAILED（保守，不掩盖 bug） |
+
+- 降级只发生一次（Docling → pypdf），pypdf 不再降级，同一错误只有一层主导重试；
+- pypdf 结果只有页级定位：文本按页切成 `paragraph` Element，`bbox` 为 null 并标记 `degraded`，不伪造精度；
+- 全文文本长度为 0（主路径或降级）：追加 `possibly_scanned` warning 提示用 OCR 重跑，解析本身仍算成功（空文档是合法结果）。
+
+#### 关键不变量
+
+1. 超时通过 `asyncio.wait_for` 在执行器层统一施加，Parser 适配器不自行实现超时；
+2. 所有解析路径产出同一 `ParsedDocument` 契约：每个 Element 至少一个带页码的 SourceLocation；
+3. `ocr_enabled` 参与 `parser_profile_hash`，切换 OCR 产生新 Revision，旧结果不受影响；
+4. 普通测试不强制下载 Docling 模型：Docling 真实解析测试归入显式启用组（环境变量开启）；默认套件用 pypdf 真实解析与 Stub 验证分类组合逻辑；
+5. Fixtures 只提交合成或公开许可 PDF，用户本地论文不进仓库。
+
+#### 测试要点
+
+- Adapter：Docling 标签映射（未知标签归 paragraph + warning）、table/figure/formula Payload 形状、`degraded`/`warnings` 传播；
+- pypdf 契约：多页文本 PDF → 每页 paragraph + 页级定位；加密/损坏 PDF → 可降级输入错误分类；空白 PDF → `possibly_scanned`；
+- Fallback 组合：Docling 结构异常 → pypdf 成功且 degraded；超时/资源异常 → 直接 FAILED；pypdf 也失败 → FAILED；
+- 执行器：小超时值触发 `parser_timeout` → FAILED；`degraded`/`warnings` 写入 Revision 并在 document API 可见；
+- 冒烟：本机真实 Docling 解析一个合成 PDF（允许首次下载模型），结果记入模块笔记。
+
 ## 测试方式
 
 - **Domain**：Run 合法/非法转换、终态、取消竞争、错误分类和确定性 ID/Profile；
@@ -430,18 +476,18 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/elements?page=&sec
 - 2026-08-13：Docling 为主 Parser，pypdf 仅作显式降级；
 - 2026-08-13：保留 owner 和可替换 Actor Context，但不建设完整登录；
 - 2026-08-13：PostgreSQL 保存业务事实，Storage 保存大内容，Valkey 不作事实来源。
+- 2026-08-20：开发默认值定稿——上传上限 50 MB；Parser 超时 300 s；Worker lease 600 s / heartbeat 30 s（切片 8 实现）；Outbox 重试维持现状（1s 起指数退避、上限 60s、最多 10 次）。全部走 Settings 环境变量，测试用小值验证超时路径。
+- 2026-08-20：解析策略定稿——主路径 Docling 标准 PdfPipeline，默认不开 OCR（`ParseProfile.config` 保留 `ocr_enabled` 开关，扫描件由用户显式选择）；降级按异常类型分类：Docling 抛文件损坏/加密/结构类异常 → 尝试 pypdf，成功标记 `degraded` 并记录能力缺失 warning；超时/资源类异常不降级直接 FAILED；pypdf 也失败则视为永久输入错误；兜底：文本长度为 0 时给 `possibly_scanned` 警告提示用 OCR 重跑。
+- 2026-08-20：Element 最低 Payload 定稿——枚举维持现有 ElementType，Docling 标签映射不到的归 `paragraph` 并记 warning；`table` 存纯文本网格 `{"rows","cols","cells"}`；`figure` 只存 `storage_key`（首版可 null + warning，不抽图片）；`formula` 存 `{"latex": str|null}`；其余只用 `text` 字段。复杂结构推迟到 Phase 2 有真实消费方再扩展。
 
 ## 实现前仍需确定
 
 以下问题不改变阶段边界，在对应切片开始前通过测试或小实验确定：
 
-1. 上传大小、Parser 超时、Worker lease 和重试次数的开发默认值；
-2. Docling Pipeline/OCR Profile 和触发 pypdf 降级的错误分类；
-3. 首版 Element 枚举及表格、公式、图片的最低 Payload；
-4. Element API 对复杂表格、公式和图片内容的返回形式；
-5. 元数据不完整时的展示名和同一 owner 跨 Project 复用交互；
-6. SSE 心跳、分页、终态关闭和本地 Storage 回收策略；
-7. Phase 1 UI 的具体 Element 渲染组件和视觉样式。
+1. Element API 对复杂表格、公式和图片内容的返回形式；
+2. 元数据不完整时的展示名和同一 owner 跨 Project 复用交互；
+3. SSE 心跳、分页、终态关闭和本地 Storage 回收策略；
+4. Phase 1 UI 的具体 Element 渲染组件和视觉样式。
 
 如果实现需要改变 Run/Event 事实来源、Paper/Version/Parse Revision 所有权、数据隐私或跨用户去重策略，先更新本 Spec；达到 `AGENTS.md` 的触发条件时再写 ADR。
 
@@ -466,4 +512,4 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/elements?page=&sec
 
 后续模块笔记在对应切片真正完成后撰写，不预建空模板。
 
-下一步从切片 7（真实 Parser）开始：先确定“实现前仍需确定”中的第 1–3 项（Parser 超时默认值、Docling Pipeline/OCR Profile 与降级分类、Element 最低 Payload），用固定 PDF Fixture 编写 Parser 契约测试，再实现 Docling 主适配器和 pypdf 降级适配器替换 Fake Parser。
+当前进行切片 7（真实 Parser）：三项前置决策已于 2026-08-20 定稿（见“已确定事项”），契约见上方切片 7 章节。实现顺序：Settings 与依赖 → Revision degraded/warnings 与错误分类 → pypdf 降级适配器与 Fixture 契约测试 → Docling 主适配器与 Fallback 组合 → 执行器超时接线与 Worker 配置切换。
