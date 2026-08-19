@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中。切片 1–6（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环）已完成，切片 7（真实 Parser）进行中。Spec 初版日期：2026-08-13。
+进行中。切片 1–7（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环、真实 Parser）已完成。Spec 初版日期：2026-08-13。
 
 本阶段是第一个正式业务阶段。
 
@@ -233,7 +233,7 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 4. **上传与版本**（已完成）：流式校验、Storage、Paper/Paper Version、哈希和 API 幂等；
 5. **可靠投递**（已完成）：Queue Outbox、`run_id` Job、重复 Job 和投递故障；
 6. **Fake Parser 闭环**（已完成）：Run → Parse Revision → Element/来源定位 → 成功；
-7. **真实 Parser**：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
+7. **真实 Parser**（已完成）：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
 8. **取消/恢复**：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
 9. **Event/SSE**：历史分页、Sequence 游标、通知丢失和断线重放；
 10. **最小 Web UI**：Project、Library、上传、Run Detail、取消和 Element/PDF 来源预览；
@@ -512,4 +512,4 @@ Worker 用真实 PDF 解析替换 Fake Parser：Docling 标准 Pipeline 产出�
 
 后续模块笔记在对应切片真正完成后撰写，不预建空模板。
 
-当前进行切片 7（真实 Parser）：三项前置决策已于 2026-08-20 定稿（见“已确定事项”），契约见上方切片 7 章节。实现顺序：Settings 与依赖 → Revision degraded/warnings 与错误分类 → pypdf 降级适配器与 Fixture 契约测试 → Docling 主适配器与 Fallback 组合 → 执行器超时接线与 Worker 配置切换。
+当前进行切片 7（真实 Parser）→ 已完成。下一步是切片 8（取消/恢复）：实现错误分类驱动的重试、Attempt、Worker lease/heartbeat（600s/30s，默认值已定稿）和异常 Run 对账，先写契约章节再按"确认不变量 → 失败测试 → 最小实现"推进。

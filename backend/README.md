@@ -18,7 +18,8 @@ The service is built through Phase 1 vertical slices. The current slices expose:
 - Document query API (`GET /api/v1/projects/{project_id}/paper-versions/{version_id}/document`, `GET .../elements`) with page/section/type filters
 - PostgreSQL persistence with SQLAlchemy 2.0 Async and Alembic migrations
 - Actor Context with ownership filtering
-- Queue Outbox + ARQ Worker reliable dispatch with Fake Parser ingestion executor (slice 6)
+- Queue Outbox + ARQ Worker reliable dispatch
+- Real PDF parsing via Docling (standard pipeline, OCR off by default) with pypdf degraded fallback; `AGENT_PARSER_BACKEND=fake` switches to the deterministic Fake parser
 
 Run the ARQ worker (dispatches the queue outbox and executes run jobs):
 
@@ -28,6 +29,9 @@ uv run agent-worker  # 或 uv run python -m literature_agent.worker
 ```
 
 The worker requires PostgreSQL and Valkey; see `deploy/compose/compose.yml`.
+Parser timeout defaults to 300s (`AGENT_PARSER_TIMEOUT_SECONDS`). Docling
+downloads its layout models on first run; the real-parsing contract tests are
+opt-in: `AGENT_RUN_DOCLING_TESTS=1 uv run pytest tests/infrastructure/test_docling_parser.py`.
 
 ## 本地开发
 
