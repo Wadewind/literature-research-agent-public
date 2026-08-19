@@ -148,6 +148,44 @@ class PaperVersionORM(Base):
     )
 
 
+class QueueOutboxORM(Base):
+    """Queue Outbox 的持久化映射。"""
+
+    __tablename__ = "queue_outbox"
+
+    outbox_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id"),
+        unique=True,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        index=True,
+        nullable=False,
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
 class IdempotencyKeyORM(Base):
     """API 幂等键的持久化映射。"""
 
