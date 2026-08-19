@@ -231,6 +231,80 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 2. **Project 闭环**：Actor Context、Domain/Repository/Application/API 和隔离测试；
 3. **Run/Event 核心**：状态机、Event Sequence、事务 Repository 和并发测试；
 4. **上传与版本**：流式校验、Storage、Paper/Paper Version、哈希和 API 幂等；
+
+### 切片 4：上传与版本
+
+#### 目标
+
+用户可通过 `POST /api/v1/projects/{project_id}/paper-files` 上传 PDF，服务端完成校验、存储、创建 Paper/PaperVersion、生成幂等的 Ingestion Run，并返回 `202 Accepted` 和稳定 `run_id`。本切片只把文件“收”进系统，不触发 Worker 解析。
+
+#### 范围
+
+- **包含**：multipart 上传、`Idempotency-Key` 处理、PDF Magic Bytes / MIME / 大小校验、文件名清理、SHA-256、本地 Storage Port/Adapter、`Paper`/`PaperVersion` 持久化、`IdempotencyKey` 持久化、Ingestion `Run` + `run_created` Event、API `202` 响应。
+- **不包含**：Worker 消费、Queue Outbox、Parser、Element、跨用户物理去重、书目元数据提取、项目外 Paper 复用。
+
+#### API 契约
+
+```text
+POST /api/v1/projects/{project_id}/paper-files
+Headers:
+  Idempotency-Key: <string>        # 必填，调用方提供的幂等键
+Content-Type: multipart/form-data
+Body:
+  file: <PDF binary>
+
+202 Accepted
+{
+  "run_id": "<uuid>",
+  "paper_id": "<uuid>",
+  "version_id": "<uuid>",
+  "status": "queued"
+}
+```
+
+错误响应：
+- `400`：`Idempotency-Key` 缺失、文件非 PDF、超过大小限制；
+- `404`：Project 不存在或不属于当前 actor；
+- `409`：相同 `Idempotency-Key` 但请求指纹不同；
+- `413`：请求体超过全局限制。
+
+#### 数据模型
+
+新增表：
+
+- `papers`：`paper_id`（PK）、`owner_id`、`project_id`（FK）、`created_at`。
+- `paper_versions`：`version_id`（PK）、`paper_id`（FK）、`file_hash`、`storage_key`、`size_bytes`、`content_type`、`created_at`。
+- `idempotency_keys`：`owner_id` + `idempotency_key`（联合唯一）、`project_id`、请求指纹 `request_hash`、关联 `run_id`。
+
+#### 关键不变量
+
+1. 文件校验（Magic Bytes、大小）必须先于存储；
+2. SHA-256 在事务外计算；
+3. `Paper`、`PaperVersion`、`Run`、`Event`、`IdempotencyKey` 在同一短事务提交；
+4. Storage Key 由系统生成，不由用户文件名拼接，且不暴露宿主路径；
+5. 同一 `Idempotency-Key` + 相同请求指纹返回同一 `run_id`；不同指纹返回 `409`；
+6. Project 所有权校验在事务内完成。
+
+#### 实现顺序
+
+1. 定义 `Storage` Port 与本地文件系统 Adapter；
+2. 定义 `Paper`、`PaperVersion` 领域模型与异常；
+3. 新增 ORM 与 Alembic 迁移；
+4. 实现 Repository Port（Paper、PaperVersion、IdempotencyKey）与 PostgreSQL Adapter；
+5. 实现 `IngestionService.upload_paper_file` 编排校验、存储、幂等和 Run 创建；
+6. 实现 `POST /api/v1/projects/{project_id}/paper-files` 路由；
+7. 配置 `storage_root`、`max_upload_size_bytes` 并在 lifespan 注入 Storage；
+8. 编写 Domain/Application/API/PostgreSQL 集成测试。
+
+#### 测试要点
+
+- 合法 PDF 返回 `202`，生成 Paper/PaperVersion/Run/Event，文件落地；
+- 非 PDF、超尺寸、缺失 `Idempotency-Key` 返回 `400`；
+- 相同 key + 相同文件返回同一 `run_id`；
+- 相同 key + 不同文件返回 `409`；
+- Project 不存在或不属于当前 actor 返回 `404`；
+- Repository 层唯一约束、跨用户隔离；
+- Storage Adapter 路径穿越防护。
 5. **可靠投递**：Queue Outbox、`run_id` Job、重复 Job 和投递故障；
 6. **Fake Parser 闭环**：Run → Parse Revision → Element/来源定位 → 成功；
 7. **真实 Parser**：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
