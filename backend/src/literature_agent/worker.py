@@ -18,14 +18,15 @@ from arq.worker import run_worker
 
 from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
+from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.parsing.fake_parser import (
-    PARSER_NAME,
-    PARSER_VERSION,
     FakeDocumentParser,
 )
+from literature_agent.infrastructure.parsing.fallback_parser import FallbackDocumentParser
+from literature_agent.infrastructure.parsing.pypdf_parser import PypdfDocumentParser
 from literature_agent.infrastructure.persistence.database import (
     create_engine,
     create_session_factory,
@@ -49,8 +50,34 @@ from literature_agent.infrastructure.persistence.run_repository import (
     SqlalchemyRunRepository,
 )
 from literature_agent.infrastructure.queue.arq_run_queue import ArqRunQueue
+from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
 
 logger = logging.getLogger(__name__)
+
+
+def _build_parser_and_profile(settings: Settings) -> tuple[DocumentParser, ParseProfile]:
+    """按 ``parser_backend`` 配置选择 Parser 实现与默认 ParseProfile。
+
+    ``docling``（默认）：Docling 主路径 + pypdf 降级组合，默认不开 OCR；
+    ``fake``：确定性 Fake Parser，用于闭环演示与不依赖模型的测试。
+    Docling 延迟导入，避免 fake 模式下加载重型依赖。
+    """
+    if settings.parser_backend == "fake":
+        return FakeDocumentParser(), ParseProfile("fake", "1.0", {})
+    if settings.parser_backend == "docling":
+        from literature_agent.infrastructure.parsing.docling_parser import (
+            PARSER_NAME,
+            PARSER_VERSION,
+            DoclingDocumentParser,
+        )
+
+        storage = LocalFileStorage(settings.storage_root)
+        parser = FallbackDocumentParser(
+            primary=DoclingDocumentParser(storage),
+            fallback=PypdfDocumentParser(storage),
+        )
+        return parser, ParseProfile(PARSER_NAME, PARSER_VERSION, {"ocr_enabled": False})
+    raise ValueError(f"未知 parser_backend: {settings.parser_backend}")
 
 
 async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
@@ -95,6 +122,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         max_attempts=settings.outbox_max_attempts,
         batch_size=settings.outbox_dispatch_batch_size,
     )
+    parser, profile = _build_parser_and_profile(settings)
     ctx["run_execution_service"] = RunExecutionService(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -106,8 +134,9 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
             paper_version_repo_factory=SqlalchemyPaperVersionRepository,
             parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
             element_repo_factory=SqlalchemyElementRepository,
-            parser=FakeDocumentParser(),
-            profile=ParseProfile(PARSER_NAME, PARSER_VERSION, {}),
+            parser=parser,
+            profile=profile,
+            parser_timeout_seconds=settings.parser_timeout_seconds,
         ).execute,
     )
     ctx["dispatch_task"] = asyncio.create_task(_dispatch_loop(ctx))
@@ -156,7 +185,8 @@ def make_worker_settings(settings: Settings) -> type:
         on_shutdown = shutdown
         redis_settings = RedisSettings.from_dsn(settings.redis_url)
         max_tries = 1
-        job_timeout = 300
+        # ARQ Job 超时必须大于 Parser 超时，给状态提交留出余量
+        job_timeout = int(settings.parser_timeout_seconds) + 60
 
     return WorkerSettings
 

@@ -90,7 +90,11 @@ class FakeDocumentParser(DocumentParser):
                 sequence=7,
                 section_path="2",
                 parent_index=4,
-                payload={"rows": [["指标", "值"], ["准确率", "0.90"]]},
+                payload={
+                    "rows": 2,
+                    "cols": 2,
+                    "cells": [["指标", "值"], ["准确率", "0.90"]],
+                },
                 locations=[ParsedLocation(page=2, bbox=_bbox(3), parser_ref="fake:p2:e3")],
             ),
             ParsedElement(
