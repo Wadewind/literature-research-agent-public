@@ -21,6 +21,7 @@ def _to_domain(orm: PaperVersionORM) -> PaperVersion:
         content_type=orm.content_type,
         created_at=orm.created_at,
         current_parse_revision_id=orm.current_parse_revision_id,
+        display_filename=orm.display_filename,
     )
 
 
@@ -34,6 +35,7 @@ def _to_orm(version: PaperVersion) -> PaperVersionORM:
         size_bytes=version.size_bytes,
         content_type=version.content_type,
         created_at=version.created_at,
+        display_filename=version.display_filename,
     )
 
 

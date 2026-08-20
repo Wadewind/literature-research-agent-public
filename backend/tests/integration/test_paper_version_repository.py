@@ -42,6 +42,7 @@ async def test_add_and_get_version(
         storage_key="user-1/project/paper/paper.pdf",
         size_bytes=1024,
         content_type="application/pdf",
+        display_filename="paper.pdf",
     )
     await version_repo.add(version)
     await session.commit()
@@ -51,3 +52,4 @@ async def test_add_and_get_version(
     assert fetched is not None
     assert fetched.version_id == version.version_id
     assert fetched.file_hash == "abc"
+    assert fetched.display_filename == "paper.pdf"

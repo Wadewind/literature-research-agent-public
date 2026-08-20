@@ -17,6 +17,7 @@ class PaperVersion:
         size_bytes: 文件字节大小。
         content_type: 文件 MIME 类型。
         current_parse_revision_id: 当前生效的 Parse Revision，未解析为 None。
+        display_filename: 清理后的展示文件名，仅用于 UI 展示。
         created_at: 创建时间（UTC）。
     """
 
@@ -28,6 +29,7 @@ class PaperVersion:
     content_type: str
     created_at: datetime
     current_parse_revision_id: str | None = None
+    display_filename: str = "paper.pdf"
 
 
 def create_paper_version(
@@ -36,6 +38,7 @@ def create_paper_version(
     storage_key: str,
     size_bytes: int,
     content_type: str,
+    display_filename: str = "paper.pdf",
 ) -> PaperVersion:
     """创建新的 PaperVersion 实体。
 
@@ -45,6 +48,7 @@ def create_paper_version(
         storage_key: 文件在 Storage 中的键。
         size_bytes: 文件字节大小。
         content_type: 文件 MIME 类型。
+        display_filename: 清理后的展示文件名，仅用于 UI 展示。
 
     返回:
         新创建的 PaperVersion。
@@ -58,4 +62,5 @@ def create_paper_version(
         size_bytes=size_bytes,
         content_type=content_type,
         created_at=now,
+        display_filename=display_filename,
     )

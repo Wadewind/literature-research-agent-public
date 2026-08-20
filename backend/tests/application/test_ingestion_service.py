@@ -122,6 +122,7 @@ async def test_upload_valid_pdf_creates_run(
     service: IngestionService,
     actor: ActorContext,
     project: object,
+    paper_version_repo: FakePaperVersionRepository,
 ) -> None:
     """合法 PDF 上传应创建 Paper、Version、Run 和 Event。"""
     content = _pdf_content()
@@ -140,6 +141,10 @@ async def test_upload_valid_pdf_creates_run(
     assert result.paper_id
     assert result.version_id
     assert result.run_id
+
+    version = await paper_version_repo.get_by_id(result.version_id)
+    assert version is not None
+    assert version.display_filename == "test.pdf"
 
 
 @pytest.mark.asyncio

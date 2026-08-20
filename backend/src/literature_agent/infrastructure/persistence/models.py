@@ -141,6 +141,11 @@ class PaperVersionORM(Base):
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     size_bytes: Mapped[int] = mapped_column(nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_filename: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="paper.pdf",
+    )
     current_parse_revision_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("document_parse_revisions.revision_id", use_alter=True),

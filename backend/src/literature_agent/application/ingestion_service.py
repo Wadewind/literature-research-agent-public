@@ -192,6 +192,7 @@ class IngestionService:
                 storage_key=storage_key,
                 size_bytes=len(content),
                 content_type=content_type,
+                display_filename=sanitized_filename,
             )
 
             run = create_run(
