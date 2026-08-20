@@ -291,13 +291,17 @@ class IngestionService:
             updated_run = self._with_event_sequence(run, 2)
             version = replace(version, ingestion_run_id=updated_run.run_id)
 
+            # Repository 只向 Session 注册独立 ORM 行，SQLAlchemy UOW 不会根据
+            # 领域 ID 自动推导所有跨 Repository 的插入顺序。先落 Paper 与 Run，
+            # 再落引用二者的 Version，避免 ingestion_run_id 外键先于 Run 插入。
             await self._paper_repo_factory(session).add(paper)
+            await self._run_repo_factory(session).add(updated_run)
+            await session.flush()
             await version_repo.add(version)
+            await session.flush()
             await self._project_paper_repo_factory(session).add(
                 create_project_paper(project_id, paper.paper_id, version.version_id)
             )
-            await self._run_repo_factory(session).add(updated_run)
-            await session.flush()
             await self._event_repo_factory(session).add(created_event)
             # Run、Event 与 Outbox 在同一事务提交：派发器崩溃后仍可补投
             await self._outbox_repo_factory(session).add(create_outbox_entry(run.run_id))
