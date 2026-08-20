@@ -259,7 +259,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 1. **资源管理边界**（已完成 2026-08-20，契约见下文「切片 1」）：Project 改名/归档/恢复、Paper 归档/恢复、active 过滤、归档对新 Run/收录的限制；归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时返回 409；
 2. **阶段契约与评测 Fixture**（已完成 2026-08-20，契约见下文「切片 2」）：定最小错误码（`project_not_indexed`、`conversation_busy`、`invalid_scope` 等）；评测语料使用合成 PDF，由子智能体在本切片构建，保证期望 Evidence 的页码/章节完全确定；
-3. **Model Gateway**：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
+3. **Model Gateway**（已完成 2026-08-20，契约见下文「切片 3」）：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
 4. **ChunkSet + Worker 分发**：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
 5. **Indexing Run**：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
 6. **Hybrid Retrieval**：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
@@ -344,6 +344,57 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 #### 语料语言决定
 
 评测语料为英文合成 PDF（2026-08-20 定稿）：检索语料是英文论文，FTS 使用 PostgreSQL `english` 配置，评测必须同语言，避免跨语言分词干扰使评测结论失真。
+
+### 切片 3：Model Gateway（契约定稿）
+
+已于 2026-08-20 实现完成。
+
+#### Port 签名
+
+- `EmbeddingModel.embed(texts: list[str]) -> EmbeddingResult`（vectors + usage + model 名）；空列表直接返回空结果，不发起请求；Port 暴露 `provider`/`model` 属性供调用记录使用；
+- `ChatModel.generate(messages: list[ChatMessage], *, json_schema: dict | None = None, max_tokens: int | None = None) -> ChatResult`（原始 content 字符串 + usage prompt/completion tokens + model 名）；
+- 结构化输出只表达意图：Adapter 内把 `json_schema` 映射为 OpenAI `response_format`（`json_schema` 优先，构造参数 `json_schema_supported=False` 时降级 `json_object`）；JSON 解析与业务 Schema 校验留给切片 8；
+- `ModelInvocationRepository`：`add` + `list_by_run`。
+
+#### 错误分类
+
+`domain/model_errors.py`，接入现有 `is_permanent_error`：
+
+| 错误 | 分类 | 触发 |
+|---|---|---|
+| `ModelRateLimitError` | 临时 | HTTP 429，Adapter 短重试耗尽后 |
+| `ModelServerError` | 临时 | HTTP 5xx、网络连接失败 |
+| `ModelTimeoutError` | 临时 | 网络超时（客户端 timeout，默认 60s） |
+| `ModelAuthError` | 永久 | HTTP 401/403、缺少 API Key |
+| `ModelInvalidRequestError` | 永久 | HTTP 400 等其余 4xx |
+| `ModelResponseError` | 永久 | 响应 JSON 畸形或缺约定字段；Adapter 不做结构修复重试 |
+
+Adapter 层对临时错误最多重试 `AGENT_MODEL_MAX_RETRIES` 次（默认 2，固定退避 1s/2s），耗尽交 Run 层按预算 RETRY_WAIT；永久错误不重试。
+
+#### model_invocations 表
+
+`invocation_id`（PK）、`run_id`（可空 FK → runs，切片 5/8 接线时填）、`capability`（embedding/chat）、`provider`、`model`、`status`（succeeded/failed）、`prompt_tokens`/`completion_tokens`（可空）、`latency_ms`、`error_type`（可空）、`created_at`。**不存 Prompt/响应内容**。迁移 `d6e1f7a3b9c2`，`down_revision = b3f5a8c1d9e2`。
+
+#### Settings 清单
+
+扁平 `AGENT_` 前缀，延续 `from_env` 手写解析：`AGENT_EMBEDDING_BASE_URL` / `AGENT_EMBEDDING_API_KEY` / `AGENT_EMBEDDING_MODEL` / `AGENT_EMBEDDING_DIMENSIONS`、`AGENT_CHAT_BASE_URL` / `AGENT_CHAT_API_KEY` / `AGENT_CHAT_MODEL`、`AGENT_MODEL_TIMEOUT_SECONDS`（默认 60）、`AGENT_MODEL_MAX_RETRIES`（默认 2）。API Key 默认 None，缺失时 Adapter 首次调用抛 `ModelAuthError`（启动不崩溃，本地开发用 Fake）。
+
+#### Provider 默认值与来源依据
+
+- Embedding：智谱 `embedding-3`，OpenAI 兼容端点 `https://open.bigmodel.cn/api/paas/v4/embeddings`，默认维度 1024（可选 256/512/1024/2048，维度参与后续 embedding profile hash）；
+- Chat：DeepSeek `deepseek-v4-flash`，OpenAI 兼容 ChatCompletions，base `https://api.deepseek.com`；
+- 两者均为 2026-08-20 与用户定稿的默认配置；Adapter 是通用 OpenAI-compatible 实现，base_url/api_key/model 全部走 Settings，不写死 Provider。
+
+#### ModelGateway
+
+`application/model_gateway.py`：包装两个 Port，统一计时，调用后把 invocation 记录经 Repository 持久化（独立短事务；记录失败只记日志不影响调用结果）；模型调用不发生在数据库事务内。执行器接线（传 `run_id`）在切片 5/8。
+
+#### 测试要点
+
+- RESPX 契约（`tests/infrastructure/test_openai_compatible_models.py`，16 例）：成功形状与请求体、usage 解析、空批量不发请求、429 重试后成功、429/5xx/超时耗尽、401/400 永久不重试、JSON 畸形与缺字段、`json_schema`/`json_object` response_format；
+- Gateway（`tests/application/test_model_gateway.py`，5 例）：成功/失败记录、error_type 分类、记录失败不影响结果、run_id 可空；
+- PostgreSQL 集成（`tests/integration/test_model_invocation_repository.py`，3 例）：字段往返、run_id 可空、空查询；
+- 真实 Provider 冒烟 `AGENT_RUN_PROVIDER_TESTS=1` 显式启用（仿 `AGENT_RUN_DOCLING_TESTS`），默认跳过。
 
 ## 测试方式
 

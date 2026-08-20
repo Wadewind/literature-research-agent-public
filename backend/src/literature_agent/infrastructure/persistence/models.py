@@ -414,3 +414,33 @@ class IdempotencyKeyORM(Base):
         default=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+
+class ModelInvocationORM(Base):
+    """模型调用记录的持久化映射（不含 Prompt/响应内容）。"""
+
+    __tablename__ = "model_invocations"
+
+    invocation_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runs.run_id"),
+        index=True,
+        nullable=True,
+    )
+    capability: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    prompt_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    latency_ms: Mapped[int] = mapped_column(nullable=False)
+    error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )

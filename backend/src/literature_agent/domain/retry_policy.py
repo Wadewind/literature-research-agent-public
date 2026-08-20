@@ -8,12 +8,20 @@ from literature_agent.domain.exceptions import (
     FileValidationError,
     InvalidPdfInputError,
 )
+from literature_agent.domain.model_errors import (
+    ModelAuthError,
+    ModelInvalidRequestError,
+    ModelResponseError,
+)
 from literature_agent.domain.queue_outbox import compute_dispatch_backoff
 
-# 永久错误类型：输入类问题，重试无意义
+# 永久错误类型：输入类问题与模型认证/非法请求/响应形状错误，重试无意义
 _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     InvalidPdfInputError,
     FileValidationError,
+    ModelAuthError,
+    ModelInvalidRequestError,
+    ModelResponseError,
 )
 
 # 临时错误类型示例：超时与资源类，其余未知异常也按临时处理

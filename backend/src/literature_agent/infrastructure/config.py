@@ -17,6 +17,16 @@ _DEFAULT_MAX_RUN_ATTEMPTS = 3
 _DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS = 1.0
 _DEFAULT_OUTBOX_MAX_ATTEMPTS = 10
 _DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE = 20
+# Model Gateway 默认值（2026-08-20 定稿）：Embedding 默认智谱 embedding-3，
+# Chat 默认 DeepSeek deepseek-v4-flash，均为 OpenAI 兼容端点；API Key 默认
+# None，缺失时 Adapter 首次调用给出明确错误（本地开发使用 Fake）。
+_DEFAULT_EMBEDDING_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+_DEFAULT_EMBEDDING_MODEL = "embedding-3"
+_DEFAULT_EMBEDDING_DIMENSIONS = 1024
+_DEFAULT_CHAT_BASE_URL = "https://api.deepseek.com"
+_DEFAULT_CHAT_MODEL = "deepseek-v4-flash"
+_DEFAULT_MODEL_TIMEOUT_SECONDS = 60.0
+_DEFAULT_MODEL_MAX_RETRIES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +58,15 @@ class Settings:
     outbox_poll_interval_seconds: float = field(default=_DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS)
     outbox_max_attempts: int = field(default=_DEFAULT_OUTBOX_MAX_ATTEMPTS)
     outbox_dispatch_batch_size: int = field(default=_DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE)
+    embedding_base_url: str = field(default=_DEFAULT_EMBEDDING_BASE_URL)
+    embedding_api_key: str | None = field(default=None)
+    embedding_model: str = field(default=_DEFAULT_EMBEDDING_MODEL)
+    embedding_dimensions: int = field(default=_DEFAULT_EMBEDDING_DIMENSIONS)
+    chat_base_url: str = field(default=_DEFAULT_CHAT_BASE_URL)
+    chat_api_key: str | None = field(default=None)
+    chat_model: str = field(default=_DEFAULT_CHAT_MODEL)
+    model_timeout_seconds: float = field(default=_DEFAULT_MODEL_TIMEOUT_SECONDS)
+    model_max_retries: int = field(default=_DEFAULT_MODEL_MAX_RETRIES)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -90,6 +109,18 @@ class Settings:
         max_run_attempts = (
             int(raw_run_attempts) if raw_run_attempts else _DEFAULT_MAX_RUN_ATTEMPTS
         )
+        raw_dimensions = os.getenv("AGENT_EMBEDDING_DIMENSIONS")
+        embedding_dimensions = (
+            int(raw_dimensions) if raw_dimensions else _DEFAULT_EMBEDDING_DIMENSIONS
+        )
+        raw_model_timeout = os.getenv("AGENT_MODEL_TIMEOUT_SECONDS")
+        model_timeout = (
+            float(raw_model_timeout) if raw_model_timeout else _DEFAULT_MODEL_TIMEOUT_SECONDS
+        )
+        raw_model_retries = os.getenv("AGENT_MODEL_MAX_RETRIES")
+        model_max_retries = (
+            int(raw_model_retries) if raw_model_retries else _DEFAULT_MODEL_MAX_RETRIES
+        )
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -107,4 +138,13 @@ class Settings:
             outbox_poll_interval_seconds=poll_interval,
             outbox_max_attempts=max_attempts,
             outbox_dispatch_batch_size=batch_size,
+            embedding_base_url=os.getenv("AGENT_EMBEDDING_BASE_URL", _DEFAULT_EMBEDDING_BASE_URL),
+            embedding_api_key=os.getenv("AGENT_EMBEDDING_API_KEY") or None,
+            embedding_model=os.getenv("AGENT_EMBEDDING_MODEL", _DEFAULT_EMBEDDING_MODEL),
+            embedding_dimensions=embedding_dimensions,
+            chat_base_url=os.getenv("AGENT_CHAT_BASE_URL", _DEFAULT_CHAT_BASE_URL),
+            chat_api_key=os.getenv("AGENT_CHAT_API_KEY") or None,
+            chat_model=os.getenv("AGENT_CHAT_MODEL", _DEFAULT_CHAT_MODEL),
+            model_timeout_seconds=model_timeout,
+            model_max_retries=model_max_retries,
         )
