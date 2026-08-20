@@ -1,0 +1,69 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R 11 0 R] /Count 4 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1812 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (GraphWeave: A Synthetic Survey of Message-Passing Graph Neural Networks) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (Ada Corvin, Mira Okafor, and Deniz Yilmaz) Tj T* /F1 12 Tf (Institute for Synthetic Graph Learning. All content is fictional and produced) Tj T* /F1 12 Tf (solely as a retrieval evaluation fixture.) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (Abstract) Tj T* /F1 12 Tf (Message-passing graph neural networks are the dominant family of models for) Tj T* /F1 12 Tf (learning on relational data. This survey consolidates synthetic results) Tj T* /F1 12 Tf (reported across the GraphWeave research program, covering benchmark design,) Tj T* /F1 12 Tf (the message-passing design space, and the limits of deep architectures. We) Tj T* /F1 12 Tf (introduce the GraphWeave benchmark suite as a common yardstick, review) Tj T* /F1 12 Tf (aggregation and update functions, and analyze why depth saturates in practice.) Tj T* /F1 12 Tf (The survey closes with open problems in long-range dependency modelling and) Tj T* /F1 12 Tf (evaluation methodology.) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (1 Introduction) Tj T* /F1 12 Tf (Graph-structured data appears in citation networks, molecules, traffic) Tj T* /F1 12 Tf (systems, and program analysis. Over the past decade, message-passing graph) Tj T* /F1 12 Tf (neural networks have become the default tool for such data, replacing hand-) Tj T* /F1 12 Tf (crafted kernel methods with learned neighbourhood aggregation.) Tj T* /F1 12 Tf (This survey is organized as follows. Section 2 introduces the GraphWeave) Tj T* /F1 12 Tf (benchmark suite. Section 3 reviews the message-passing design space. Section 4) Tj T* /F1 12 Tf (analyzes depth-related failure modes. Section 5 lists open problems, and) Tj T* /F1 12 Tf (Section 6 concludes.) Tj T* ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 1901 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (2 The GraphWeave Benchmark) Tj T* /F1 12 Tf (The GraphWeave benchmark suite contains nine synthetic tasks spanning node) Tj T* /F1 12 Tf (classification, link prediction, and graph regression. Unlike collections) Tj T* /F1 12 Tf (assembled from real-world datasets, GraphWeave tasks are generated from) Tj T* /F1 12 Tf (controlled random graph processes, so difficulty can be varied along a single) Tj T* /F1 12 Tf (axis at a time. The suite is described here only to provide stable reference) Tj T* /F1 12 Tf (points for retrieval evaluation.) Tj T* /F1 12 Tf (The most informative probe in the suite is the Weave-Depth protocol, which re-) Tj T* /F1 12 Tf (trains the same architecture at increasing depths while holding parameter) Tj T* /F1 12 Tf (count constant. Under the Weave-Depth protocol, accuracy retention falls to) Tj T* /F1 12 Tf (61.3% beyond twelve layers, even with residual connections and normalization.) Tj T* /F1 12 Tf (We refer to this behaviour throughout the survey as depth saturation.) Tj T* /F1 12 Tf (3 The Message-Passing Design Space) Tj T* /F1 12 Tf (A message-passing layer is determined by three choices: the message function,) Tj T* /F1 12 Tf (the aggregation operator, and the update function. Sum aggregation preserves) Tj T* /F1 12 Tf (multiset information but couples the representation to node degree; mean) Tj T* /F1 12 Tf (aggregation is degree-invariant but lossy; attention-based aggregation learns) Tj T* /F1 12 Tf (weighting at the cost of additional parameters.) Tj T* /F1 12 Tf (Across GraphWeave tasks, sum aggregation with a two-layer MLP update is the) Tj T* /F1 12 Tf (most robust default. Learned edge features help only when the generator) Tj T* /F1 12 Tf (injects edge semantics, which confirms that design choices should follow the) Tj T* /F1 12 Tf (data-generating process rather than leaderboard fashion.) Tj T* ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 1434 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (4 Depth, Oversmoothing, and Saturation) Tj T* /F1 12 Tf (Stacking message-passing layers enlarges the receptive field but mixes node) Tj T* /F1 12 Tf (representations until they become indistinguishable, a phenomenon known as) Tj T* /F1 12 Tf (oversmoothing. The Weave-Depth protocol separates oversmoothing from) Tj T* /F1 12 Tf (optimization difficulty by holding capacity fixed; the resulting curves show) Tj T* /F1 12 Tf (that the depth-saturation cliff appears abruptly between twelve and sixteen) Tj T* /F1 12 Tf (layers on seven of nine GraphWeave tasks.) Tj T* /F1 12 Tf (Practical mitigations include residual connections, jumping knowledge style) Tj T* /F1 12 Tf (readouts, and virtual nodes. None of these remove the cliff entirely; they) Tj T* /F1 12 Tf (shift it by roughly two layers. Consequently, most successful applications) Tj T* /F1 12 Tf (surveyed here use between two and six message-passing layers.) Tj T* /F1 12 Tf (5 Open Problems) Tj T* /F1 12 Tf (Three open problems recur across the surveyed literature. First, long-range) Tj T* /F1 12 Tf (dependencies require depth that current architectures cannot sustain. Second,) Tj T* /F1 12 Tf (evaluation protocols rarely separate expressivity from optimization. Third,) Tj T* /F1 12 Tf (synthetic benchmarks like GraphWeave remain the only way to obtain controlled) Tj T* /F1 12 Tf (difficulty axes, yet they are underused.) Tj T* ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 12 0 R >>
+endobj
+12 0 obj
+<< /Length 1105 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (6 Conclusions) Tj T* /F1 12 Tf (Message-passing graph neural networks are a mature but bounded technology. The) Tj T* /F1 12 Tf (GraphWeave benchmark suite provides controlled evidence that depth saturates) Tj T* /F1 12 Tf (quickly, that aggregation choice should follow the data-generating process,) Tj T* /F1 12 Tf (and that shallow, well-tuned models remain competitive. Future work should) Tj T* /F1 12 Tf (target long-range structure without relying on deeper message passing.) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (References) Tj T* /F1 12 Tf ([1] A. Corvin and M. Okafor. The GraphWeave benchmark suite: controlled tasks) Tj T* /F1 12 Tf (for graph learning. Journal of Synthetic Graph Learning, 2026. Fictional) Tj T* /F1 12 Tf (reference.) Tj T* /F1 12 Tf ([2] D. Yilmaz. Depth saturation in message-passing networks. Synthetic) Tj T* /F1 12 Tf (Workshop on Graph Limits, 2025. Fictional reference.) Tj T* /F1 12 Tf ([3] R. Feld and S. Okonkwo. Aggregation operators revisited. Transactions on) Tj T* /F1 12 Tf (Synthetic Learning, 2024. Fictional reference.) Tj T* ET
+endstream
+endobj
+xref
+0 13
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000134 00000 n 
+0000000204 00000 n 
+0000000272 00000 n 
+0000000408 00000 n 
+0000002272 00000 n 
+0000002408 00000 n 
+0000004361 00000 n 
+0000004498 00000 n 
+0000005985 00000 n 
+0000006123 00000 n 
+trailer
+<< /Size 13 /Root 1 0 R >>
+startxref
+7281
+%%EOF

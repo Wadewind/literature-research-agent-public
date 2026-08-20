@@ -1,0 +1,69 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R 11 0 R] /Count 4 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1655 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (Model-Based Reinforcement Learning for Quadruped Locomotion: A Synthetic Study) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (Kofi Mensah, Yuki Tanabe, and Petra Novak) Tj T* /F1 12 Tf (Synthetic Embodied Control Group. All content is fictional and produced solely) Tj T* /F1 12 Tf (as a retrieval evaluation fixture.) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (Abstract) Tj T* /F1 12 Tf (Quadruped robots must adapt learned locomotion policies to hardware that) Tj T* /F1 12 Tf (differs from simulation. This synthetic study presents a model-based) Tj T* /F1 12 Tf (reinforcement learning pipeline for the TerraHound-4 platform, centred on the) Tj T* /F1 12 Tf (Zephyr-7 adaptation scheduler. Zephyr-7 reduces sim-to-real adaptation time by) Tj T* /F1 12 Tf (38% relative to a fixed-schedule baseline while retaining 96% of asymptotic) Tj T* /F1 12 Tf (reward.) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (1 Introduction) Tj T* /F1 12 Tf (Legged locomotion is a convenient testbed for model-based reinforcement) Tj T* /F1 12 Tf (learning because dynamics are continuous, contact-rich, and partially) Tj T* /F1 12 Tf (observable. Simulation provides cheap experience, but the sim-to-real gap) Tj T* /F1 12 Tf (means that adaptation after deployment dominates total training cost.) Tj T* /F1 12 Tf (This study is organized as follows. Section 2 describes the TerraHound-4) Tj T* /F1 12 Tf (platform and policy architecture. Section 3 covers world-model training.) Tj T* /F1 12 Tf (Section 4 introduces the Zephyr-7 scheduler, Section 5 reports locomotion) Tj T* /F1 12 Tf (results, and Sections 6 and 7 discuss failure modes and conclusions.) Tj T* ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 1466 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (2 The TerraHound-4 Platform and Policy Architecture) Tj T* /F1 12 Tf (TerraHound-4 is a synthetic twelve-actuator quadruped with a nominal mass of) Tj T* /F1 12 Tf (18 kg and a top speed of 3.2 m/s. Its simulator exposes randomized friction,) Tj T* /F1 12 Tf (actuator lag, and payload parameters; the physical platform is assumed to) Tj T* /F1 12 Tf (differ from the simulator along exactly these axes, which makes the sim-to-) Tj T* /F1 12 Tf (real gap controllable in our protocol.) Tj T* /F1 12 Tf (The policy is a six-layer Transformer encoder with learned absolute positional) Tj T* /F1 12 Tf (embeddings over 256-step proprioceptive windows, followed by a linear action) Tj T* /F1 12 Tf (head. We deliberately use learned positional embeddings rather than rotary) Tj T* /F1 12 Tf (variants because the window length is fixed at deployment, so long-context) Tj T* /F1 12 Tf (extrapolation is unnecessary and the learned table is the simpler option.) Tj T* /F1 12 Tf (3 World-Model Training) Tj T* /F1 12 Tf (The world model predicts next-window proprioception and foot contacts from) Tj T* /F1 12 Tf (action-conditioned history. It is trained on 40 million simulated steps with) Tj T* /F1 12 Tf (randomized dynamics, then frozen. Planning uses short-horizon shooting with) Tj T* /F1 12 Tf (the learned model rather than learned value expansion, which we found more) Tj T* /F1 12 Tf (stable under contact discontinuities.) Tj T* ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 1531 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (4 The Zephyr-7 Adaptation Scheduler) Tj T* /F1 12 Tf (Adaptation after deployment alternates between collecting real rollouts and) Tj T* /F1 12 Tf (fine-tuning the world model and policy. The Zephyr-7 scheduler allocates these) Tj T* /F1 12 Tf (phases adaptively: it triggers a new collection phase only when model) Tj T* /F1 12 Tf (disagreement on the current replay buffer exceeds a calibrated threshold, and) Tj T* /F1 12 Tf (it lengthens fine-tuning phases geometrically as disagreement decays. Compared) Tj T* /F1 12 Tf (with a fixed alternating schedule, Zephyr-7 reduces sim-to-real adaptation) Tj T* /F1 12 Tf (time by 38% on TerraHound-4, from a median of 14.2 hours to 8.8 hours of) Tj T* /F1 12 Tf (onboard compute.) Tj T* /F1 12 Tf (The scheduler adds two hyperparameters, the disagreement threshold and the) Tj T* /F1 12 Tf (growth factor, and no additional models. Ablation with a disagreement-) Tj T* /F1 12 Tf (triggered but constant fine-tuning length recovers only half of the saving,) Tj T* /F1 12 Tf (indicating that phase lengthening contributes as much as triggering.) Tj T* /F1 12 Tf (5 Locomotion Results) Tj T* /F1 12 Tf (After adaptation, policies retain 96% of their asymptotic simulated reward on) Tj T* /F1 12 Tf (flat terrain, 91% on randomized gravel, and 84% on wet low-friction surfaces.) Tj T* /F1 12 Tf (Emergency-stop latency after payload shifts of 3 kg remains within 120 ms for) Tj T* /F1 12 Tf (all Zephyr-7 runs, matching the fixed-schedule baseline.) Tj T* ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 12 0 R >>
+endobj
+12 0 obj
+<< /Length 1618 >>
+stream
+BT 72 720 Td 14 TL /F1 12 Tf (6 Failure Modes) Tj T* /F1 12 Tf (Three failure modes dominate. First, disagreement calibration drifts when) Tj T* /F1 12 Tf (actuator lag exceeds the randomized range, causing under-collection. Second,) Tj T* /F1 12 Tf (the geometric phase lengthening occasionally locks in a suboptimal schedule) Tj T* /F1 12 Tf (after early lucky rollouts. Third, the learned positional table prevents) Tj T* /F1 12 Tf (window-length changes after deployment, so any control-frequency change) Tj T* /F1 12 Tf (requires retraining the policy head.) Tj T* /F1 12 Tf (7 Conclusions) Tj T* /F1 12 Tf (Adaptive scheduling of real-world adaptation is the largest single lever in) Tj T* /F1 12 Tf (our sim-to-real budget. The Zephyr-7 scheduler cuts adaptation time by 38% on) Tj T* /F1 12 Tf (TerraHound-4 without extra models, while a fixed-window Transformer policy) Tj T* /F1 12 Tf (with learned positional embeddings suffices when deployment context length is) Tj T* /F1 12 Tf (constant. Future work targets online recalibration of disagreement thresholds.) Tj T* /F1 12 Tf () Tj T* /F1 12 Tf (References) Tj T* /F1 12 Tf ([1] K. Mensah and P. Novak. Adaptive schedules for sim-to-real adaptation.) Tj T* /F1 12 Tf (Journal of Synthetic Embodied Control, 2026. Fictional reference.) Tj T* /F1 12 Tf ([2] Y. Tanabe. Disagreement-triggered data collection. Synthetic Workshop on) Tj T* /F1 12 Tf (Robot Learning, 2025. Fictional reference.) Tj T* /F1 12 Tf ([3] R. Alvarez. World models for contact-rich locomotion. Transactions on) Tj T* /F1 12 Tf (Synthetic Learning, 2024. Fictional reference.) Tj T* ET
+endstream
+endobj
+xref
+0 13
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000134 00000 n 
+0000000204 00000 n 
+0000000272 00000 n 
+0000000408 00000 n 
+0000002115 00000 n 
+0000002251 00000 n 
+0000003769 00000 n 
+0000003906 00000 n 
+0000005490 00000 n 
+0000005628 00000 n 
+trailer
+<< /Size 13 /Root 1 0 R >>
+startxref
+7299
+%%EOF

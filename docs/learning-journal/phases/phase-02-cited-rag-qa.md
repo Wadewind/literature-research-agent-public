@@ -258,7 +258,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 每个切片遵循「确认契约与不变量 → 失败测试 → 最小实现 → 重构 → 验证 → 更新进度」。
 
 1. **资源管理边界**（已完成 2026-08-20，契约见下文「切片 1」）：Project 改名/归档/恢复、Paper 归档/恢复、active 过滤、归档对新 Run/收录的限制；归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时返回 409；
-2. **阶段契约与评测 Fixture**：定最小错误码（`project_not_indexed`、`conversation_busy`、`invalid_scope` 等）；评测语料使用合成 PDF，由子智能体在本切片构建，保证期望 Evidence 的页码/章节完全确定；
+2. **阶段契约与评测 Fixture**（已完成 2026-08-20，契约见下文「切片 2」）：定最小错误码（`project_not_indexed`、`conversation_busy`、`invalid_scope` 等）；评测语料使用合成 PDF，由子智能体在本切片构建，保证期望 Evidence 的页码/章节完全确定；
 3. **Model Gateway**：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
 4. **ChunkSet + Worker 分发**：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
 5. **Indexing Run**：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
@@ -316,6 +316,34 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 - Application：授权 404、归档幂等、非终态 Run 409、收录/移除/上传的归档 409、复用已归档 Paper 提示且不恢复；
 - API：全部端点契约与稳定业务码（`project_archived`/`project_has_active_runs`/`paper_archived`）；
 - PostgreSQL：`list_by_owner` 归档过滤、`update` 持久化、`has_active_runs` 状态集合；迁移 upgrade/downgrade 在一次性容器中实跑通过。
+
+### 切片 2：阶段契约与评测 Fixture（契约定稿）
+
+已于 2026-08-20 定稿。本切片不修改生产代码，只确定后续切片必须遵守的最小错误码，并交付确定性评测资产。
+
+#### 最小错误码
+
+- **404**：`conversation_not_found`、`evidence_not_found`（沿用「越权/不存在统一 404」原则）；
+- **409**：`conversation_busy`（一个 Conversation 已有未完成回答 Run）、`project_not_indexed`（提问时范围内没有任何 ready ChunkSet，快速失败；部分就绪不阻塞，检索只覆盖 ready 范围）、`project_archived` / `paper_archived` / `project_has_active_runs`（切片 1 已有）；
+- **422**：`invalid_scope`（scope_mode 非法、selected_papers 为空或含未收录/已归档/其他 owner 的 Paper）；
+- 模型/基础设施失败不暴露为 API 错误码，走 Run FAILED + 错误分类（沿用 Phase 1）。
+
+#### 评测资产
+
+位于 `backend/tests/evaluation/`：
+
+- `corpus/`：4 篇完全合成的英文学术风格 PDF（`gnn-survey`、`positional-encoding`、`gnn-molecular`、`rl-robotics`，各 4 页，含标题/摘要/编号章节/段落，`positional-encoding` 与 `gnn-molecular` 含 Courier 排版表格），由 `generate.py` 确定性生成（复用 Phase 1 手写最小 PDF 机制，不引入新依赖），PDF 提交进仓库；每篇植入独有的事实性陈述（虚构术语与数值），答案来源在语料中唯一确定；
+- `manifest.json`：固定问题集 14 题，`corpus` 段把稳定语料 ID 映射到 PDF 文件、页数和植入事实（关键词 + 页码 + 章节），`questions` 段字段为 `id` / `category` / `question` / `scope`（`project` 或 `selected_papers`）/ `expected`（`answer_status` + `must_cite[{paper, pages, sections}]`）/ `notes`；
+- `README.md`：语料设计、问题分类与评测运行方式说明；
+- 一致性校验 `tests/infrastructure/test_evaluation_fixtures.py`：只用 pypdf，断言页数与植入关键词/章节出现在 manifest 声明页码，不调用 Docling 与模型。
+
+四类问题覆盖：单篇事实型（期望引用特定 paper + 页码/章节）5 题、跨篇综合型（must_cite 恰好两篇，`gnn-survey` 与 `gnn-molecular` 主题相近）3 题、明确无答案型（期望 `insufficient_evidence`）3 题、范围边界型（selected_papers 排除答案所在 paper，期望 `insufficient_evidence`）3 题。
+
+评测指标（切片 10 实跑，只报告实跑结果，不使用虚构质量指标）：Retrieval Recall@K（期望 paper/页面的 Chunk 是否进入 Top-K）、Citation validity（是否通过确定性 Validator）、Citation completeness（must_cite 覆盖率）、少量人工 Groundedness；无答案/范围边界题以 `answer_status == insufficient_evidence` 为通过。
+
+#### 语料语言决定
+
+评测语料为英文合成 PDF（2026-08-20 定稿）：检索语料是英文论文，FTS 使用 PostgreSQL `english` 配置，评测必须同语言，避免跨语言分词干扰使评测结论失真。
 
 ## 测试方式
 

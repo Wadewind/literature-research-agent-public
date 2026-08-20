@@ -1,0 +1,259 @@
+{
+  "version": 1,
+  "created": "2026-08-20",
+  "language": "en",
+  "description": "Phase 2 RAG 评测固定问题集。语料为 tests/evaluation/corpus/ 下 4 篇完全合成的英文学术风格 PDF（由 generate.py 确定性生成），FTS 使用 english 配置，故语料与问题均为英文。每篇植入独有的事实性陈述（术语、数值、结论），使答案来源在语料中唯一确定。paper 字段使用稳定语料 ID，评测运行时由 harness 映射到实际 paper_id/version_id。",
+  "corpus": {
+    "gnn-survey": {
+      "file": "corpus/gnn-survey.pdf",
+      "title": "GraphWeave: A Synthetic Survey of Message-Passing Graph Neural Networks",
+      "page_count": 4,
+      "planted_facts": [
+        {
+          "keyword": "GraphWeave benchmark suite",
+          "page": 2,
+          "section": "2 The GraphWeave Benchmark",
+          "fact": "The GraphWeave benchmark suite contains nine synthetic tasks."
+        },
+        {
+          "keyword": "61.3%",
+          "page": 2,
+          "section": "2 The GraphWeave Benchmark",
+          "fact": "Under the Weave-Depth protocol, accuracy retention falls to 61.3% beyond twelve layers."
+        },
+        {
+          "keyword": "depth-saturation cliff",
+          "page": 3,
+          "section": "4 Depth, Oversmoothing, and Saturation",
+          "fact": "The depth-saturation cliff appears abruptly between twelve and sixteen layers on seven of nine GraphWeave tasks."
+        }
+      ]
+    },
+    "positional-encoding": {
+      "file": "corpus/positional-encoding.pdf",
+      "title": "Rotary and Learned Positional Encodings for Long-Context Transformers: A Synthetic Study",
+      "page_count": 4,
+      "planted_facts": [
+        {
+          "keyword": "Helix-64 rotary schedule",
+          "page": 2,
+          "section": "3 The Helix-64 Schedule",
+          "fact": "Helix-64 extends stable extrapolation to 131072 tokens, four times the training length of 32768 tokens."
+        },
+        {
+          "keyword": "perplexity drift below 2.1%",
+          "page": 2,
+          "section": "3 The Helix-64 Schedule",
+          "fact": "Helix-64 keeps perplexity drift below 2.1% at the extrapolation frontier."
+        },
+        {
+          "keyword": "Helix-64 (this work)",
+          "page": 3,
+          "section": "5 Results",
+          "fact": "Table 1: Helix-64 drift is 2.1% at 4x and 4.8% at 8x training length."
+        }
+      ]
+    },
+    "gnn-molecular": {
+      "file": "corpus/gnn-molecular.pdf",
+      "title": "Message-Passing Graph Neural Networks for Molecular Solubility Prediction: A Synthetic Study",
+      "page_count": 4,
+      "planted_facts": [
+        {
+          "keyword": "14237 curated molecules",
+          "page": 2,
+          "section": "2 The AquaSol-9 Dataset and the MolAnchor Fingerprint",
+          "fact": "The AquaSol-9 dataset contains 14237 curated molecules with synthetic solubility annotations."
+        },
+        {
+          "keyword": "MolAnchor fingerprint",
+          "page": 2,
+          "section": "2 The AquaSol-9 Dataset and the MolAnchor Fingerprint",
+          "fact": "The MolAnchor fingerprint augments each atom with a learned anchor embedding trained jointly with the downstream network."
+        },
+        {
+          "keyword": "0.214 logS units",
+          "page": 3,
+          "section": "4 Results",
+          "fact": "The MolAnchor-GNN achieves a mean absolute error of 0.214 logS units, a 14.1% relative improvement over the strongest baseline (Table 1)."
+        }
+      ]
+    },
+    "rl-robotics": {
+      "file": "corpus/rl-robotics.pdf",
+      "title": "Model-Based Reinforcement Learning for Quadruped Locomotion: A Synthetic Study",
+      "page_count": 4,
+      "planted_facts": [
+        {
+          "keyword": "learned absolute positional",
+          "page": 2,
+          "section": "2 The TerraHound-4 Platform and Policy Architecture",
+          "fact": "The TerraHound-4 policy is a six-layer Transformer encoder with learned absolute positional embeddings over 256-step proprioceptive windows."
+        },
+        {
+          "keyword": "time by 38%",
+          "page": 3,
+          "section": "4 The Zephyr-7 Adaptation Scheduler",
+          "fact": "Zephyr-7 reduces sim-to-real adaptation time by 38% on TerraHound-4, from a median of 14.2 hours to 8.8 hours of onboard compute."
+        }
+      ]
+    }
+  },
+  "questions": [
+    {
+      "id": "q01-graphweave-task-count",
+      "category": "single_paper_fact",
+      "question": "What is the GraphWeave benchmark suite, and how many tasks does it contain?",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "gnn-survey", "pages": [2], "sections": ["2 The GraphWeave Benchmark"]}
+        ]
+      },
+      "notes": "答案：GraphWeave 是含 nine synthetic tasks 的受控基准套件，仅在 gnn-survey 第 2 页定义。"
+    },
+    {
+      "id": "q02-weave-depth-retention",
+      "category": "single_paper_fact",
+      "question": "According to the Weave-Depth protocol, what accuracy retention remains beyond twelve layers of message passing?",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "gnn-survey", "pages": [2], "sections": ["2 The GraphWeave Benchmark"]}
+        ]
+      },
+      "notes": "答案：61.3%。数值仅在 gnn-survey 第 2 页出现。"
+    },
+    {
+      "id": "q03-helix64-extrapolation",
+      "category": "single_paper_fact",
+      "question": "To how many tokens does the Helix-64 rotary schedule extend stable extrapolation, and what perplexity drift is reported at the extrapolation frontier?",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "positional-encoding", "pages": [2], "sections": ["3 The Helix-64 Schedule"]}
+        ]
+      },
+      "notes": "答案：131072 tokens（4 倍于 32768 训练长度），drift 低于 2.1%。定义在 positional-encoding 第 2 页。"
+    },
+    {
+      "id": "q04-molanchor-mae",
+      "category": "single_paper_fact",
+      "question": "What mean absolute error does the MolAnchor-GNN achieve on the AquaSol-9 benchmark, and what is the relative improvement over the strongest baseline?",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "gnn-molecular", "pages": [3], "sections": ["4 Results"]}
+        ]
+      },
+      "notes": "答案：0.214 logS units，相对最强 baseline 提升 14.1%（Table 1）。检验表格内容是否进入检索与引用。"
+    },
+    {
+      "id": "q05-zephyr7-adaptation",
+      "category": "single_paper_fact",
+      "question": "By how much does the Zephyr-7 scheduler reduce sim-to-real adaptation time on TerraHound-4, and what are the before and after median times?",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "rl-robotics", "pages": [3], "sections": ["4 The Zephyr-7 Adaptation Scheduler"]}
+        ]
+      },
+      "notes": "答案：减少 38%，从 14.2 小时降至 8.8 小时。数值仅在 rl-robotics 第 3 页出现。"
+    },
+    {
+      "id": "q06-depth-saturation-applied",
+      "category": "cross_paper_synthesis",
+      "question": "The graph-learning survey reports that message-passing depth saturates quickly. How does the molecular solubility study apply this finding in its architecture, and with what outcome?",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "gnn-survey", "pages": [2, 3], "sections": ["2 The GraphWeave Benchmark", "4 Depth, Oversmoothing, and Saturation"]},
+          {"paper": "gnn-molecular", "pages": [2, 3], "sections": ["3 Model Architecture", "4 Results"]}
+        ]
+      },
+      "notes": "期望综合：综述的深度饱和结论（61.3% / depth-saturation cliff）+ gnn-molecular 因此选择 4 层浅层架构并取得 0.214 MAE。两篇主题相近，支撑跨篇综合。"
+    },
+    {
+      "id": "q07-aggregation-compare",
+      "category": "cross_paper_synthesis",
+      "question": "Compare the role of aggregation operators in the GraphWeave survey and in the MolAnchor-GNN architecture for solubility prediction.",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "gnn-survey", "pages": [2], "sections": ["3 The Message-Passing Design Space"]},
+          {"paper": "gnn-molecular", "pages": [2], "sections": ["3 Model Architecture"]}
+        ]
+      },
+      "notes": "期望综合：综述中 sum aggregation 是最稳健默认选择；MolAnchor-GNN 采用 sum aggregation + jumping-knowledge readout。"
+    },
+    {
+      "id": "q08-positional-encoding-choice",
+      "category": "cross_paper_synthesis",
+      "question": "Which positional encoding does the long-context study recommend when extrapolation beyond the training window is needed, and why does the TerraHound-4 policy encoder not need it?",
+      "scope": {"mode": "project"},
+      "expected": {
+        "answer_status": "answered",
+        "must_cite": [
+          {"paper": "positional-encoding", "pages": [2], "sections": ["3 The Helix-64 Schedule"]},
+          {"paper": "rl-robotics", "pages": [2], "sections": ["2 The TerraHound-4 Platform and Policy Architecture"]}
+        ]
+      },
+      "notes": "期望综合：Helix-64 支持 131072 tokens 稳定外推；TerraHound-4 部署窗口固定为 256 步，无需外推，故用 learned absolute embeddings。"
+    },
+    {
+      "id": "q09-pdbbind-binding-affinity",
+      "category": "unanswerable",
+      "question": "What binding affinity does the MolAnchor fingerprint achieve on the PDBBind protein-ligand benchmark?",
+      "scope": {"mode": "project"},
+      "expected": {"answer_status": "insufficient_evidence"},
+      "notes": "PDBBind 与 binding affinity 在语料中完全不存在；检索会命中 gnn-molecular 但没有答案，期望明确 insufficient_evidence 而非编造数值。"
+    },
+    {
+      "id": "q10-zephyr7-bipedal",
+      "category": "unanswerable",
+      "question": "How well does the Zephyr-7 scheduler perform on bipedal humanoid robots?",
+      "scope": {"mode": "project"},
+      "expected": {"answer_status": "insufficient_evidence"},
+      "notes": "语料只覆盖四足 TerraHound-4；检索会命中 rl-robotics，但双足人形机器人的表现不在语料中，期望 insufficient_evidence。"
+    },
+    {
+      "id": "q11-quantum-error-correction",
+      "category": "unanswerable",
+      "question": "What error rates do topological quantum error-correcting codes achieve in the surveyed studies?",
+      "scope": {"mode": "project"},
+      "expected": {"answer_status": "insufficient_evidence"},
+      "notes": "与语料主题完全无关（量子纠错），检验检索无相关结果时的无证据路径。"
+    },
+    {
+      "id": "q12-graphweave-out-of-scope",
+      "category": "scope_boundary",
+      "question": "How many tasks does the GraphWeave benchmark suite contain?",
+      "scope": {"mode": "selected_papers", "papers": ["positional-encoding", "gnn-molecular", "rl-robotics"]},
+      "expected": {"answer_status": "insufficient_evidence"},
+      "notes": "答案只在 gnn-survey（第 2 页），但 scope 排除了它；期望 insufficient_evidence，检验检索严格限定在 selected_papers 范围内。"
+    },
+    {
+      "id": "q13-molanchor-out-of-scope",
+      "category": "scope_boundary",
+      "question": "What mean absolute error does the MolAnchor-GNN achieve on the AquaSol-9 benchmark?",
+      "scope": {"mode": "selected_papers", "papers": ["gnn-survey"]},
+      "expected": {"answer_status": "insufficient_evidence"},
+      "notes": "与 q04 同问但 scope 只含 gnn-survey；答案在 gnn-molecular 第 3 页，范围外，期望 insufficient_evidence。"
+    },
+    {
+      "id": "q14-zephyr7-out-of-scope",
+      "category": "scope_boundary",
+      "question": "By how much does the Zephyr-7 scheduler reduce sim-to-real adaptation time?",
+      "scope": {"mode": "selected_papers", "papers": ["gnn-survey", "positional-encoding"]},
+      "expected": {"answer_status": "insufficient_evidence"},
+      "notes": "与 q05 同问但 scope 不含 rl-robotics；答案在 rl-robotics 第 3 页，范围外，期望 insufficient_evidence。"
+    }
+  ]
+}
