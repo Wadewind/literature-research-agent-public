@@ -2,11 +2,17 @@
 
 export const TERMINAL_STATUSES = ["succeeded", "failed", "cancelled"] as const;
 
-/** 终态事件类型：收到后前端应主动关闭 SSE 流。 */
+/** 终态事件类型：收到后前端应主动关闭 SSE 流。
+
+ * 注意：Ingestion Run 的成功终态事件是 ``result_committed``
+ * （与 Run → SUCCEEDED 同事务提交，见切片 6 契约）；
+ * ``run_completed`` 只出现在通用 RunService.complete_run 路径。
+ */
 export const TERMINAL_EVENT_TYPES = [
   "run_completed",
   "run_failed",
   "run_cancelled",
+  "result_committed",
 ] as const;
 
 /** 可请求取消的状态：终态与已在取消流程中的状态不可重复取消。 */

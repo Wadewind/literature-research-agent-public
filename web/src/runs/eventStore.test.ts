@@ -60,11 +60,20 @@ describe("applyEvent", () => {
     expect(state.closed).toBe(true);
   });
 
-  it.each(["run_completed", "run_failed", "run_cancelled"])(
+  it.each(["run_completed", "run_failed", "run_cancelled", "result_committed"])(
     "终态事件类型 %s 触发收束",
     (eventType) => {
       const state = applyEvent(createEventStreamState(), makeEvent(1, eventType));
       expect(state.closed).toBe(true);
     },
   );
+
+  it("result_committed 是 Ingestion 成功终态（与后端切片 6 契约一致）", () => {
+    let state = createEventStreamState();
+    state = applyEvent(state, makeEvent(1, "run_created"));
+    state = applyEvent(state, makeEvent(6, "result_committed"));
+
+    expect(state.closed).toBe(true);
+    expect(state.lastSequence).toBe(6);
+  });
 });
