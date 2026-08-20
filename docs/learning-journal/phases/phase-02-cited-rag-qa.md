@@ -2,7 +2,7 @@
 
 ## 状态
 
-待开始。本文为阶段实施 Spec，建立在 Phase 1 完成 Project、文献库、可靠导入和结构化 Element 层之后。
+进行中。实施前方案已于 2026-08-20 与用户逐项讨论确认，结论见文末「已确定事项」。本文为阶段实施 Spec，建立在 Phase 1 完成 Project、文献库、可靠导入和结构化 Element 层之后。
 
 ## 目标和用户可见结果
 
@@ -23,7 +23,7 @@ Phase 2 交付可复用的 Model Gateway、Retrieval、Evidence 和 Citation 能
 
 ## 前置条件
 
-Phase 1 正式验收前先完成以下收口：
+以下收口均已在 Phase 1 完成（2026-08-20 核实）：
 
 - 同一 `owner_id` 范围内按 PDF SHA-256 去重，不跨用户复用私有文件；
 - Paper 不直接属于 Project，通过 `ProjectPaper` 建立收录关系；
@@ -57,7 +57,7 @@ Phase 1 正式验收前先完成以下收口：
 
 ## 核心边界
 
-- `DocumentContentReader`：按授权上下文读取指定 ParseRevision 的 Element 和来源定位；
+- `DocumentQueryService`（Phase 1 已落地的授权读路径，即早期文档所称的 `DocumentContentReader`，2026-08-20 确认承认现状、不新建独立 Port）：按授权上下文读取指定 ParseRevision 的 Element 和来源定位；Worker 内索引构建已知 `revision_id`，直接走 `ElementRepository` 读取，不重复授权链；
 - `ChunkBuilder`：把 Element 组合成适合检索的 Chunk；
 - `EmbeddingModel`：批量生成向量并返回 Usage；
 - `ChatModel`：生成结构化 Answer/Claim/Evidence ID；
@@ -67,7 +67,7 @@ Phase 1 正式验收前先完成以下收口：
 - `RagAnswerService`：编排 Message、Retrieval、模型调用和最终提交。
 - Conversation 必须绑定 `project_id`，默认 scope 为整个 Project 或 Project 内选中的 Paper；每个回答 Run 在启动时固化实际 `selected_version_ids`，保证历史可重放。
 
-Phase 2 不引入 LangGraph。ARQ Job 仍只携带 `run_id`，Worker 根据 `run_type` 调用 `ingestion`、`indexing` 或 `rag_answer` Executor。
+Phase 2 不引入 LangGraph。ARQ Job 仍只携带 `run_id`；Phase 1 的 Worker 尚无 run_type 分发机制，本阶段在 Worker 装配处新增按 `run_type` 显式分发的组合 Executor，并在领域层引入 `RunType` 枚举（当前 `run_type` 是无约束字符串），未知类型显式失败，不被静默执行。分发后调用 `ingestion`、`indexing` 或 `rag_answer` Executor。
 
 ## 数据关系
 
@@ -82,7 +82,8 @@ DocumentParseRevision
       └─ embedding
 
 Project
-└─ Conversation
+└─ Conversation(scope_mode: project | selected_papers)
+   ├─ ConversationScopePaper(paper_id, version_id)   # selected_papers 模式下的默认范围
    ├─ User Message
    └─ Assistant Message
       └─ ClaimSet
@@ -94,8 +95,9 @@ Project
 - `chunk_sets`：`parse_revision_id`、chunk/embedding profile、状态、错误和完成时间；
 - `chunks`：顺序、检索文本、token 数、章节、页码范围、内容哈希、`tsvector` 和向量；
 - `chunk_element_links`：Chunk 到 Element 的稳定映射和顺序；
-- `conversations`：Project、owner、标题、默认 `scope_mode` 和时间；
-- `rag_answer` Run 输入保存本次解析后的 Version 范围快照；Conversation 的默认范围不能替代 Run 快照；
+- `conversations`：Project、owner、标题、`scope_mode` 和时间。`scope_mode` 只有两个值：`project` / `selected_papers`；单篇 Paper 问答就是 `selected_papers` 恰好一条，不单设 mode；Conversation 创建后 scope 不可修改，换范围即新建 Conversation（2026-08-20 定稿）；
+- `conversation_scope_papers`：`selected_papers` 模式下保存创建时解析出的 `{paper_id, version_id}` 默认范围；
+- `rag_answer` Run 输入保存本次解析后的版本范围快照 `[{paper_id, version_id}, ...]`（`project` 模式也在提交问题那一刻解析固化）；Conversation 的默认范围只影响新问题，不能替代 Run 快照；
 - `messages`：Conversation 内严格递增顺序、角色、内容、状态和关联 Run；
 - `claim_sets` / `claims`：回答的结构化 Claim；
 - `evidence`：Project、Paper、PaperVersion、ParseRevision、Chunk、页码、章节和摘录；
@@ -115,13 +117,14 @@ Project
 - Chunk 由一个或多个相邻 Element 组成，不修改原始 Element；
 - 章节标题作为上下文前缀，表格和题注尽量保持完整；
 - 每个 Chunk 保存 Element ID 列表和可回溯页码；
-- Chunk/Profile 变化产生新 ChunkSet，旧索引保留直到无引用后再清理；
+- Chunk/Profile 变化产生新 ChunkSet，旧索引保留直到无引用后再清理（清理属 Phase 4 GC 范畴）；
 - Phase 2 只配置一个活动 Chunk/Embedding Profile；
 - 首版使用 pgvector 精确检索，不创建 HNSW；
-- 新 ParseRevision 成功后创建独立 `indexing` Run；已有相同 ready ChunkSet 时直接复用；
-- Project 收录已有 Paper 时不重复切分或 Embedding。
+- token 计数使用 `tiktoken`（离线计算，2026-08-20 确认引入），tokenizer 名称参与 chunk profile hash；
+- 新 ParseRevision 成功后创建独立 `indexing` Run：由 IngestionExecutor 的**结果提交事务**内同时创建 indexing Run + Outbox（沿用「状态 + Event + Outbox 原子」模式），保证解析成功必然跟随索引，不引入独立扫描循环（2026-08-20 定稿）；已有相同 ready ChunkSet 时 indexing Run 直接走复用路径；
+- ChunkSet 属于 ParseRevision 而非 Project，同一论文跨 Project 复用索引；Project 收录已有 Paper 时不重复切分或 Embedding。
 
-具体 Chunk 长度、Overlap、Embedding 模型和向量维度在第一个检索切片的小实验中确定，并记录到本 Spec，不提前固定。
+具体 Chunk 长度、Overlap、Embedding 模型和向量维度在对应切片的小实验中确定，并记录到本 Spec，不提前固定。
 
 ## Hybrid Retrieval
 
@@ -139,7 +142,9 @@ Project
  Evidence Candidates
 ```
 
-首版不做 LLM Query Expansion。Retriever 必须先限制 `owner_id`、`project_id`、`ProjectPaper`、`selected_version_id` 和 ready ChunkSet，再进行排序，不能在检索后仅靠应用层删除越权结果。
+首版不做 LLM Query Expansion、不做独立 reranker。FTS 使用 PostgreSQL `tsvector`，语言配置 `english`（语料为英文学术论文；中文支持不在本阶段范围，2026-08-20 定稿）；向量使用 pgvector cosine 距离精确检索；合并使用 RRF（`k=60`）。各路 Top-K（起始候选 20）、每篇论文结果上限和总 Token Budget 在检索切片的小实验中确定并记录于此。
+
+Retriever 必须先限制 `owner_id`、`project_id`、`ProjectPaper`、`selected_version_id` 和 ready ChunkSet，再进行排序，不能在检索后仅靠应用层删除越权结果。
 
 RetrievalResult 至少返回 Chunk、Paper/Version、章节/页码、各路分数和最终排序。分数和文本不进入普通日志；Event 只记录候选数量、使用的 profile 和耗时摘要。
 
@@ -169,6 +174,8 @@ claims:
     evidence_ids[]
 ```
 
+Claim 是**段落级**的：每条 Claim 对应回答中的一个段落级论述。首版采用严格策略——`answered` 状态下**每个 Claim 必须至少绑定一个 Evidence**，不引入「重要 Claim」的主观判定；零引用 Claim 直接判非法，触发一次结构修复重试，仍失败则 Run 稳定 FAILED（2026-08-20 定稿）。
+
 无可用证据属于成功的 `insufficient_evidence` 业务结果，不是系统失败。
 
 ## Citation Validator
@@ -176,10 +183,10 @@ claims:
 运行时确定性校验：
 
 - Evidence 存在且属于当前 owner/Project；
-- Evidence 的 Paper 当前或历史上属于该 Project 的本次可见快照；
+- Evidence 的 Paper 属于该 Run 固化的版本范围快照（历史回答不受后续移出、换版或归档影响）；
 - PaperVersion、ParseRevision、Chunk 和来源定位链完整；
 - 模型只能使用本次 Run 提供的 Evidence ID；
-- 重要 Claim 至少绑定一个 Evidence；
+- `answered` 状态下每个段落级 Claim 至少绑定一个 Evidence（严格策略，无例外）；
 - 重复、缺失或伪造 Evidence ID 被拒绝；
 - 未验证的模型生成 DOI、作者和年份不写入正式书目字段。
 
@@ -227,7 +234,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 ## 失败、重试和取消
 
-- Provider 429、5xx 和网络超时属于临时错误，由 Provider 层进行少量短重试，耗尽后交给 Run 重试；
+- Provider 429、5xx 和网络超时属于临时错误，由 Provider Adapter 层进行最多 2 次短重试，耗尽后交给 Run 层按预算 RETRY_WAIT（同一错误只有一层主导重试之外的有限补充，2026-08-20 定稿）；
 - 非法模型结构输出最多修复一次，仍失败则稳定 FAILED；
 - Context 超限时按预算缩减一次，不循环压缩；
 - 没有 ready ChunkSet 返回稳定 `project_not_indexed` 或部分未就绪提示；
@@ -248,16 +255,18 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 ## 实现切片顺序
 
-1. **资源管理边界**：Project 修改/归档/恢复、Paper 归档/恢复，以及 archived/active 对新 Run 和列表的过滤；
-2. **阶段契约与评测 Fixture**：确定最小模型、错误码和固定问题集；
-3. **Model Gateway**：Embedding/Chat Port、Fake Provider、错误分类和 Usage；
-4. **ChunkSet**：结构感知 Chunk、Element 映射、迁移和确定性测试；
-5. **Indexing Run**：pgvector、批量 Embedding、复用、重试和取消；
-6. **Hybrid Retrieval**：FTS、向量检索、RRF、Project 隔离和上下文预算；
-7. **Evidence/Citation**：Evidence、Claim、Citation 和 Validator；
-8. **RAG Conversation**：Conversation、Message、后台回答 Run 和最终提交；
-9. **API 与最小 Web UI**：Chat、Run 进度、引用详情和 PDF 跳转；
-10. **验收复盘**：评测、Provider Smoke、故障测试和学习笔记。
+每个切片遵循「确认契约与不变量 → 失败测试 → 最小实现 → 重构 → 验证 → 更新进度」。
+
+1. **资源管理边界**：Project 改名/归档/恢复、Paper 归档/恢复、active 过滤、归档对新 Run/收录的限制；归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时返回 409；
+2. **阶段契约与评测 Fixture**：定最小错误码（`project_not_indexed`、`conversation_busy`、`invalid_scope` 等）；评测语料使用合成 PDF，由子智能体在本切片构建，保证期望 Evidence 的页码/章节完全确定；
+3. **Model Gateway**：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
+4. **ChunkSet + Worker 分发**：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
+5. **Indexing Run**：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
+6. **Hybrid Retrieval**：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
+7. **Evidence/Citation**：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
+8. **RAG Conversation**：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
+9. **API 与最小 Web UI**：Chat 三入口、Run 进度（前端 `KNOWN_EVENT_TYPES` 扩充）、引用详情和 PDF 页码跳转；
+10. **验收复盘**：评测实跑报告（Fake Provider 验证管线 + 真实 Provider 显式启用）、故障测试和学习笔记。
 
 ## 测试方式
 
@@ -286,13 +295,28 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 ## 实现前需要确定
 
-以下参数在对应切片的小实验中确定，不阻塞当前阶段边界：
+以下事项已于 2026-08-20 定稿：Provider 方案（OpenAI-compatible Adapter + Fake）、pgvector 镜像替换（本地库可重建）、`tiktoken` 引入、scope 模型（两值、不可改）、段落级 Claim 严格绑定、indexing Run 创建时机、Worker run_type 分发、评测语料用合成 PDF。详见「已确定事项」。
 
-1. Chunk 长度、Overlap 和表格处理规则；
-2. 首个 Embedding/Chat Model 及向量维度；
-3. semantic/FTS Top-K、RRF 参数和每篇论文上限；
-4. Context Token Budget 和结构化输出 Schema 细节；
-5. 小型评测集使用的公开或合成论文。
+以下参数仍在对应切片的小实验中确定，不阻塞当前阶段边界：
+
+1. Chunk 长度、Overlap 和表格处理规则（切片 4）；
+2. 首个 Embedding/Chat Model 及向量维度（切片 3/5）；
+3. semantic/FTS Top-K、RRF 之外的每篇论文上限和总 Token Budget（切片 6）；
+4. Context Token Budget 和结构化输出 Schema 细节（切片 7/8）；
+5. 小型评测集的具体合成论文与问题清单（切片 2，子智能体构建）。
+
+## 已确定事项
+
+- 2026-08-20：承认 `DocumentContentReader` 未作为独立 Port 落地，现状为应用服务 `DocumentQueryService`（授权读路径）+ Worker 内直接使用 `ElementRepository`；更新本 Spec 与 Phase 1 Spec，不新建 Port；
+- 2026-08-20：Worker 新增按 `run_type` 显式分发的组合 Executor，领域层引入 `RunType` 枚举，未知类型显式失败；
+- 2026-08-20：indexing Run 由 IngestionExecutor 结果提交事务内随解析成功原子创建（Run + Outbox 同事务），不引入独立扫描循环；ChunkSet 属于 ParseRevision，跨 Project 复用；
+- 2026-08-20：Provider 方案为 `EmbeddingModel`/`ChatModel` 窄 Port + 基于 httpx2 的 OpenAI-compatible Adapter + 确定性 Fake；不引入 openai/LangChain SDK；Provider Key 只来自服务端配置；Adapter 层对 429/5xx/超时最多 2 次短重试，耗尽交 Run 层；
+- 2026-08-20：新增依赖 `pgvector`（SQLAlchemy 绑定）与 `tiktoken`，各自独立 `chore:` 提交；compose 与 Testcontainers 镜像从 `postgres:18` 换为 `pgvector/pgvector:pg18`，本地开发库允许重建，迁移负责 `CREATE EXTENSION vector`；
+- 2026-08-20：`scope_mode` 只有 `project` / `selected_papers` 两值，单篇即一条的 `selected_papers`；Conversation 创建后 scope 不可改；Run `input_payload` 固化 `[{paper_id, version_id}, ...]` 快照；
+- 2026-08-20：Citation 严格策略——Claim 为段落级，`answered` 状态下每个 Claim 必须至少绑定一个本次 Run 的 Evidence，否则修复重试一次后 FAILED；
+- 2026-08-20：归档语义——归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时归档返回 409；永久删除仍属 Phase 4；
+- 2026-08-20：FTS 语言配置 `english`；RRF `k=60`；不做 Query Expansion 和独立 reranker；
+- 2026-08-20：评测语料使用合成 PDF（切片 2 由子智能体构建），问题集覆盖单篇事实、跨篇综合、明确无答案和范围边界四类；指标只报告实跑的 Retrieval Recall@K、Citation validity/completeness 和少量人工 Groundedness。
 
 ## 预期学习笔记
 

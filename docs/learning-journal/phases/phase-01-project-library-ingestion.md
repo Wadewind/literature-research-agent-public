@@ -116,6 +116,8 @@ Chunk 是为检索、Embedding 或特定模型上下文组合一个或多个 Ele
 
 内部 `DocumentContentReader` Port 按授权上下文提供目录/章节树、Section 或 Page 的 Element 流，以及 Element 来源位置。Phase 2/3 通过此 Port 复用 Parse Revision，不能读取 Parser 原生 JSON、宿主路径或绕过所有权校验。
 
+> 2026-08-20 现状说明：该 Port 未以独立接口落地，实际实现为应用服务 `DocumentQueryService`（授权读路径）；Worker 内部已知 `revision_id` 的消费方（如 Phase 2 Chunk Builder）直接使用 `ElementRepository`，不重复授权链。Phase 2 Spec 已按此现状更新，不再新建独立 Reader Port。
+
 ## 身份、去重和隐私
 
 首版不建设完整登录，但所有 Repository 查询从一开始携带可信 `owner_id`：
