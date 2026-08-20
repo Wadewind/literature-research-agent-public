@@ -10,6 +10,8 @@ build/
 
 # Node / 前端
 node_modules/
+web/test-results/
+web/playwright-report/
 
 # Jupyter
 .ipynb_checkpoints/

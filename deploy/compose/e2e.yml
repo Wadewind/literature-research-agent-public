@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent_service_e2e
+    ports:
+      - "127.0.0.1::5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_service_e2e"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 3s
+
+  valkey:
+    image: valkey/valkey:9
+    ports:
+      - "127.0.0.1::6379"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
