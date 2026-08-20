@@ -177,8 +177,11 @@ POST   /api/v1/projects
 GET    /api/v1/projects
 GET    /api/v1/projects/{project_id}
 POST   /api/v1/projects/{project_id}/paper-files
+GET    /api/v1/library/papers
 GET    /api/v1/projects/{project_id}/papers
-GET    /api/v1/projects/{project_id}/papers/{paper_id}
+POST   /api/v1/projects/{project_id}/papers
+DELETE /api/v1/projects/{project_id}/papers/{paper_id}
+GET    /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 GET    /api/v1/projects/{project_id}/paper-versions/{version_id}/document
 GET    /api/v1/projects/{project_id}/paper-versions/{version_id}/elements
 GET    /api/v1/runs/{run_id}
@@ -187,7 +190,7 @@ GET    /api/v1/runs/{run_id}/events
 GET    /api/v1/runs/{run_id}/events/stream
 ```
 
-- 上传使用 `multipart/form-data` 和 `Idempotency-Key`，接受后返回 `202` 和稳定 `run_id`；
+- 上传使用 `multipart/form-data` 和 `Idempotency-Key`：新文件返回 `202 + run_id`，复用已有 Version 返回 `201`，当前 Project 已收录时返回 `200`；复用已解析结果时 `run_id` 可空；
 - 相同 Key/请求返回同一结果，相同 Key/不同请求返回稳定冲突错误；
 - Element 查询支持受控的 Page、Section 和分页参数；
 - SSE 以 Event Sequence 为游标，支持 `Last-Event-ID` 或等价参数；
@@ -224,7 +227,7 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 取消语义：
 
 - `QUEUED`/`RETRY_WAIT` 可以原子进入 `CANCELLED`；
-- `RUNNING` 先原子写 `CANCEL_REQUESTED` 和 Event；
+- `RUNNING` 先原子写 `CANCEL_REQUESTED` 和非终态 `run_cancel_requested` Event；真正完成取消时再写 `run_cancelled`；
 - Worker 在 Parser 前后、规范化前、渲染前和提交前检查取消；
 - 已进入的 Parser 调用可能运行至超时或返回，但取消后不能提交新的当前结果；
 - 成功提交与取消并发时由条件转换产生唯一终态。
@@ -258,12 +261,14 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 7. **真实 Parser**（已完成）：Docling、pypdf 降级、PDF Fixtures、超时和质量标记；
 8. **取消/恢复**（已完成）：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
 9. **Event/SSE**（已完成）：历史分页、Sequence 游标、通知丢失和断线重放；
-10. **最小 Web UI**：Project、Library、上传、Run Detail、取消和 Element/PDF 来源预览；
+10. **Web UI**（已完成）：个人文献库、Project 收录/移除、上传复用、Run Detail、取消和 Element/PDF 来源预览；
 11. **验收复盘**：Compose Smoke、E2E、故障注入和模块学习笔记。
 
-已完成切片的详细契约保留如下，作为实现记录和后续切片的参照。
+已完成切片的详细契约保留如下。早期切片契约是当时的历史快照；若与前文“用户级文献库与 Project 收录”冲突，以当前模型和切片 10 收尾契约为准。
 
-### 切片 4：上传与版本
+### 切片 4：上传与版本（历史契约，已被 owner 文献库方案扩展）
+
+> 本节记录切片 4 当时的单 Project 模型。当前实现不再使用 `Paper.project_id`，上传也不保证创建新 Run；现行行为以前文 owner 文献库、`ProjectPaper` 和动态 `200/201/202` 契约为准。
 
 #### 目标
 
@@ -440,9 +445,9 @@ Worker 用真实 PDF 解析替换 Fake Parser：Docling 标准 Pipeline 产出�
 | 分类 | 触发 | 行为 |
 |---|---|---|
 | 可降级输入错误 | Docling 抛损坏/加密/结构类异常 | 尝试 pypdf；成功 → `degraded` + 能力缺失 warning；也失败 → 永久输入错误 FAILED |
-| 超时 | `parser.parse` 超过 `parser_timeout_seconds` | 不降级，FAILED（`error.type=parser_timeout`） |
-| 资源类 | 内存/进程等资源异常 | 不降级，FAILED |
-| 未知异常 | 其他 | 不降级，FAILED（保守，不掩盖 bug） |
+| 超时 | `parser.parse` 超过 `parser_timeout_seconds` | 不降级；本次 Revision failed，Run 在预算内 RETRY_WAIT |
+| 资源类 | 内存/进程等资源异常 | 不降级；本次 Revision failed，Run 在预算内 RETRY_WAIT |
+| 未知异常 | 其他 | 不降级；本次 Revision failed，Run 在预算内 RETRY_WAIT，预算耗尽后 FAILED |
 
 - 降级只发生一次（Docling → pypdf），pypdf 不再降级，同一错误只有一层主导重试；
 - pypdf 结果只有页级定位：文本按页切成 `paragraph` Element，`bbox` 为 null 并标记 `degraded`，不伪造精度；
@@ -451,7 +456,7 @@ Worker 用真实 PDF 解析替换 Fake Parser：Docling 标准 Pipeline 产出�
 #### 关键不变量
 
 1. 超时通过 `asyncio.wait_for` 在执行器层统一施加，Parser 适配器不自行实现超时；
-2. 所有解析路径产出同一 `ParsedDocument` 契约：每个 Element 至少一个带页码的 SourceLocation；
+2. 所有解析路径产出同一 `ParsedDocument` 契约；Element 尽量携带 SourceLocation，但无法定位时允许为空且不得伪造页码；
 3. `ocr_enabled` 参与 `parser_profile_hash`，切换 OCR 产生新 Revision，旧结果不受影响；
 4. 普通测试不强制下载 Docling 模型：Docling 真实解析测试归入显式启用组（环境变量开启）；默认套件用 pypdf 真实解析与 Stub 验证分类组合逻辑；
 5. Fixtures 只提交合成或公开许可 PDF，用户本地论文不进仓库。
@@ -460,8 +465,8 @@ Worker 用真实 PDF 解析替换 Fake Parser：Docling 标准 Pipeline 产出�
 
 - Adapter：Docling 标签映射（未知标签归 paragraph + warning）、table/figure/formula Payload 形状、`degraded`/`warnings` 传播；
 - pypdf 契约：多页文本 PDF → 每页 paragraph + 页级定位；加密/损坏 PDF → 可降级输入错误分类；空白 PDF → `possibly_scanned`；
-- Fallback 组合：Docling 结构异常 → pypdf 成功且 degraded；超时/资源异常 → 直接 FAILED；pypdf 也失败 → FAILED；
-- 执行器：小超时值触发 `parser_timeout` → FAILED；`degraded`/`warnings` 写入 Revision 并在 document API 可见；
+- Fallback 组合：Docling 结构异常 → pypdf 成功且 degraded；超时/资源异常不降级；pypdf 也失败 → 永久错误；
+- 执行器：小超时值触发 `parser_timeout`，Revision failed 且 Run 进入 RETRY_WAIT；预算耗尽后才 FAILED；`degraded`/`warnings` 写入 Revision 并在 document API 可见；
 - 冒烟：本机真实 Docling 解析一个合成 PDF（允许首次下载模型），结果记入模块笔记。
 
 ### 切片 8：取消/恢复（Attempt + lease/heartbeat + 对账）
@@ -539,44 +544,52 @@ Worker 崩溃、临时错误或机器故障不再让 Run 永久卡在 `RUNNING`�
 - SSE：重放历史、Last-Event-ID 续传、终态关闭、通知丢失时轮询收敛（不发布通知也能收到事件）；
 - Notifier：commit 后发布、publish 失败不影响响应。
 
-### 切片 10：最小 Web UI（Project、Library、上传、Run Detail、Element/PDF 预览）
+### 切片 10：Web UI（个人文献库、Project 收录、Run、Element/PDF 预览）
 
 #### 目标
 
-用户通过浏览器完成本阶段演示闭环：创建 Project、上传 PDF、实时跟随 Ingestion Run 进度（SSE）、取消 Run，并在解析成功后按文档结构预览 Element、点击 Element 定位到来源 PDF 页码。终态（成功/失败/取消）与错误状态在 UI 上明确可见。
+用户通过浏览器完成本阶段演示闭环：创建 Project、浏览个人文献库、上传或直接收录已有论文、移除收录、实时跟随和取消 Ingestion Run，并在解析成功后按文档结构预览 Element、定位来源 PDF 页码。
 
 #### 范围
 
-- **包含**：React + Vite + TypeScript strict + TanStack Query 前端脚手架（`web/`）；Project 列表/创建页；Project 内 Paper 列表与 PDF 上传（`Idempotency-Key`）；Run Detail 页（原生 EventSource 跟随、取消按钮、终态呈现）；Document 页（Element 按结构渲染、点击跳转来源 PDF 页码）；后端补齐 `GET .../papers` 列表与 `GET .../paper-versions/{version_id}/file` PDF 预览端点；`paper_versions` 增加 `display_filename` 迁移；Vitest 关键状态逻辑测试。
+- **包含**：React + Vite + TypeScript strict + TanStack Query；Project 列表/创建；owner 个人文献库；Project Paper 上传、复用、收录与移除；Run Detail（原生 EventSource、取消、终态）；Document Element/PDF 来源预览；相应后端读写端点；Vitest 关键状态逻辑测试。
 - **不包含**：Compose Smoke、Playwright E2E、故障注入（切片 11）；UI 组件库、pdf.js、bbox 高亮；CORS 配置（开发用 Vite proxy）；登录/多用户切换。
 
 #### API 契约（本切片新增的后端端点）
 
-> 2026-08-20 补充：下方最初的 `latest_version` 单 Project 响应已被用户级文献库方案取代。当前响应使用非空 `version`、`project_ids` 和 `ingestion_run_id`；完整契约以前文“用户级文献库与 Project 收录”为准。
-
 ```text
+GET /api/v1/library/papers
 GET /api/v1/projects/{project_id}/papers
 200 [
   {
     "paper_id": "<uuid>",
     "created_at": "<datetime>",
-    "latest_version": {
+    "version": {
       "version_id": "<uuid>",
       "display_filename": "paper.pdf",
       "size_bytes": 12345,
       "created_at": "<datetime>",
-      "parse_ready": true
-    } | null
+      "parse_ready": true,
+      "ingestion_run_id": "<uuid>" | null
+    },
+    "project_ids": ["<uuid>"]
   }
 ]
+
+POST /api/v1/projects/{project_id}/papers
+{ "paper_id": "<uuid>", "version_id": "<uuid>" }
+201（新收录）或 200（已收录）
+
+DELETE /api/v1/projects/{project_id}/papers/{paper_id}
+204
 
 GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 200  Content-Type: application/pdf
      Content-Disposition: inline; filename*=UTF-8''<quoted display_filename>
 ```
 
-- `papers` 返回当前 actor 可见 Project 的全部 Paper 及最新 Version 摘要；`parse_ready` 表示该 Version 已有当前 Parse Revision；
-- `file` 端点校验同一所有权链（Project 属于 actor 且 Version 属于该 Project），**不要求**已有 Parse Revision（上传成功即可预览原文）；越权或不存在一律 404，不泄漏所有权信息。
+- 个人库返回 owner 的 canonical Paper；Project 列表返回 `ProjectPaper.selected_version_id` 固定的 Version，`parse_ready` 表示已有当前 Parse Revision；
+- `file` 端点校验 owner → Project → ProjectPaper → selected Version，**不要求**已有 Parse Revision；越权或不存在一律 404。
 
 #### 数据模型
 
@@ -586,14 +599,14 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 - 路由：`/`（Project 列表/创建）、`/library`（owner 个人文献库与收录范围）、`/projects/:projectId`（上传、复用已有文献、移除收录）、`/runs/:runId`（Run Detail）、`/projects/:projectId/versions/:versionId/document`（Element 预览 + PDF 跳转）；
 - 上传每次选择新文件生成新的 `Idempotency-Key`（`crypto.randomUUID()`），同一文件重试复用同一 Key；
-- SSE 使用原生 `EventSource`（断线重连自动携带 `Last-Event-ID`，与切片 9 的 sequence 游标契约一致）；收到终态事件（Ingestion 成功为 `result_committed`，失败/取消为 `run_failed`/`run_cancelled`，通用路径为 `run_completed`）或轮询发现 Run 终态时主动 `close()`，避免对已收束的流无限重连；
+- SSE 使用原生 `EventSource`（断线重连自动携带 `Last-Event-ID`）；`run_cancel_requested` 只更新“取消中”状态并保持连接，收到真正终态事件或轮询发现终态时才主动 `close()`；
 - PDF 预览用 `<iframe src=".../file#page=N">` 原生查看器页码锚点，零新增依赖；不做 bbox 高亮（已知限制，后续可用 pdf.js 升级）；
 - 错误可见：404 越权/不存在、上传 400/409、Run FAILED 均有明确界面呈现；
 - 依赖最小集：react、react-dom、react-router-dom、@tanstack/react-query；dev：vitest。不引入 UI 组件库与 SSE polyfill。
 
 #### 测试要点
 
-- 后端：`display_filename` 落库与迁移升级；papers 列表（最新 Version 摘要、空列表、越权 404）；file 端点（字节一致、inline disposition、无 Revision 可下载、越权/不存在 404）；
+- 后端：个人库/Project 列表、固定 Version、收录/移除、顺序上传复用；file 端点字节一致、无 Revision 可下载、非 Project 成员 404；
 - 前端 Vitest（纯状态逻辑，不挂 DOM）：SSE 事件按 sequence 去重排序与终态收束判断；Run 终态/可取消状态表；上传幂等键复用与重新生成；HTTP 错误到界面提示的映射。
 
 ### 切片 11 预告
@@ -607,7 +620,7 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - **PostgreSQL**：干净迁移、唯一约束、Event Sequence、条件更新和跨用户/Project 隔离；
 - **Queue/Worker**：正常及重复 Job、enqueue 前后崩溃、Worker 各阶段退出、lease 恢复、重试和取消；
 - **Parser Contract**：文本、多栏/标题、表格/题注、扫描/OCR、损坏/加密样本，以及 Element 类型、层级、阅读顺序、页码、坐标和降级标记；
-- **API/SSE/UI**：`202`、非法上传、刷新恢复、Sequence 重放、通知丢失、终态收束、越权拒绝和最小 E2E。
+- **API/SSE/UI**：上传动态 `200/201/202`、非法上传、刷新恢复、Sequence 重放、通知丢失、取消请求不提前收束、终态收束、越权拒绝和最小 E2E。
 
 普通测试不调用真实 LLM、Embedding 或学术 API。单元测试使用 Fake Parser/Queue/Storage/Clock/ID；Parser 使用固定本地 Fixture；PostgreSQL/Valkey 集成测试与快速测试分组。第三方 Parser 测试优先断言项目契约和关键结构，不做脆弱的全文逐字符快照。
 
@@ -615,7 +628,7 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 - 全新环境可以启动 API、Worker、PostgreSQL 和 Valkey，live/ready 能区分存活和依赖就绪；
 - 用户可创建 Project、上传 PDF，并在断线/刷新后查看 Run 和可重放 Event；
-- 重复上传、Job、Outbox 投递或响应丢失不产生重复版本或当前解析结果；
+- 顺序重复上传、重复 Job、Outbox 投递或响应丢失不产生重复 canonical Version 或当前解析结果；并发同哈希 loser 当前允许由唯一约束拒绝并重试；
 - Worker 退出后 Run 能恢复或稳定失败，不永久停在 `RUNNING`；
 - 取消后不启动新阶段，且并发终态规则有测试；
 - 状态转换和 Event 原子提交；
@@ -635,17 +648,15 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - 2026-08-13：保留 owner 和可替换 Actor Context，但不建设完整登录；
 - 2026-08-13：PostgreSQL 保存业务事实，Storage 保存大内容，Valkey 不作事实来源。
 - 2026-08-20：开发默认值定稿——上传上限 50 MB；Parser 超时 300 s；Worker lease 600 s / heartbeat 30 s（切片 8 实现）；Outbox 重试维持现状（1s 起指数退避、上限 60s、最多 10 次）。全部走 Settings 环境变量，测试用小值验证超时路径。
-- 2026-08-20：解析策略定稿——主路径 Docling 标准 PdfPipeline，默认不开 OCR（`ParseProfile.config` 保留 `ocr_enabled` 开关，扫描件由用户显式选择）；降级按异常类型分类：Docling 抛文件损坏/加密/结构类异常 → 尝试 pypdf，成功标记 `degraded` 并记录能力缺失 warning；超时/资源类异常不降级直接 FAILED；pypdf 也失败则视为永久输入错误；兜底：文本长度为 0 时给 `possibly_scanned` 警告提示用 OCR 重跑。
+- 2026-08-20：解析策略定稿——主路径 Docling 标准 PdfPipeline，默认不开 OCR；文件损坏/加密/结构类异常才尝试 pypdf，成功标记 `degraded`；超时/资源/未知异常不降级，但在 Run 预算内进入 `RETRY_WAIT`；pypdf 也失败视为永久输入错误；空文本给 `possibly_scanned` warning。
 - 2026-08-20：Element 最低 Payload 定稿——枚举维持现有 ElementType，Docling 标签映射不到的归 `paragraph` 并记 warning；`table` 存纯文本网格 `{"rows","cols","cells"}`；`figure` 只存 `storage_key`（首版可 null + warning，不抽图片）；`formula` 存 `{"latex": str|null}`；其余只用 `text` 字段。复杂结构推迟到 Phase 2 有真实消费方再扩展。
 
-## 实现前仍需确定
+## 切片 11 仍需确定
 
-以下问题不改变阶段边界，在对应切片开始前通过测试或小实验确定：
-
-1. Element API 对复杂表格、公式和图片内容的返回形式；
-2. 元数据不完整时的展示名和同一 owner 跨 Project 复用交互；
-3. SSE 心跳、分页、终态关闭和本地 Storage 回收策略；
-4. Phase 1 UI 的具体 Element 渲染组件和视觉样式。
+1. Compose Smoke 是否把 API/Web 一并容器化并共享 Storage，还是明确只验证宿主 API + Worker；
+2. Playwright E2E 的固定场景、Fixture 和截图基线；
+3. 并发同 owner + SHA-256 上传发生唯一约束冲突后，是否在 Phase 1 回读 canonical 并返回复用结果；
+4. 本地 Storage 孤儿文件和历史非 canonical 资产的对账/回收策略。
 
 如果实现需要改变 Run/Event 事实来源、Paper/Version/Parse Revision 所有权、数据隐私或跨用户去重策略，先更新本 Spec；达到 `AGENTS.md` 的触发条件时再写 ADR。
 
@@ -667,7 +678,7 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - `docs/learning-journal/modules/paper-upload.md`：上传校验、版本与幂等；
 - `docs/learning-journal/modules/queue-outbox.md`：Queue Outbox + ARQ Worker 可靠投递、Attempt/lease 与对账恢复；
 - `docs/learning-journal/modules/document-parsing.md`：Parse Revision、Element 与 Fake Parser 闭环；
-- `docs/learning-journal/modules/web-ui.md`：最小 Web UI、SSE 前端收束与 Element/PDF 预览。
+- `docs/learning-journal/modules/web-ui.md`：个人文献库与 Project 收录 UI、SSE 前端收束与 Element/PDF 预览。
 
 后续模块笔记在对应切片真正完成后撰写，不预建空模板。
 
@@ -675,6 +686,6 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 切片 9（Event/SSE）→ 已完成（2026-08-20）：events 端点 `after_sequence`/`limit` 游标分页；`EventNotifier` Port + Valkey Pub/Sub（channel `run-events:{run_id}`，payload 只有 run_id）+ Noop 默认；四个写事件服务 commit 后通知（失败只记日志）；SSE `GET /runs/{run_id}/events/stream`（Last-Event-ID 续传、先重放后实时、15s 心跳注释、终态收束关闭、1s 轮询兜底）。
 
-切片 10（Web UI）→ 已完成（2026-08-20）：已升级为 owner 个人文献库 + ProjectPaper 收录模型；同 owner 的相同 SHA-256 会复用 canonical Version 及原 Run/解析结果；项目页可上传、直接收录已有文献、仅移除收录关系；新增个人文献库页展示跨 Project 收录范围。旧重复数据通过 canonical/归并标记无损迁移，不删除历史 Parse Revision/Element。本次验证：Domain/Application 89 passed，相关 API 15 passed，PostgreSQL/Valkey Integration 34 passed，Vitest 35 passed，`npm run build` 通过；切片 11 仍负责固化 Compose Smoke、故障注入和 Playwright E2E。
+切片 10（Web UI）→ 已完成（2026-08-20）：已升级为 owner 个人文献库 + ProjectPaper 收录模型；同 owner 的相同 SHA-256 会复用 canonical Version 及原 Run/解析结果；项目页可上传、直接收录已有文献、仅移除收录关系；新增个人文献库页展示跨 Project 收录范围。旧重复数据通过 canonical/归并标记无损迁移，不删除历史 Parse Revision/Element。验证：Domain/Application 与相关 API 104 passed，相关 PostgreSQL/Worker Integration 13 passed，Vitest 36 passed，`npm run build` 通过；切片 11 仍负责固化 Compose Smoke、故障注入和 Playwright E2E。
 
 下一步是切片 11（验收复盘）：Compose Smoke、Playwright E2E、故障注入和模块学习笔记收尾。

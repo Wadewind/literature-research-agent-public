@@ -18,14 +18,15 @@ RunExecutionService.execute（认领 QUEUED → RUNNING + run_started）
       ├─ 事务外：DocumentParser.parse(storage_key, profile) → ParsedDocument
       │    Docling 主路径；InvalidPdfInputError → pypdf 降级（degraded）
       │    超时（asyncio.wait_for）/资源/未知异常 → 不降级
-      │    失败 → Revision FAILED + Run FAILED + run_failed
+      │    失败 → Revision FAILED；失败策略决定 Run RETRY_WAIT 或 FAILED
       ├─ 事务 B：normalize_parsed_document 分配 element_id/内容哈希，
       │    批量写 parse_completed、normalize_completed 事件
       └─ 事务 C（原子提交）：Element + SourceLocation + Revision succeeded
            （degraded/warnings）+ current 指针 + Run SUCCEEDED + result_committed
 
 DocumentQueryService（读路径）
-  → 校验 Project → PaperVersion → Paper 归属链（越权一律 404）
+  → 校验 owner → Project → ProjectPaper(selected_version) → PaperVersion
+    （未被该 Project 收录的 Version 一律 404）
   → 按 current_parse_revision_id 读取概览 / Element 列表 + 来源定位
 ```
 
@@ -38,7 +39,7 @@ DocumentQueryService（读路径）
 
 - `document_parse_revisions`：`revision_id`、`version_id`、`parser_name`、`parser_version`、`parser_profile_hash`、`status`（`running`/`succeeded`/`failed`）、`config`、`error`、`degraded`、`warnings`、`created_at`、`completed_at`；唯一约束 `(version_id, parser_profile_hash)` 保证同一版本同一配置只有一个解析结果。
 - `document_elements`：`element_id`、`revision_id`、`element_type`、`sequence`、`parent_element_id`、`section_path`、`text`、`payload`、`content_hash`；唯一约束 `(revision_id, sequence)` 保证阅读顺序唯一。
-- `element_source_locations`：`location_id`、`element_id`、`page`、`bbox`、`parser_ref`、`char_range`；一个 Element 至少一个带来源页码的定位（跨页元素有多条）。
+- `element_source_locations`：`location_id`、`element_id`、`page`、`bbox`、`parser_ref`、`char_range`；Element 尽量提供来源定位，跨页元素可有多条，但解析器无法定位时允许为空，前端降级显示“无页码”。
 - `paper_versions.current_parse_revision_id`：显式当前指针，历史 Revision 仍可查询。
 - `parser_profile_hash` 由 `(parser_name, parser_version, config)` 的规范化 JSON 计算 sha256，相同输入必然相同。
 - 事务 C 把产物、指针、Run 终态和 `result_committed` 事件放在同一事务，不暴露半成品；Run 状态推进始终用 `expected_status` 条件更新 + 行锁。
@@ -51,7 +52,7 @@ DocumentQueryService（读路径）
 - **Fake Parser 先行**：执行器、事务边界、事件序列、API 全部用确定性 Fake 验证，真实 Parser 的风险隔离在 Adapter 内。Fake 输出固定 8 个 Element，覆盖两页、两个章节、表格+题注父子关系和跨页段落双定位。
 - **进度事件批处理**：`parse_completed`/`normalize_completed` 在一个事务内顺序写入，sequence 严格递增；每写一个事件后以数据库为准重读 sequence，Fake/真实实现行为一致。
 - **`IngestionExecutor` 泛型化（PEP 695）**：`class IngestionExecutor[TSession: Session]`，Application 层不依赖 SQLAlchemy Session 具体类型。
-- **错误分类驱动降级（2026-08-20 定稿）**：`InvalidPdfInputError`（损坏/加密/结构）才触发 pypdf 降级；超时/资源/未知异常不降级直接 FAILED；pypdf 也失败即永久输入错误。降级只发生一次，组合对外仍以主 Parser 身份出现，是否降级由 `degraded` + warnings 表达。
+- **降级与运行重试是两层策略**：`InvalidPdfInputError`（损坏/加密/结构）才触发 pypdf 降级；超时、资源和未知异常不切换 Parser。一次解析尝试失败后，永久输入错误直接令 Run FAILED；超时、资源和未知异常在预算内进入 RETRY_WAIT，由 Outbox 退避重投。降级只发生一次，是否降级由 `degraded` + warnings 表达。
 - **超时在执行器层**：`asyncio.wait_for` 统一施加 `parser_timeout_seconds`（默认 300s，`AGENT_PARSER_TIMEOUT_SECONDS`），适配器不各自实现超时；超时记 `error.type=parser_timeout`。注意线程内的 Docling 计算无法被 wait_for 杀死，只保证状态收束。
 - **文档级警告两条来源**：Parser 自报（pypdf 的 `layout_missing`/`table_missing`、Docling 的 `partial_conversion`、figure 的 `figure_not_extracted`）+ 领域规则 `detect_document_warnings`（全文无文本 → `possibly_scanned`），提交事务内写入 Revision 并在 document API 暴露。
 - **Element Payload 定稿**：table 存纯文本网格 `{"rows","cols","cells"}`（Docling TableItem 导出 DataFrame 再网格化）；figure 只存 `storage_key`（首版 null + warning）；formula 存 `{"latex": str|null}`；未知标签归 paragraph + `unmapped_label:<label>` warning。
@@ -60,15 +61,15 @@ DocumentQueryService（读路径）
 
 ## 失败、重试、重复和取消行为
 
-- Parser 抛错：Revision 标记 `failed`（记录错误类型和截断消息，不记堆栈），Run 条件推进 `FAILED` + `run_failed`；重跑时复用同一 Revision 行。
+- Parser 抛错：Revision 标记 `failed`（记录错误类型和截断消息，不记堆栈）；永久输入错误令 Run 进入 `FAILED` + `run_failed`，临时错误在预算内进入 `RETRY_WAIT` + `run_retry_scheduled`，重跑复用同一 Revision 行。
 - 重复 Job：`RunExecutionService` 只认领 `QUEUED`，已 RUNNING/终态直接跳过；Outbox 补投由 Job ID 去重。
 - 执行期间取消：事务 A/B/C 入口检查 `CANCEL_REQUESTED` → `CANCELLED` + `run_cancelled`，已解析的产物不提交、指针不更新。
 - 提交与取消并发：行锁 + 条件更新产生唯一终态，冲突抛 `RunConcurrentModificationError`。
-- Worker 崩溃导致 Revision 停在 `running`、Run 停在 `RUNNING` 的对账恢复属于切片 8（Attempt/lease）。
+- Worker 每次认领创建 Attempt 并周期写 heartbeat；崩溃后 lease 对账关闭旧 Attempt，并按同一失败策略重投或结束 Run。
 
 ## 安全和可观测性
 
-- 查询路径完整校验 owner → project → paper → version 归属链，越权与不存在统一 404，不泄漏所有权信息；
+- 查询路径完整校验 owner → Project → ProjectPaper → selected PaperVersion，越权与不存在统一 404，不因用户拥有该 Version 就允许从任意 Project 读取；
 - Element 查询参数受控：page ≥ 1、limit 1–200、type 必须是合法枚举（非法返回 400）；
 - Event/日志不记录 PDF 内容、宿主路径或解析堆栈，错误消息截断到 500 字符；
 - Storage Key 由上传模块生成，Parser 只拿到 Key 不接触原始请求。
@@ -82,7 +83,7 @@ DocumentQueryService（读路径）
 - `tests/infrastructure/test_docling_parser.py`：Docling 真实解析契约（默认跳过，`AGENT_RUN_DOCLING_TESTS=1` 启用；本机 2 passed，含模型首次下载共 147s）。
 - `tests/integration/test_parse_revision_repository.py`、`test_queue_worker.py`、`tests/api/test_documents.py`：持久化、端到端与 API 契约（document 响应含 degraded/warnings）。
 
-切片 7 完成后全量验证：`uv run pytest -q` 127 passed + 2 skipped（Docling 显式组），`ruff check` 与 `pyright` 无告警。
+切片 7 完成时的历史快照：`uv run pytest -q` 127 passed + 2 skipped（Docling 显式组），`ruff check` 与 `pyright` 无告警。当前测试基线以 Phase 1 进度记录为准。
 
 宿主机冒烟（2026-08-19，API + Worker 真实 Docling）：两页文本 PDF → succeeded、docling 2.120.3、跨页段落双定位；加密 PDF → 降级也失败、FAILED（`InvalidPdfInputError: PDF 已加密`）；空白 PDF → succeeded + `possibly_scanned`。
 
@@ -100,11 +101,10 @@ DocumentQueryService（读路径）
 ## 已知限制
 
 - 超时时 `asyncio.wait_for` 无法杀死线程内的 Docling 计算，只保证 Run 状态收束；线程泄漏由 ARQ 进程生命周期兜底。
-- 没有 Attempt/lease，Worker 崩溃后的 RUNNING Run 和 running Revision 不会对账恢复（切片 8）。
 - figure 不抽取图片（`storage_key` 为 null + warning）；OCR 开关存在但未做质量验证；公式不识别 LaTeX。
 - `document_elements.text` 直接入库，大字段正文未拆分 Storage。
 - Element 查询没有游标分页，只有 limit/offset。
-- 没有 SSE 实时通知（切片 9），前端需轮询。
+- SSE 已接入，但单连接仍有 1s PostgreSQL 轮询兜底，连接规模扩大后需要评估读扩散。
 - Worker 容器镜像包含 torch，体积显著变大；Docling 首次运行需联网下载布局模型（容器内运行需预置模型缓存）。
 
 ## 60 秒面试说明

@@ -2,7 +2,7 @@
 
 ## 解决的问题
 
-提供研究项目的顶层资源边界：用户可以创建、列出和查看自己拥有的 Project，所有后续文献、Run、Event 都挂靠在 Project 下。首版即固定所有权模型，为后续多 Project、权限隔离和按项目检索奠定基础。
+提供研究活动的顶层授权和检索边界：用户可以创建、列出和查看自己的 Project。Run/Event 直接归属 Project；Paper 是 owner 个人文献库资产，通过固定 `selected_version_id` 的 `ProjectPaper` 被 Project 收录。该边界为后续按项目检索和引用校验提供隔离基础。
 
 ## 边界与执行流程
 
@@ -35,8 +35,8 @@ HTTP Route (api/projects.py)
 
 ## 失败、重试、重复和取消行为
 
-- 创建 Project 是幂等的（按业务语义不依赖外部副作用），失败主要是输入校验错误。
-- 并发创建同一 Project 由数据库主键/唯一约束保证不冲突。
+- 创建 Project 当前不是幂等接口：每次成功请求生成新的 UUID；相同名称也没有 owner 级唯一约束。
+- 客户端重试创建请求可能产生两个 Project；如后续产品需要防重，应显式增加 Idempotency-Key，而不是依赖随机主键。
 - 无取消场景。
 
 ## 安全和可观测性
@@ -51,7 +51,7 @@ HTTP Route (api/projects.py)
 - `tests/api/test_projects.py`：HTTP 契约。
 - `tests/integration/test_project_repository.py`：PostgreSQL 持久化与隔离。
 
-当前全部通过：`uv run pytest -v` 62 passed。
+切片 2 完成时的历史快照：`uv run pytest -v` 62 passed。当前测试基线以 Phase 1 进度记录为准。
 
 ## 代码入口
 

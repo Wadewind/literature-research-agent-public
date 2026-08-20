@@ -54,8 +54,8 @@ SSE (GET /runs/{run_id}/events/stream)
 
 - 非法状态转换抛出 `InvalidRunTransitionError`，映射为 HTTP 409。
 - 并发修改（行锁后发现状态与预期不符）抛出 `RunConcurrentModificationError`。
-- `cancel_run`：QUEUED/RETRY_WAIT 直接 CANCELLED；RUNNING 先进入 CANCEL_REQUESTED；CANCEL_REQUESTED 再次取消进入 CANCELLED。
-- 本切片不触发真实 Worker，Run 创建后停留在 QUEUED；重复 API 调用或重复 Job 由后续幂等和 Outbox 机制处理。
+- `cancel_run`：QUEUED/RETRY_WAIT 直接 CANCELLED 并写 `run_cancelled`；RUNNING 先进入 CANCEL_REQUESTED 并写非终态 `run_cancel_requested`；Worker 协作完成取消后再写 `run_cancelled`。
+- 当前 Run 已由 Queue Outbox + ARQ Worker 驱动；重复投递和崩溃恢复见 `queue-outbox.md`。
 - SSE 连接不持有数据库事务；每轮轮询是独立短事务。
 - SSE 收束判断先读 Run 状态再读事件：终态与终态事件同事务提交，该顺序保证不重不漏。
 
@@ -77,7 +77,7 @@ SSE (GET /runs/{run_id}/events/stream)
 - `tests/application/test_event_notification.py`：commit 后通知、publish 失败不影响业务。
 - `tests/integration/test_event_notifier.py`：Valkey Pub/Sub 发布订阅回环（channel 按 run_id 隔离）。
 
-当前全部通过：`uv run pytest -q` 159 passed + 2 skipped（切片 9 完成后，跳过项为显式启用的 Docling 真实解析组）。
+切片 9 完成时的历史快照：`uv run pytest -q` 159 passed + 2 skipped（跳过项为显式启用的 Docling 真实解析组）。当前测试基线以 Phase 1 进度记录为准。
 
 ## 代码入口
 

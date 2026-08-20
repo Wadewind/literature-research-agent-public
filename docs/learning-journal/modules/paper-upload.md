@@ -6,7 +6,7 @@
 
 - `Paper` / `PaperVersion` 属于 owner 级个人文献库；
 - `ProjectPaper` 表示 Project 收录某个 Paper，并固定 `selected_version_id`；
-- 同一 owner + SHA-256 自动复用 canonical PaperVersion；不进行跨 owner 复用。
+- 同一 owner + SHA-256 在顺序请求中自动复用 canonical PaperVersion；不进行跨 owner 复用。
 
 ## 执行流程
 
@@ -41,7 +41,7 @@ POST /projects/{project_id}/paper-files
 - 非 PDF、超大或 Magic Bytes 非法：HTTP 400；Project 不存在/越权：404。
 - 同一 `Idempotency-Key` + 同一请求指纹：返回已保存响应；不同指纹：409。
 - 已在 Project 中的 Paper 再次收录为幂等成功，`already_added=true`。
-- 同哈希的并发新写入最终由 PostgreSQL canonical 部分唯一索引防重。
+- 两个不同 Idempotency-Key 的同哈希请求并发时，PostgreSQL canonical 部分唯一索引保证不会重复落库；当前 loser 会回滚并返回冲突异常，尚未自动回读 winner 的 canonical Version，调用方需要重试。
 
 ## 重要测试
 
@@ -62,7 +62,8 @@ POST /projects/{project_id}/paper-files
 
 - 归并后的历史重复 Storage 文件与解析记录暂不自动回收；待后续有可观测的 GC 机制再处理。
 - 目前不做 DOI/标题/作者模糊合并，不同二进制内容即是不同 Paper。
-- 一个 Project 当前固定单个 Version，尚无前端版本切换功能。
+- 每条 ProjectPaper 当前固定一个 Version，尚无前端版本切换功能。
+- 同哈希并发新写入的 loser 尚不能在同一请求内转换为复用成功。
 
 ## 60 秒面试说明
 

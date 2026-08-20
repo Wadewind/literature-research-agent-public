@@ -22,4 +22,4 @@ learning-journal/
 
 ## 当前阶段
 
-[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)的学习与隔离实验已经完成。当前进入 [Phase 1：Project、文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)，从支撑 PDF 导入闭环所需的最小生产工程基线开始实现。
+[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)已经完成。[Phase 1：Project、个人文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)的切片 1–10 及用户可见闭环已经完成，当前保留切片 11 的 Compose Smoke、故障注入、Playwright E2E 和验收复盘；Phase 2 可进入方案讨论，但开始实现前仍需确认其 Paper 详情/版本查询前置契约。

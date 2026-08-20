@@ -82,7 +82,7 @@ Worker 进程（python -m literature_agent.worker）│
 - `tests/application/test_run_reconcile_service.py`：lease 过期收回重投、心跳新鲜不动、终态跳过、预算耗尽 FAILED。
 - `tests/integration/test_attempt_repository.py`：唯一约束、心跳/结束条件更新、过期查询 join Run 状态。
 
-当前全部通过：`uv run pytest -q` 148 passed + 2 skipped（切片 8 完成后），`ruff check` 与 `pyright` 无告警。
+切片 8 完成时的历史快照：`uv run pytest -q` 148 passed + 2 skipped，`ruff check` 与 `pyright` 无告警。当前测试基线以 Phase 1 进度记录为准。
 
 ## 代码入口
 
