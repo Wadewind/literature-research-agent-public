@@ -6,13 +6,11 @@ Phase 1 切片 10 的最小 Web UI：Project 创建、文献库与 PDF 上传、
 
 ## 开发
 
-```bash
-# 后端（另起终端）：postgres/valkey/api/worker
-docker compose -f deploy/compose/compose.yml up -d
+前端依赖本地后端（API :8000 与 Worker）。完整启动步骤（postgres/valkey 容器、迁移、API、Worker、`HF_HUB_OFFLINE` 说明）见根目录 [`README.md`](../README.md#本地运行)。
 
-# 前端开发服务器（/api 代理到 127.0.0.1:8000）
+```bash
 npm install
-npm run dev
+npm run dev   # http://localhost:5173，/api 代理到 127.0.0.1:8000
 ```
 
 ## 质量命令
