@@ -16,6 +16,7 @@ dependencies = [
     "pypdf>=6.16.1",
     "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.43",
+    "tiktoken>=0.14.0",
     "uvicorn[standard]>=0.52.2",
 ]
 
