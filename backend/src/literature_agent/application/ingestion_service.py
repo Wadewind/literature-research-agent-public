@@ -34,6 +34,7 @@ from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import (
     FileValidationError,
     IdempotencyConflictError,
+    ProjectArchivedError,
     ProjectNotFoundError,
     RunNotFoundError,
 )
@@ -59,6 +60,7 @@ class UploadResult:
     status: str
     reused: bool = False
     already_added: bool = False
+    paper_archived: bool = False
 
 
 def _compute_sha256(content: bytes) -> str:
@@ -165,6 +167,7 @@ class IngestionService:
             FileValidationError: 文件校验失败。
             IdempotencyConflictError: 幂等键冲突。
             ProjectNotFoundError: Project 不存在或不属于当前 actor。
+            ProjectArchivedError: Project 已归档，拒绝新上传。
         """
         self._validate_upload(idempotency_key, content)
         sanitized_filename = _sanitize_filename(filename)
@@ -181,10 +184,12 @@ class IngestionService:
             idempotency_repo = self._idempotency_repo_factory(session)
             existing = await idempotency_repo.get(actor.owner_id, idempotency_key)
             run_repo = self._run_repo_factory(session)
+            paper_repo = self._paper_repo_factory(session)
             if existing is not None:
                 if existing.request_hash != request_hash:
                     raise IdempotencyConflictError(idempotency_key)
                 if existing.paper_id and existing.version_id:
+                    # 幂等重放：归档标志按当前 Paper 状态实时计算
                     return UploadResult(
                         run_id=existing.run_id,
                         paper_id=existing.paper_id,
@@ -192,24 +197,27 @@ class IngestionService:
                         status=existing.status,
                         reused=existing.reused,
                         already_added=existing.already_added,
+                        paper_archived=await self._is_paper_archived(
+                            paper_repo, actor, existing.paper_id
+                        ),
                     )
                 if existing.run_id is None:
                     raise RunNotFoundError("missing-idempotency-run")
-                return await self._result_from_run(run_repo, existing.run_id)
+                return await self._result_from_run(run_repo, paper_repo, actor, existing.run_id)
 
             project_repo = self._project_repo_factory(session)
             project = await project_repo.get_by_id(project_id)
             if project is None or project.owner_id != actor.owner_id:
                 raise ProjectNotFoundError(project_id)
+            if project.is_archived:
+                raise ProjectArchivedError(project_id)
 
             version_repo = self._paper_version_repo_factory(session)
             existing_version = await version_repo.get_by_owner_and_hash(
                 actor.owner_id, file_hash
             )
             if existing_version is not None:
-                paper = await self._paper_repo_factory(session).get_by_id(
-                    existing_version.paper_id
-                )
+                paper = await paper_repo.get_by_id(existing_version.paper_id)
                 if paper is None or paper.owner_id != actor.owner_id:
                     raise RunNotFoundError(existing_version.version_id)
                 relation_repo = self._project_paper_repo_factory(session)
@@ -236,6 +244,8 @@ class IngestionService:
                     status=reused_status,
                     reused=True,
                     already_added=already_added,
+                    # 同哈希复用不自动恢复归档，仅提示调用方
+                    paper_archived=paper.is_archived,
                 )
                 await idempotency_repo.add(
                     IdempotencyRecord(
@@ -365,6 +375,8 @@ class IngestionService:
     async def _result_from_run(
         self,
         run_repo: RunRepository,
+        paper_repo: PaperRepository,
+        actor: ActorContext,
         run_id: str,
     ) -> UploadResult:
         """从已有 Run 中组装 UploadResult。"""
@@ -380,4 +392,17 @@ class IngestionService:
             status=run.status.value,
             reused=False,
             already_added=False,
+            paper_archived=await self._is_paper_archived(
+                paper_repo, actor, payload.get("paper_id", "")
+            ),
         )
+
+    @staticmethod
+    async def _is_paper_archived(
+        paper_repo: PaperRepository,
+        actor: ActorContext,
+        paper_id: str,
+    ) -> bool:
+        """查询 Paper 当前归档状态；不存在或越权时视为未归档。"""
+        paper = await paper_repo.get_by_id(paper_id)
+        return paper is not None and paper.owner_id == actor.owner_id and paper.is_archived

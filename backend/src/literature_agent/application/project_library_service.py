@@ -16,8 +16,10 @@ from literature_agent.application.ports.project_repository import ProjectReposit
 from literature_agent.application.ports.session import Session
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import (
+    PaperArchivedError,
     PaperNotFoundError,
     PaperVersionNotFoundError,
+    ProjectArchivedError,
     ProjectNotFoundError,
 )
 from literature_agent.domain.project_paper import ProjectPaper, create_project_paper
@@ -57,14 +59,23 @@ class ProjectLibraryService:
         paper_id: str,
         version_id: str,
     ) -> AddPaperResult:
-        """把 owner 文献库中的指定 PaperVersion 收录到 Project。"""
+        """把 owner 文献库中的指定 PaperVersion 收录到 Project。
+
+        异常:
+            ProjectArchivedError: Project 已归档，拒绝新增收录。
+            PaperArchivedError: Paper 已归档，拒绝收录。
+        """
         async with self._session_factory() as session:
             project = await self._project_repo_factory(session).get_by_id(project_id)
             if project is None or project.owner_id != actor.owner_id:
                 raise ProjectNotFoundError(project_id)
+            if project.is_archived:
+                raise ProjectArchivedError(project_id)
             paper = await self._paper_repo_factory(session).get_by_id(paper_id)
             if paper is None or paper.owner_id != actor.owner_id:
                 raise PaperNotFoundError(paper_id)
+            if paper.is_archived:
+                raise PaperArchivedError(paper_id)
             version = await self._paper_version_repo_factory(session).get_by_id(version_id)
             if version is None or version.paper_id != paper_id:
                 raise PaperVersionNotFoundError(version_id)
@@ -83,11 +94,17 @@ class ProjectLibraryService:
         project_id: str,
         paper_id: str,
     ) -> bool:
-        """从 Project 移除 Paper，但保留个人文献库内容。"""
+        """从 Project 移除 Paper，但保留个人文献库内容。
+
+        异常:
+            ProjectArchivedError: Project 已归档，拒绝移除收录关系。
+        """
         async with self._session_factory() as session:
             project = await self._project_repo_factory(session).get_by_id(project_id)
             if project is None or project.owner_id != actor.owner_id:
                 raise ProjectNotFoundError(project_id)
+            if project.is_archived:
+                raise ProjectArchivedError(project_id)
             removed = await self._project_paper_repo_factory(session).remove(
                 project_id, paper_id
             )

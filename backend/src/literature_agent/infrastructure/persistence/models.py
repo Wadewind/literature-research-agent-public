@@ -35,6 +35,10 @@ class ProjectORM(Base):
         default=lambda: datetime.now(UTC),
         nullable=False,
     )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 class RunORM(Base):
@@ -118,6 +122,10 @@ class PaperORM(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         nullable=False,
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
 

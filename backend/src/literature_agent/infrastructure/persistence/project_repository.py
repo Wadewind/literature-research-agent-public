@@ -17,6 +17,7 @@ def _to_domain(orm: ProjectORM) -> Project:
         description=orm.description,
         created_at=orm.created_at,
         updated_at=orm.updated_at,
+        archived_at=orm.archived_at,
     )
 
 
@@ -29,6 +30,7 @@ def _to_orm(project: Project) -> ProjectORM:
         description=project.description,
         created_at=project.created_at,
         updated_at=project.updated_at,
+        archived_at=project.archived_at,
     )
 
 
@@ -48,12 +50,27 @@ class SqlalchemyProjectRepository(ProjectRepository):
         self._session.add(_to_orm(project))
         return project
 
-    async def list_by_owner(self, owner_id: str) -> list[Project]:
-        """按所有者列出所有 Project。"""
+    async def update(self, project: Project) -> None:
+        """按主键更新 Project 的可变字段。"""
+        orm = await self._session.get(ProjectORM, project.project_id)
+        if orm is None:
+            return
+        orm.name = project.name
+        orm.description = project.description
+        orm.updated_at = project.updated_at
+        orm.archived_at = project.archived_at
+
+    async def list_by_owner(
+        self,
+        owner_id: str,
+        include_archived: bool = False,
+    ) -> list[Project]:
+        """按所有者列出 Project；默认排除已归档。"""
+        statement = select(ProjectORM).where(ProjectORM.owner_id == owner_id)
+        if not include_archived:
+            statement = statement.where(ProjectORM.archived_at.is_(None))
         result = await self._session.execute(
-            select(ProjectORM)
-            .where(ProjectORM.owner_id == owner_id)
-            .order_by(ProjectORM.created_at.desc()),
+            statement.order_by(ProjectORM.created_at.desc()),
         )
         return [_to_domain(row) for row in result.scalars().all()]
 

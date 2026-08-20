@@ -1,7 +1,7 @@
 """Run Repository 的内存假实现。"""
 
 from literature_agent.application.ports.run_repository import RunRepository
-from literature_agent.domain.run import Run, RunStatus
+from literature_agent.domain.run import ACTIVE_RUN_STATUSES, Run, RunStatus
 
 
 class FakeRunRepository(RunRepository):
@@ -50,3 +50,10 @@ class FakeRunRepository(RunRepository):
             updated_at=run.updated_at,
         )
         return True
+
+    async def has_active_runs(self, project_id: str) -> bool:
+        """判断 Project 是否存在非终态 Run。"""
+        return any(
+            run.project_id == project_id and run.status in ACTIVE_RUN_STATUSES
+            for run in self._runs.values()
+        )

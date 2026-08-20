@@ -8,6 +8,7 @@ from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import (
     FileValidationError,
     IdempotencyConflictError,
+    ProjectArchivedError,
     ProjectNotFoundError,
 )
 from literature_agent.domain.project import create_project
@@ -391,3 +392,101 @@ async def test_ready_version_reuse_has_no_new_run(
     assert reused.reused is True
     assert reused.run_id is None
     assert reused.status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_upload_to_archived_project_rejected(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    project_repo: FakeProjectRepository,
+) -> None:
+    """已归档 Project 拒绝新上传。"""
+    await project_repo.update(project.archive())
+
+    with pytest.raises(ProjectArchivedError):
+        await service.upload_paper_file(
+            actor=actor,
+            project_id=project.project_id,
+            filename="test.pdf",
+            content_type="application/pdf",
+            content=_pdf_content(),
+            idempotency_key="archived-project",
+            correlation_id="corr-1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_reuse_archived_paper_returns_flag_without_restoring(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    project_repo: FakeProjectRepository,
+    paper_repo: FakePaperRepository,
+) -> None:
+    """同哈希上传命中已归档 Paper：正常复用并提示，不自动恢复归档。"""
+    other = create_project(actor.owner_id, "另一个项目", "")
+    await project_repo.add(other)
+    first = await service.upload_paper_file(
+        actor=actor,
+        project_id=project.project_id,
+        filename="paper.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="archived-first",
+        correlation_id="corr-1",
+    )
+    paper = await paper_repo.get_by_id(first.paper_id)
+    assert paper is not None
+    await paper_repo.update(paper.archive())
+
+    reused = await service.upload_paper_file(
+        actor=actor,
+        project_id=other.project_id,
+        filename="paper.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="archived-second",
+        correlation_id="corr-2",
+    )
+
+    assert reused.reused is True
+    assert reused.paper_archived is True
+    assert reused.paper_id == first.paper_id
+    # 复用不自动恢复归档
+    still = await paper_repo.get_by_id(first.paper_id)
+    assert still is not None and still.is_archived is True
+
+
+@pytest.mark.asyncio
+async def test_reuse_active_paper_has_no_archived_flag(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    project_repo: FakeProjectRepository,
+) -> None:
+    """复用未归档 Paper 时 paper_archived 为 False。"""
+    other = create_project(actor.owner_id, "另一个项目", "")
+    await project_repo.add(other)
+    await service.upload_paper_file(
+        actor=actor,
+        project_id=project.project_id,
+        filename="paper.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="active-first",
+        correlation_id="corr-1",
+    )
+
+    reused = await service.upload_paper_file(
+        actor=actor,
+        project_id=other.project_id,
+        filename="paper.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="active-second",
+        correlation_id="corr-2",
+    )
+
+    assert reused.reused is True
+    assert reused.paper_archived is False

@@ -15,8 +15,16 @@ class ProjectRepository(Protocol):
         """保存 Project。"""
         ...
 
-    async def list_by_owner(self, owner_id: str) -> list[Project]:
-        """按所有者列出所有 Project。"""
+    async def update(self, project: Project) -> None:
+        """按主键更新 Project 的可变字段（名称、说明、归档时间、updated_at）。"""
+        ...
+
+    async def list_by_owner(
+        self,
+        owner_id: str,
+        include_archived: bool = False,
+    ) -> list[Project]:
+        """按所有者列出 Project；默认排除已归档。"""
         ...
 
     async def get_by_id(self, project_id: str) -> Project | None:

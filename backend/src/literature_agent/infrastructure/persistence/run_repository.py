@@ -7,7 +7,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.run_repository import RunRepository
-from literature_agent.domain.run import Run, RunStatus
+from literature_agent.domain.run import ACTIVE_RUN_STATUSES, Run, RunStatus
 from literature_agent.infrastructure.persistence.models import RunORM
 
 
@@ -100,3 +100,15 @@ class SqlalchemyRunRepository(RunRepository):
             ),
         )
         return result.rowcount == 1
+
+    async def has_active_runs(self, project_id: str) -> bool:
+        """判断 Project 是否存在非终态 Run。"""
+        result = await self._session.execute(
+            select(RunORM.run_id)
+            .where(
+                RunORM.project_id == project_id,
+                RunORM.status.in_([status.value for status in ACTIVE_RUN_STATUSES]),
+            )
+            .limit(1),
+        )
+        return result.first() is not None

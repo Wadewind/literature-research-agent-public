@@ -30,6 +30,7 @@ POST /projects/{project_id}/paper-files
 - `project_papers`：复合主键 `(project_id, paper_id)`，并持有 `selected_version_id`。
 - 新文件的 Paper/Version/Run/Event/Outbox/ProjectPaper/Idempotency 在同一短事务提交。Storage 写入先于数据库 commit，回滚可能遗留孤儿文件。
 - 已有 Version 的复用不写 Storage、不创建新 Run、不重新解析。
+- Paper 支持幂等归档/恢复（Phase 2 切片 1，`PaperService`）：归档后从默认个人库列表与收录选择中隐藏，已有 ProjectPaper 与历史引用不受影响；同哈希上传命中已归档 Paper 的 canonical Version 时正常复用，`UploadResult` 返回 `paper_archived: true` 提示，不自动恢复归档；向 Project 收录已归档 Paper 返回 409 `paper_archived`。
 - 跨 owner 查询、收录与文件读取均返回 404，不暴露资源存在性。
 
 ## 历史数据迁移

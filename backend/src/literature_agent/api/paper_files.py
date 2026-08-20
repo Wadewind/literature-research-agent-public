@@ -19,6 +19,7 @@ from literature_agent.application.ingestion_service import IngestionService, Upl
 from literature_agent.domain.exceptions import (
     FileValidationError,
     IdempotencyConflictError,
+    ProjectArchivedError,
     ProjectNotFoundError,
 )
 from literature_agent.infrastructure.persistence.event_repository import (
@@ -118,6 +119,11 @@ async def upload_paper_file(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project 不存在",
+        ) from None
+    except ProjectArchivedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="project_archived",
         ) from None
     except IdempotencyConflictError as exc:
         raise HTTPException(

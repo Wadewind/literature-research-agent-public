@@ -45,6 +45,7 @@ class PaperListItem:
     created_at: datetime
     version: PaperVersionSummary
     project_ids: tuple[str, ...]
+    archived_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,10 +99,16 @@ class PaperQueryService[TSession: Session]:
                 items.append(self._item(paper, version, memberships))
             return items
 
-    async def list_library_papers(self, actor: ActorContext) -> list[PaperListItem]:
-        """列出 owner 个人文献库及各 Paper 的 Project 收录范围。"""
+    async def list_library_papers(
+        self,
+        actor: ActorContext,
+        include_archived: bool = False,
+    ) -> list[PaperListItem]:
+        """列出 owner 个人文献库及各 Paper 的 Project 收录范围；默认排除已归档。"""
         async with self._session_factory() as session:
-            papers = await self._paper_repo_factory(session).list_by_owner(actor.owner_id)
+            papers = await self._paper_repo_factory(session).list_by_owner(
+                actor.owner_id, include_archived
+            )
             version_repo = self._paper_version_repo_factory(session)
             relation_repo = self._project_paper_repo_factory(session)
             items: list[PaperListItem] = []
@@ -158,4 +165,5 @@ class PaperQueryService[TSession: Session]:
                 ingestion_run_id=version.ingestion_run_id,
             ),
             project_ids=tuple(relation.project_id for relation in memberships),
+            archived_at=paper.archived_at,
         )

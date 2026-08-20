@@ -39,3 +39,10 @@ class RunRepository(Protocol):
         仅当当前状态等于 ``expected_status`` 时才更新。返回是否成功。
         """
         ...
+
+    async def has_active_runs(self, project_id: str) -> bool:
+        """判断 Project 是否存在非终态 Run。
+
+        非终态状态见 ``domain.run.ACTIVE_RUN_STATUSES``。
+        """
+        ...

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated, NoReturn
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
 from literature_agent.api.dependencies import ActorDep
@@ -12,11 +12,14 @@ from literature_agent.application.paper_query_service import (
     PaperListItem,
     PaperQueryService,
 )
+from literature_agent.application.paper_service import PaperService
 from literature_agent.application.ports.storage import StorageError
 from literature_agent.application.project_library_service import ProjectLibraryService
 from literature_agent.domain.exceptions import (
+    PaperArchivedError,
     PaperNotFoundError,
     PaperVersionNotFoundError,
+    ProjectArchivedError,
     ProjectNotFoundError,
 )
 from literature_agent.infrastructure.persistence.paper_repository import (
@@ -53,6 +56,14 @@ class PaperListItemResponse(BaseModel):
     created_at: datetime
     version: VersionSummaryResponse
     project_ids: list[str]
+    archived_at: datetime | None
+
+
+class PaperStateResponse(BaseModel):
+    """Paper 归档状态的响应模型。"""
+
+    paper_id: str
+    archived_at: datetime | None
 
 
 class AddPaperRequest(BaseModel):
@@ -96,8 +107,18 @@ async def get_project_library_service(request: Request) -> ProjectLibraryService
     )
 
 
+async def get_paper_service(request: Request) -> PaperService:
+    """从应用状态构建 PaperService。"""
+    app_state = request.app.state.app_state
+    return PaperService(
+        session_factory=app_state.session_factory,
+        paper_repo_factory=SqlalchemyPaperRepository,
+    )
+
+
 PaperQueryServiceDep = Annotated[PaperQueryService, Depends(get_paper_query_service)]
 ProjectLibraryServiceDep = Annotated[ProjectLibraryService, Depends(get_project_library_service)]
+PaperServiceDep = Annotated[PaperService, Depends(get_paper_service)]
 
 
 def _handle_query_errors(exc: Exception) -> NoReturn:
@@ -109,6 +130,21 @@ def _handle_query_errors(exc: Exception) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="资源不存在",
+        ) from None
+    raise exc
+
+
+def _handle_archived_errors(exc: Exception) -> NoReturn:
+    """把归档冲突映射为 409 稳定业务码。"""
+    if isinstance(exc, ProjectArchivedError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="project_archived",
+        ) from None
+    if isinstance(exc, PaperArchivedError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="paper_archived",
         ) from None
     raise exc
 
@@ -127,6 +163,7 @@ def _response(item: PaperListItem) -> PaperListItemResponse:
             ingestion_run_id=item.version.ingestion_run_id,
         ),
         project_ids=list(item.project_ids),
+        archived_at=item.archived_at,
     )
 
 
@@ -134,9 +171,41 @@ def _response(item: PaperListItem) -> PaperListItemResponse:
 async def list_library_papers(
     actor: ActorDep,
     service: PaperQueryServiceDep,
+    include_archived: Annotated[bool, Query()] = False,
 ) -> list[PaperListItemResponse]:
-    """列出当前 owner 的个人文献库。"""
-    return [_response(item) for item in await service.list_library_papers(actor)]
+    """列出当前 owner 的个人文献库；默认排除已归档。"""
+    return [
+        _response(item)
+        for item in await service.list_library_papers(actor, include_archived)
+    ]
+
+
+@router.post("/library/papers/{paper_id}/archive", response_model=PaperStateResponse)
+async def archive_library_paper(
+    paper_id: str,
+    actor: ActorDep,
+    service: PaperServiceDep,
+) -> PaperStateResponse:
+    """归档个人文献库 Paper；幂等，不影响已有 Project 收录。"""
+    try:
+        paper = await service.archive_paper(actor, paper_id)
+    except PaperNotFoundError as exc:
+        _handle_query_errors(exc)
+    return PaperStateResponse(paper_id=paper.paper_id, archived_at=paper.archived_at)
+
+
+@router.post("/library/papers/{paper_id}/restore", response_model=PaperStateResponse)
+async def restore_library_paper(
+    paper_id: str,
+    actor: ActorDep,
+    service: PaperServiceDep,
+) -> PaperStateResponse:
+    """恢复已归档的个人文献库 Paper；幂等。"""
+    try:
+        paper = await service.restore_paper(actor, paper_id)
+    except PaperNotFoundError as exc:
+        _handle_query_errors(exc)
+    return PaperStateResponse(paper_id=paper.paper_id, archived_at=paper.archived_at)
 
 
 @router.get(
@@ -173,6 +242,8 @@ async def add_existing_paper(
         result = await service.add_existing_paper(actor, project_id, body.paper_id, body.version_id)
     except (ProjectNotFoundError, PaperNotFoundError, PaperVersionNotFoundError) as exc:
         _handle_query_errors(exc)
+    except (ProjectArchivedError, PaperArchivedError) as exc:
+        _handle_archived_errors(exc)
     if result.already_added:
         response.status_code = status.HTTP_200_OK
     return ProjectPaperResponse(
@@ -198,6 +269,8 @@ async def remove_project_paper(
         removed = await service.remove_paper(actor, project_id, paper_id)
     except ProjectNotFoundError as exc:
         _handle_query_errors(exc)
+    except ProjectArchivedError as exc:
+        _handle_archived_errors(exc)
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资源不存在")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

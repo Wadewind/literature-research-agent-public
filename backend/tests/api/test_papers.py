@@ -8,9 +8,11 @@ from httpx import ASGITransport, AsyncClient
 from literature_agent.api.dependencies import get_actor
 from literature_agent.api.papers import (
     get_paper_query_service,
+    get_paper_service,
     get_project_library_service,
 )
 from literature_agent.application.paper_query_service import PaperQueryService
+from literature_agent.application.paper_service import PaperService
 from literature_agent.application.project_library_service import ProjectLibraryService
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.paper import create_paper
@@ -56,6 +58,12 @@ class _Fixture:
             project_paper_repo_factory=lambda _session: self.relation_repo,
         )
 
+    def paper_service(self) -> PaperService:
+        return PaperService(
+            session_factory=fake_session,
+            paper_repo_factory=lambda _session: self.paper_repo,
+        )
+
 
 @pytest_asyncio.fixture
 async def fixture():
@@ -94,9 +102,13 @@ async def fixture():
     async def library_service_override() -> ProjectLibraryService:
         return fx.library_service()
 
+    async def paper_service_override() -> PaperService:
+        return fx.paper_service()
+
     app.dependency_overrides[get_actor] = actor_override
     app.dependency_overrides[get_paper_query_service] = query_service_override
     app.dependency_overrides[get_project_library_service] = library_service_override
+    app.dependency_overrides[get_paper_service] = paper_service_override
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as test_client:
         yield fx, test_client, project, other, paper, version
@@ -152,3 +164,101 @@ async def test_get_version_file_requires_project_membership(fixture) -> None:
     assert allowed.status_code == 200
     assert allowed.content == _PDF_CONTENT
     assert denied.status_code == 404
+
+
+async def test_archive_and_restore_library_paper(fixture) -> None:
+    """个人文献库 Paper 归档与恢复均返回 200 且幂等。"""
+    fx, client, _, _, paper, _ = fixture
+
+    archived = await client.post(f"/api/v1/library/papers/{paper.paper_id}/archive")
+    assert archived.status_code == 200
+    assert archived.json()["paper_id"] == paper.paper_id
+    assert archived.json()["archived_at"] is not None
+
+    again = await client.post(f"/api/v1/library/papers/{paper.paper_id}/archive")
+    assert again.status_code == 200
+    assert again.json()["archived_at"] == archived.json()["archived_at"]
+
+    restored = await client.post(f"/api/v1/library/papers/{paper.paper_id}/restore")
+    assert restored.status_code == 200
+    assert restored.json()["archived_at"] is None
+
+    restore_again = await client.post(f"/api/v1/library/papers/{paper.paper_id}/restore")
+    assert restore_again.status_code == 200
+
+
+async def test_archive_paper_not_found_or_forbidden_returns_404(fixture) -> None:
+    """不存在或越权的 Paper 归档/恢复返回 404。"""
+    _, client, _, _, _, _ = fixture
+
+    assert (await client.post("/api/v1/library/papers/missing/archive")).status_code == 404
+    assert (await client.post("/api/v1/library/papers/missing/restore")).status_code == 404
+
+
+async def test_library_list_excludes_archived_by_default(fixture) -> None:
+    """个人文献库默认隐藏已归档 Paper，include_archived=true 时返回。"""
+    fx, client, _, _, paper, _ = fixture
+
+    default = await client.get("/api/v1/library/papers")
+    assert [item["paper_id"] for item in default.json()] == [paper.paper_id]
+
+    await client.post(f"/api/v1/library/papers/{paper.paper_id}/archive")
+
+    hidden = await client.get("/api/v1/library/papers")
+    full = await client.get("/api/v1/library/papers", params={"include_archived": "true"})
+
+    assert hidden.json() == []
+    assert len(full.json()) == 1
+    assert full.json()[0]["archived_at"] is not None
+
+
+async def test_add_archived_paper_to_project_returns_409(fixture) -> None:
+    """收录已归档 Paper 到 Project 返回 409 paper_archived。"""
+    fx, client, _, other, paper, version = fixture
+    await fx.paper_repo.update(paper.archive())
+
+    response = await client.post(
+        f"/api/v1/projects/{other.project_id}/papers",
+        json={"paper_id": paper.paper_id, "version_id": version.version_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "paper_archived"
+
+
+async def test_add_paper_to_archived_project_returns_409(fixture) -> None:
+    """向已归档 Project 收录 Paper 返回 409 project_archived。"""
+    fx, client, _, other, paper, version = fixture
+    await fx.project_repo.update(other.archive())
+
+    response = await client.post(
+        f"/api/v1/projects/{other.project_id}/papers",
+        json={"paper_id": paper.paper_id, "version_id": version.version_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "project_archived"
+
+
+async def test_remove_paper_from_archived_project_returns_409(fixture) -> None:
+    """已归档 Project 拒绝移除收录，返回 409 project_archived。"""
+    fx, client, project, _, paper, _ = fixture
+    await fx.project_repo.update(project.archive())
+
+    response = await client.delete(
+        f"/api/v1/projects/{project.project_id}/papers/{paper.paper_id}"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "project_archived"
+
+
+async def test_project_paper_list_keeps_archived_paper(fixture) -> None:
+    """Paper 归档不影响已有 Project 收录关系，列表仍可读。"""
+    fx, client, project, _, paper, _ = fixture
+    await fx.paper_repo.update(paper.archive())
+
+    response = await client.get(f"/api/v1/projects/{project.project_id}/papers")
+
+    assert response.status_code == 200
+    assert [item["paper_id"] for item in response.json()] == [paper.paper_id]

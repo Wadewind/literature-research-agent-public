@@ -60,3 +60,43 @@ async def test_get_by_id_returns_none_for_missing(
     fetched = await repo.get_by_id("00000000-0000-0000-0000-000000000000")
 
     assert fetched is None
+
+
+@pytest.mark.asyncio
+async def test_update_persists_changes(
+    repo: SqlalchemyProjectRepository,
+    session: AsyncSession,
+) -> None:
+    """update 应持久化名称、说明与归档时间。"""
+    project = create_project(owner_id="user-1", name="旧名称", description="旧说明")
+    await repo.add(project)
+    await session.commit()
+
+    updated = project.update_details(name="新名称").archive()
+    await repo.update(updated)
+    await session.commit()
+
+    fetched = await repo.get_by_id(project.project_id)
+    assert fetched is not None
+    assert fetched.name == "新名称"
+    assert fetched.is_archived is True
+    assert fetched.archived_at is not None
+
+
+@pytest.mark.asyncio
+async def test_list_by_owner_filters_archived(
+    repo: SqlalchemyProjectRepository,
+    session: AsyncSession,
+) -> None:
+    """list_by_owner 默认排除已归档 Project，include_archived 时返回全部。"""
+    active = create_project(owner_id="user-1", name="活动", description="")
+    archived = create_project(owner_id="user-1", name="归档", description="").archive()
+    await repo.add(active)
+    await repo.add(archived)
+    await session.commit()
+
+    default = await repo.list_by_owner("user-1")
+    full = await repo.list_by_owner("user-1", include_archived=True)
+
+    assert [p.project_id for p in default] == [active.project_id]
+    assert len(full) == 2

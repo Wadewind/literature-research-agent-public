@@ -257,7 +257,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 每个切片遵循「确认契约与不变量 → 失败测试 → 最小实现 → 重构 → 验证 → 更新进度」。
 
-1. **资源管理边界**：Project 改名/归档/恢复、Paper 归档/恢复、active 过滤、归档对新 Run/收录的限制；归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时返回 409；
+1. **资源管理边界**（已完成 2026-08-20，契约见下文「切片 1」）：Project 改名/归档/恢复、Paper 归档/恢复、active 过滤、归档对新 Run/收录的限制；归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时返回 409；
 2. **阶段契约与评测 Fixture**：定最小错误码（`project_not_indexed`、`conversation_busy`、`invalid_scope` 等）；评测语料使用合成 PDF，由子智能体在本切片构建，保证期望 Evidence 的页码/章节完全确定；
 3. **Model Gateway**：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
 4. **ChunkSet + Worker 分发**：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
@@ -267,6 +267,55 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 8. **RAG Conversation**：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
 9. **API 与最小 Web UI**：Chat 三入口、Run 进度（前端 `KNOWN_EVENT_TYPES` 扩充）、引用详情和 PDF 页码跳转；
 10. **验收复盘**：评测实跑报告（Fake Provider 验证管线 + 真实 Provider 显式启用）、故障测试和学习笔记。
+
+### 切片 1：资源管理边界（契约定稿）
+
+已于 2026-08-20 实现完成。遵循 `../decisions/0002-archive-and-project-scoped-entrypoints.md`：归档优先，永久删除延后到 Phase 4。
+
+#### 目标
+
+为 Project 和 Paper 提供修改、归档与恢复能力，并把「归档资源只读」边界落到所有既有写入口，为后续 RAG/Workflow 保留完整历史可追溯性。
+
+#### 范围
+
+- **包含**：`projects`/`papers` 的 `archived_at` 列与迁移；Project 改名/归档/恢复 API；Paper 归档/恢复 API；列表 `include_archived` 过滤；归档对上传、收录、移除收录的 409 限制；同哈希复用已归档 Paper 的提示字段。
+- **不包含**：前端 UI 入口（归档按钮、归档徽标，延后到切片 9 的 Chat UI 一并提供）；永久删除；归档对 Phase 2 之后新写入口（Conversation、Review Run）的限制，随对应切片落地。
+
+#### 数据模型
+
+- `projects` 增加 `archived_at`（timestamptz，可空，默认 null）；归档状态由该列派生，不加独立 status 列；
+- `papers` 增加 `archived_at`（同上）；`paper_versions`、`project_papers` 不动；
+- 迁移 `b3f5a8c1d9e2`，`down_revision = c84f2d7a91e6`；
+- `Run` 领域新增 `ACTIVE_RUN_STATUSES`（QUEUED/RUNNING/RETRY_WAIT/CANCEL_REQUESTED），归档前检查以此为唯一事实来源。
+
+#### API 契约
+
+- `PATCH /api/v1/projects/{project_id}`：body `{name?, description?}`，至少一个字段（否则 422）；name 沿用创建校验（非空、≤200，违反 422）；已归档 → 409 `project_archived`；成功 200 返回 Project；
+- `POST /api/v1/projects/{project_id}/archive`：幂等（已归档返回 200）；存在非终态 Run → 409 `project_has_active_runs`；成功 200 返回 Project；
+- `POST /api/v1/projects/{project_id}/restore`：幂等，200；
+- `GET /api/v1/projects` 增加 `include_archived` 查询参数（默认 false，只返回 active）；
+- `POST /api/v1/library/papers/{paper_id}/archive` / `restore`：幂等 200，返回 `{paper_id, archived_at}`；不存在/越权 404；
+- `GET /api/v1/library/papers` 增加 `include_archived`（默认 false）；列表条目增加 `archived_at`；
+- 已归档 Project 上的写操作一律 409 `project_archived`：`POST /paper-files` 上传、`POST /papers` 收录、`DELETE /papers/{paper_id}` 移除；读接口（GET 详情、Run/Event 查询、document/elements/file）保持可用；
+- 收录已归档 Paper 到 Project → 409 `paper_archived`；
+- 上传同 SHA-256 命中已归档 Paper 的 canonical Version：正常复用，不自动恢复归档，`UploadResult` 响应增加 `paper_archived: true` 提示（幂等重放按当前 Paper 状态实时计算）；新文件上传不受影响；
+- Project 响应模型增加 `archived_at`。
+
+#### 关键不变量
+
+1. 所有查询维持 owner 隔离，越权/不存在统一 404；
+2. 归档/恢复幂等，重复调用不刷新归档时间；
+3. 归档只冻结写操作，不产生 Run/Event，不破坏已有 ProjectPaper 与历史数据；
+4. Project 归档/恢复/改名写 `updated_at`；Paper 无 `updated_at`，不新增；
+5. 归档 Project 存在非终态 Run 时拒绝归档，用户需先等待或取消；
+6. 幂等键重放不是新写操作：命中已存响应直接返回，不受归档 409 限制。
+
+#### 测试要点
+
+- Domain：Project/Paper 归档、恢复幂等、`update_details` 校验；
+- Application：授权 404、归档幂等、非终态 Run 409、收录/移除/上传的归档 409、复用已归档 Paper 提示且不恢复；
+- API：全部端点契约与稳定业务码（`project_archived`/`project_has_active_runs`/`paper_archived`）；
+- PostgreSQL：`list_by_owner` 归档过滤、`update` 持久化、`has_active_runs` 状态集合；迁移 upgrade/downgrade 在一次性容器中实跑通过。
 
 ## 测试方式
 

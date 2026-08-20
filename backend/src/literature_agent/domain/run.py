@@ -38,6 +38,16 @@ _FINAL_STATES: set[RunStatus] = {
     RunStatus.CANCELLED,
 }
 
+# 非终态状态：归档 Project 前必须不存在这些状态的 Run
+ACTIVE_RUN_STATUSES: frozenset[RunStatus] = frozenset(
+    {
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.RETRY_WAIT,
+        RunStatus.CANCEL_REQUESTED,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Run:

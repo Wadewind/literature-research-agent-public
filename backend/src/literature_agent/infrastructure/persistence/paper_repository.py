@@ -14,6 +14,7 @@ def _to_domain(orm: PaperORM) -> Paper:
         paper_id=orm.paper_id,
         owner_id=orm.owner_id,
         created_at=orm.created_at,
+        archived_at=orm.archived_at,
     )
 
 
@@ -23,6 +24,7 @@ def _to_orm(paper: Paper) -> PaperORM:
         paper_id=paper.paper_id,
         owner_id=paper.owner_id,
         created_at=paper.created_at,
+        archived_at=paper.archived_at,
     )
 
 
@@ -42,6 +44,13 @@ class SqlalchemyPaperRepository(PaperRepository):
         self._session.add(_to_orm(paper))
         return paper
 
+    async def update(self, paper: Paper) -> None:
+        """按主键更新 Paper 的可变字段。"""
+        orm = await self._session.get(PaperORM, paper.paper_id)
+        if orm is None:
+            return
+        orm.archived_at = paper.archived_at
+
     async def get_by_id(self, paper_id: str) -> Paper | None:
         """按 ID 查询 Paper。"""
         result = await self._session.execute(
@@ -50,14 +59,19 @@ class SqlalchemyPaperRepository(PaperRepository):
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
 
-    async def list_by_owner(self, owner_id: str) -> list[Paper]:
-        """列出 owner 个人文献库中的 Paper。"""
+    async def list_by_owner(
+        self,
+        owner_id: str,
+        include_archived: bool = False,
+    ) -> list[Paper]:
+        """列出 owner 个人文献库中的 Paper；默认排除已归档。"""
+        statement = select(PaperORM).where(
+            PaperORM.owner_id == owner_id,
+            PaperORM.merged_into_paper_id.is_(None),
+        )
+        if not include_archived:
+            statement = statement.where(PaperORM.archived_at.is_(None))
         result = await self._session.execute(
-            select(PaperORM)
-            .where(
-                PaperORM.owner_id == owner_id,
-                PaperORM.merged_into_paper_id.is_(None),
-            )
-            .order_by(PaperORM.created_at.desc()),
+            statement.order_by(PaperORM.created_at.desc()),
         )
         return [_to_domain(row) for row in result.scalars().all()]

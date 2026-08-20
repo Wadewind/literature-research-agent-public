@@ -17,9 +17,22 @@ class FakeProjectRepository(ProjectRepository):
         self._projects[project.project_id] = project
         return project
 
-    async def list_by_owner(self, owner_id: str) -> list[Project]:
-        """返回指定所有者的 Project 列表。"""
-        return [p for p in self._projects.values() if p.owner_id == owner_id]
+    async def update(self, project: Project) -> None:
+        """按主键覆盖内存中的 Project。"""
+        if project.project_id in self._projects:
+            self._projects[project.project_id] = project
+
+    async def list_by_owner(
+        self,
+        owner_id: str,
+        include_archived: bool = False,
+    ) -> list[Project]:
+        """返回指定所有者的 Project 列表；默认排除已归档。"""
+        return [
+            p
+            for p in self._projects.values()
+            if p.owner_id == owner_id and (include_archived or not p.is_archived)
+        ]
 
     async def get_by_id(self, project_id: str) -> Project | None:
         """根据 ID 返回 Project。"""

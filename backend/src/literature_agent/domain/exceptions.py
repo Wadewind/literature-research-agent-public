@@ -72,6 +72,30 @@ class PaperNotFoundError(Exception):
         super().__init__(f"Paper {paper_id} 不存在")
 
 
+class ProjectArchivedError(Exception):
+    """已归档 Project 拒绝写操作。"""
+
+    def __init__(self, project_id: str) -> None:
+        self.project_id = project_id
+        super().__init__(f"Project {project_id} 已归档")
+
+
+class ProjectHasActiveRunsError(Exception):
+    """Project 存在非终态 Run，不能归档。"""
+
+    def __init__(self, project_id: str) -> None:
+        self.project_id = project_id
+        super().__init__(f"Project {project_id} 存在未完成的 Run")
+
+
+class PaperArchivedError(Exception):
+    """已归档 Paper 拒绝收录等写操作。"""
+
+    def __init__(self, paper_id: str) -> None:
+        self.paper_id = paper_id
+        super().__init__(f"Paper {paper_id} 已归档")
+
+
 class DocumentNotReadyError(Exception):
     """Paper Version 尚无当前 Parse Revision，文档内容不可用。"""
 
