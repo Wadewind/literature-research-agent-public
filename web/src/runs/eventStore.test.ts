@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RunEvent } from "../api/types";
-import { applyEvent, createEventStreamState } from "./eventStore";
+import { applyEvent, createEventStreamState, KNOWN_EVENT_TYPES } from "./eventStore";
 
 function makeEvent(sequence: number, eventType = "parse_started"): RunEvent {
   return {
@@ -49,6 +49,16 @@ describe("applyEvent", () => {
     state = applyEvent(state, makeEvent(2, "run_completed"));
 
     expect(state.closed).toBe(true);
+  });
+
+  it("取消请求事件保持 SSE 打开并可被订阅", () => {
+    const state = applyEvent(
+      createEventStreamState(),
+      makeEvent(1, "run_cancel_requested"),
+    );
+
+    expect(KNOWN_EVENT_TYPES).toContain("run_cancel_requested");
+    expect(state.closed).toBe(false);
   });
 
   it("终态后仍忽略重复事件且保持收束", () => {

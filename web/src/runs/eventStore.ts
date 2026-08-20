@@ -38,6 +38,7 @@ export const KNOWN_EVENT_TYPES = [
   "run_created",
   "run_started",
   "run_requeued",
+  "run_cancel_requested",
   "parse_started",
   "parse_completed",
   "normalize_completed",

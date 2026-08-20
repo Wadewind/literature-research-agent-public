@@ -225,7 +225,11 @@ class RunService:
                 run_repo=run_repo,
                 event_repo=self._event_repo_factory(session),
                 target_status=target_status,
-                event_type="run_cancelled",
+                event_type=(
+                    "run_cancel_requested"
+                    if target_status == RunStatus.CANCEL_REQUESTED
+                    else "run_cancelled"
+                ),
                 actor_type="user",
                 correlation_id=correlation_id,
                 payload={},

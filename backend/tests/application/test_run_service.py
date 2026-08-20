@@ -103,6 +103,8 @@ async def test_request_cancel_running_run(service: RunService) -> None:
     updated = await service.cancel_run(actor, run.run_id, "corr-3")
 
     assert updated.status == RunStatus.CANCEL_REQUESTED
+    events = await service.list_events(actor, run.run_id)
+    assert events[-1].event_type == "run_cancel_requested"
 
 
 @pytest.mark.asyncio
@@ -116,6 +118,8 @@ async def test_confirm_cancel_after_request(service: RunService) -> None:
     updated = await service.cancel_run(actor, run.run_id, "corr-4")
 
     assert updated.status == RunStatus.CANCELLED
+    events = await service.list_events(actor, run.run_id)
+    assert events[-1].event_type == "run_cancelled"
 
 
 @pytest.mark.asyncio
