@@ -14,7 +14,7 @@ agent-service/
 
 ## 本地运行
 
-需要 4 个进程：postgres/valkey 用容器，API、Worker 和前端在本地运行。
+需要 PostgreSQL、Valkey、API、Worker 和 Web 五个服务：前两者用容器，后三者在本地运行。
 
 ```bash
 # 终端 1：数据库与队列（容器，可长期运行）

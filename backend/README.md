@@ -12,7 +12,7 @@ The service is built through Phase 1 vertical slices. The current slices expose:
 
 - FastAPI application factory with lifespan-managed application state
 - `GET /health/live`
-- Project CRUD API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/{project_id}`)
+- Project 创建、列表与详情 API（`POST /api/v1/projects`、`GET /api/v1/projects`、`GET /api/v1/projects/{project_id}`）
 - Paper file upload API (`POST /api/v1/projects/{project_id}/paper-files`) with idempotency
 - owner 级个人文献库（`GET /api/v1/library/papers`）；相同 owner + SHA-256 自动复用 PaperVersion 和解析结果
 - Project 收录关系 API（`GET/POST /api/v1/projects/{project_id}/papers`、`DELETE .../papers/{paper_id}`）；移出 Project 不删除个人文献库资产
@@ -38,13 +38,19 @@ opt-in: `AGENT_RUN_DOCLING_TESTS=1 uv run pytest tests/infrastructure/test_docli
 
 ## 本地开发
 
-启动 PostgreSQL、Valkey（及可选的 worker 服务）：
+从仓库根目录只启动 PostgreSQL 和 Valkey，API 与 Worker 都在宿主机的
+`backend/` 目录运行：
 
 ```bash
-cd deploy/compose
-docker compose up -d            # postgres + valkey + worker
-docker compose up -d postgres valkey   # 只启动基础设施，worker 在宿主机运行
+docker compose -f deploy/compose/compose.yml up -d postgres valkey
+cd backend
+uv run agent-service
+# 另一个终端：cd backend && uv run agent-worker
 ```
+
+当前 Compose 中的 `worker` 使用容器内 `/data/storage` volume，而宿主机 API
+默认使用 `backend/data/storage`。在 Compose 尚未同时提供 API 和共享 Storage
+配置前，不要把容器 Worker 与宿主机 API 混用，否则 Worker 无法读取上传的 PDF。
 
 执行迁移：
 
