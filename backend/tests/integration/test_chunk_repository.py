@@ -1,0 +1,229 @@
+"""ChunkSet / Chunk / ChunkElementLink Repository 的 PostgreSQL 集成测试。"""
+
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.exc import IntegrityError
+
+from literature_agent.domain.chunk import (
+    Chunk,
+    ChunkElementLink,
+    ChunkSetStatus,
+    create_chunk_set,
+)
+from literature_agent.domain.chunk_profile import ChunkProfile
+from literature_agent.domain.document_element import (
+    DocumentElement,
+    ElementType,
+    compute_content_hash,
+)
+from literature_agent.domain.paper import create_paper
+from literature_agent.domain.paper_version import create_paper_version
+from literature_agent.domain.parse_profile import ParseProfile
+from literature_agent.domain.parse_revision import create_parse_revision
+from literature_agent.infrastructure.persistence.chunk_repository import (
+    SqlalchemyChunkRepository,
+)
+from literature_agent.infrastructure.persistence.chunk_set_repository import (
+    SqlalchemyChunkSetRepository,
+)
+from literature_agent.infrastructure.persistence.element_repository import (
+    SqlalchemyElementRepository,
+)
+from literature_agent.infrastructure.persistence.paper_repository import (
+    SqlalchemyPaperRepository,
+)
+from literature_agent.infrastructure.persistence.paper_version_repository import (
+    SqlalchemyPaperVersionRepository,
+)
+from literature_agent.infrastructure.persistence.parse_revision_repository import (
+    SqlalchemyParseRevisionRepository,
+)
+
+_PARSE_PROFILE = ParseProfile("fake", "1.0", {})
+_CHUNK_PROFILE = ChunkProfile(
+    embedding_provider="test", embedding_model="m", embedding_dimensions=1024
+)
+
+
+@pytest_asyncio.fixture
+async def revision_id(session, project: str) -> str:
+    """创建 Paper/Version/Parse Revision，返回 revision_id。"""
+    paper = create_paper(owner_id="user-1")
+    await SqlalchemyPaperRepository(session).add(paper)
+    await session.flush()
+    version = create_paper_version(
+        paper_id=paper.paper_id,
+        owner_id="user-1",
+        file_hash="c" * 64,
+        storage_key="user-1/proj/paper/paper.pdf",
+        size_bytes=100,
+        content_type="application/pdf",
+    )
+    await SqlalchemyPaperVersionRepository(session).add(version)
+    await session.flush()
+    revision = create_parse_revision(
+        version.version_id,
+        _PARSE_PROFILE.parser_name,
+        _PARSE_PROFILE.parser_version,
+        _PARSE_PROFILE.profile_hash,
+    )
+    await SqlalchemyParseRevisionRepository(session).add(revision)
+    await session.commit()
+    return revision.revision_id
+
+
+@pytest_asyncio.fixture
+async def chunk_set_id(session, revision_id: str) -> str:
+    """创建一个 RUNNING 的 ChunkSet，返回 chunk_set_id。"""
+    chunk_set = create_chunk_set(
+        revision_id, _CHUNK_PROFILE.profile_hash, _CHUNK_PROFILE.config
+    )
+    await SqlalchemyChunkSetRepository(session).add(chunk_set)
+    await session.commit()
+    return chunk_set.chunk_set_id
+
+
+def _chunk(chunk_set_id: str, sequence: int, text: str | None = None) -> Chunk:
+    """构造测试 Chunk。"""
+    text = text or f"块{sequence}"
+    return Chunk(
+        chunk_id=str(uuid4()),
+        chunk_set_id=chunk_set_id,
+        sequence=sequence,
+        text=text,
+        token_count=10,
+        section_path="1",
+        page_start=1,
+        page_end=2,
+        content_hash=compute_content_hash("paragraph", text, {}),
+    )
+
+
+def _element(revision_id: str, sequence: int) -> DocumentElement:
+    """构造测试 Element。"""
+    text = f"段落{sequence}"
+    return DocumentElement(
+        element_id=str(uuid4()),
+        revision_id=revision_id,
+        element_type=ElementType.PARAGRAPH,
+        sequence=sequence,
+        text=text,
+        content_hash=compute_content_hash("paragraph", text, {}),
+    )
+
+
+async def test_chunk_set_roundtrip_and_unique(session, revision_id: str) -> None:
+    """ChunkSet 可写入读回；同 revision + profile 唯一。"""
+    repo = SqlalchemyChunkSetRepository(session)
+    chunk_set = create_chunk_set(
+        revision_id, _CHUNK_PROFILE.profile_hash, _CHUNK_PROFILE.config
+    )
+    await repo.add(chunk_set)
+    await session.commit()
+
+    loaded = await repo.get_by_revision_and_profile(
+        revision_id, _CHUNK_PROFILE.profile_hash
+    )
+    assert loaded is not None
+    assert loaded.chunk_set_id == chunk_set.chunk_set_id
+    assert loaded.status == ChunkSetStatus.RUNNING
+    assert loaded.config == _CHUNK_PROFILE.config
+
+    duplicate = create_chunk_set(
+        revision_id, _CHUNK_PROFILE.profile_hash, _CHUNK_PROFILE.config
+    )
+    await repo.add(duplicate)
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
+
+
+async def test_chunk_set_save_status(session, chunk_set_id: str) -> None:
+    """save 应持久化状态、错误与完成时间。"""
+    repo = SqlalchemyChunkSetRepository(session)
+    chunk_set = await repo.get_by_id(chunk_set_id)
+    assert chunk_set is not None
+    now = datetime.now(UTC)
+    await repo.save(chunk_set.mark_ready(now))
+    await session.commit()
+
+    loaded = await repo.get_by_id(chunk_set_id)
+    assert loaded is not None
+    assert loaded.status == ChunkSetStatus.READY
+    assert loaded.completed_at is not None
+
+    failed = loaded.mark_failed({"type": "RuntimeError", "message": "x"}, now)
+    await repo.save(failed)
+    await session.commit()
+    loaded = await repo.get_by_id(chunk_set_id)
+    assert loaded is not None
+    assert loaded.status == ChunkSetStatus.FAILED
+    assert loaded.error is not None
+    assert loaded.error["type"] == "RuntimeError"
+
+
+async def test_chunks_roundtrip_and_sequence_unique(session, chunk_set_id: str) -> None:
+    """Chunk 批量写入、顺序读取、字段往返与 (chunk_set, sequence) 唯一约束。"""
+    repo = SqlalchemyChunkRepository(session)
+    chunks = [_chunk(chunk_set_id, 1), _chunk(chunk_set_id, 2)]
+    await repo.add_many(chunks)
+    await session.commit()
+
+    loaded = await repo.list_by_chunk_set(chunk_set_id)
+    assert [c.sequence for c in loaded] == [1, 2]
+    assert loaded[0].section_path == "1"
+    assert loaded[0].page_start == 1
+    assert loaded[0].page_end == 2
+    assert loaded[0].token_count == 10
+    assert await repo.count_by_chunk_set(chunk_set_id) == 2
+
+    await repo.add_many([_chunk(chunk_set_id, 1)])
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
+
+
+async def test_chunk_element_links_roundtrip_and_pk(
+    session, revision_id: str, chunk_set_id: str
+) -> None:
+    """映射写入读回（按 chunk/sequence 有序）与 (chunk_id, element_id) 复合主键。"""
+    element_repo = SqlalchemyElementRepository(session)
+    elements = [_element(revision_id, 1), _element(revision_id, 2)]
+    await element_repo.add_many(elements)
+    chunk_repo = SqlalchemyChunkRepository(session)
+    chunk = _chunk(chunk_set_id, 1)
+    await chunk_repo.add_many([chunk])
+    # 先落 Chunk 再落引用它的 links（UOW 不自动推导跨 Repository 插入顺序）
+    await session.flush()
+    await chunk_repo.add_links(
+        [
+            ChunkElementLink(
+                chunk_id=chunk.chunk_id, element_id=elements[1].element_id, sequence=2
+            ),
+            ChunkElementLink(
+                chunk_id=chunk.chunk_id, element_id=elements[0].element_id, sequence=1
+            ),
+        ]
+    )
+    await session.commit()
+
+    links = await chunk_repo.list_links([chunk.chunk_id])
+    assert [(link.element_id, link.sequence) for link in links] == [
+        (elements[0].element_id, 1),
+        (elements[1].element_id, 2),
+    ]
+
+    # 复合主键：同一 Chunk 不重复绑定同一 Element
+    await chunk_repo.add_links(
+        [
+            ChunkElementLink(
+                chunk_id=chunk.chunk_id, element_id=elements[0].element_id, sequence=3
+            )
+        ]
+    )
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()

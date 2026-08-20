@@ -42,7 +42,7 @@ from literature_agent.domain.paper import create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import create_outbox_entry
-from literature_agent.domain.run import Run, create_run
+from literature_agent.domain.run import Run, RunType, create_run
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -281,7 +281,7 @@ class IngestionService:
             run = create_run(
                 project_id=project_id,
                 owner_id=actor.owner_id,
-                run_type="ingestion",
+                run_type=RunType.INGESTION,
                 input_payload={
                     "paper_id": paper.paper_id,
                     "version_id": version.version_id,

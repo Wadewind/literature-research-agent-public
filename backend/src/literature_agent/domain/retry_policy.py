@@ -6,6 +6,7 @@
 
 from literature_agent.domain.exceptions import (
     FileValidationError,
+    IndexingInputError,
     InvalidPdfInputError,
 )
 from literature_agent.domain.model_errors import (
@@ -19,6 +20,7 @@ from literature_agent.domain.queue_outbox import compute_dispatch_backoff
 _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     InvalidPdfInputError,
     FileValidationError,
+    IndexingInputError,
     ModelAuthError,
     ModelInvalidRequestError,
     ModelResponseError,

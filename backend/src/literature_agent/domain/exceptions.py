@@ -106,8 +106,6 @@ class DocumentNotReadyError(Exception):
 
 class ParserError(Exception):
     """解析失败的基类，按子类决定降级与重试策略。"""
-
-
 class InvalidPdfInputError(ParserError):
     """输入类错误：文件损坏、加密或结构异常。
 
@@ -118,3 +116,14 @@ class InvalidPdfInputError(ParserError):
 
 class ParserResourceError(ParserError):
     """资源类错误（内存、进程等）：不降级，直接失败并交由重试策略处理。"""
+
+
+class IndexingInputError(Exception):
+    """索引输入类永久错误：Parse Revision 不存在或尚未解析成功。
+
+    重试无法改变结果，直接令 indexing Run 进入 FAILED。
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)

@@ -14,16 +14,21 @@ import os
 import socket
 from contextlib import suppress
 from typing import Any
+from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
 from arq.worker import run_worker
 
+from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.application.ports.document_parser import DocumentParser
+from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.application.run_reconcile_service import RunReconcileService
+from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
+from literature_agent.domain.run import RunType
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.parsing.fake_parser import (
     FakeDocumentParser,
@@ -32,6 +37,12 @@ from literature_agent.infrastructure.parsing.fallback_parser import FallbackDocu
 from literature_agent.infrastructure.parsing.pypdf_parser import PypdfDocumentParser
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
+)
+from literature_agent.infrastructure.persistence.chunk_repository import (
+    SqlalchemyChunkRepository,
+)
+from literature_agent.infrastructure.persistence.chunk_set_repository import (
+    SqlalchemyChunkSetRepository,
 )
 from literature_agent.infrastructure.persistence.database import (
     create_engine,
@@ -87,6 +98,23 @@ def _build_parser_and_profile(settings: Settings) -> tuple[DocumentParser, Parse
         )
         return parser, ParseProfile(PARSER_NAME, PARSER_VERSION, {"ocr_enabled": False})
     raise ValueError(f"未知 parser_backend: {settings.parser_backend}")
+
+
+def _build_chunk_profile(settings: Settings) -> ChunkProfile:
+    """从 Settings 构建当前活动的 ChunkProfile。
+
+    Chunk 参数来自 ``AGENT_CHUNK_*``；Embedding 三元组复用切片 3 的
+    ``AGENT_EMBEDDING_*``。Settings 无独立 provider 字段，provider 以
+    ``embedding_base_url`` 的主机名标识（base_url 变化即 Provider 变化）。
+    """
+    return ChunkProfile(
+        max_tokens=settings.chunk_max_tokens,
+        overlap_tokens=settings.chunk_overlap_tokens,
+        embedding_provider=urlparse(settings.embedding_base_url).netloc
+        or settings.embedding_base_url,
+        embedding_model=settings.embedding_model,
+        embedding_dimensions=settings.embedding_dimensions,
+    )
 
 
 async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
@@ -153,27 +181,53 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         event_repo_factory=SqlalchemyEventRepository,
     )
     parser, profile = _build_parser_and_profile(settings)
+    ingestion_executor = IngestionExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+        element_repo_factory=SqlalchemyElementRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        parser=parser,
+        profile=profile,
+        parser_timeout_seconds=settings.parser_timeout_seconds,
+        max_run_attempts=settings.max_run_attempts,
+        event_notifier=event_notifier,
+    )
+    indexing_executor = IndexingExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+        element_repo_factory=SqlalchemyElementRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        chunk_repo_factory=SqlalchemyChunkRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        profile=_build_chunk_profile(settings),
+        max_run_attempts=settings.max_run_attempts,
+        event_notifier=event_notifier,
+    )
+    # 组合 dispatcher：按 run_type 显式分发，未知类型显式失败
+    dispatcher = RunDispatcher(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        executors={
+            RunType.INGESTION: ingestion_executor.execute,
+            RunType.INDEXING: indexing_executor.execute,
+        },
+        event_notifier=event_notifier,
+    )
     ctx["run_execution_service"] = RunExecutionService(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
         attempt_repo_factory=SqlalchemyAttemptRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
-        executor=IngestionExecutor(
-            session_factory=session_factory,
-            run_repo_factory=SqlalchemyRunRepository,
-            event_repo_factory=SqlalchemyEventRepository,
-            paper_version_repo_factory=SqlalchemyPaperVersionRepository,
-            parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
-            element_repo_factory=SqlalchemyElementRepository,
-            attempt_repo_factory=SqlalchemyAttemptRepository,
-            outbox_repo_factory=SqlalchemyOutboxRepository,
-            parser=parser,
-            profile=profile,
-            parser_timeout_seconds=settings.parser_timeout_seconds,
-            max_run_attempts=settings.max_run_attempts,
-            event_notifier=event_notifier,
-        ).execute,
+        executor=dispatcher.execute,
         worker_id=worker_id,
         heartbeat_interval_seconds=settings.worker_heartbeat_interval_seconds,
         max_run_attempts=settings.max_run_attempts,

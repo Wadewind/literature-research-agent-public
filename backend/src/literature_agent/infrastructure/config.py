@@ -27,6 +27,9 @@ _DEFAULT_CHAT_BASE_URL = "https://api.deepseek.com"
 _DEFAULT_CHAT_MODEL = "deepseek-v4-flash"
 _DEFAULT_MODEL_TIMEOUT_SECONDS = 60.0
 _DEFAULT_MODEL_MAX_RETRIES = 2
+# Chunk 切分默认值（2026-08-20 定稿）：实验起点，切片 6 检索实验可校准
+_DEFAULT_CHUNK_MAX_TOKENS = 512
+_DEFAULT_CHUNK_OVERLAP_TOKENS = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +70,8 @@ class Settings:
     chat_model: str = field(default=_DEFAULT_CHAT_MODEL)
     model_timeout_seconds: float = field(default=_DEFAULT_MODEL_TIMEOUT_SECONDS)
     model_max_retries: int = field(default=_DEFAULT_MODEL_MAX_RETRIES)
+    chunk_max_tokens: int = field(default=_DEFAULT_CHUNK_MAX_TOKENS)
+    chunk_overlap_tokens: int = field(default=_DEFAULT_CHUNK_OVERLAP_TOKENS)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -121,6 +126,14 @@ class Settings:
         model_max_retries = (
             int(raw_model_retries) if raw_model_retries else _DEFAULT_MODEL_MAX_RETRIES
         )
+        raw_chunk_max = os.getenv("AGENT_CHUNK_MAX_TOKENS")
+        chunk_max_tokens = (
+            int(raw_chunk_max) if raw_chunk_max else _DEFAULT_CHUNK_MAX_TOKENS
+        )
+        raw_chunk_overlap = os.getenv("AGENT_CHUNK_OVERLAP_TOKENS")
+        chunk_overlap_tokens = (
+            int(raw_chunk_overlap) if raw_chunk_overlap else _DEFAULT_CHUNK_OVERLAP_TOKENS
+        )
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -147,4 +160,6 @@ class Settings:
             chat_model=os.getenv("AGENT_CHAT_MODEL", _DEFAULT_CHAT_MODEL),
             model_timeout_seconds=model_timeout,
             model_max_retries=model_max_retries,
+            chunk_max_tokens=chunk_max_tokens,
+            chunk_overlap_tokens=chunk_overlap_tokens,
         )

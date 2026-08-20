@@ -15,7 +15,7 @@ from literature_agent.domain.parse_revision import (
     create_parse_revision,
 )
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
-from literature_agent.domain.run import Run, RunStatus, create_run
+from literature_agent.domain.run import Run, RunStatus, RunType, create_run
 from literature_agent.infrastructure.parsing.fake_parser import FakeDocumentParser
 from tests.fakes.fake_attempt_repository import FakeAttemptRepository
 from tests.fakes.fake_element_repository import FakeElementRepository
@@ -421,6 +421,104 @@ async def test_parser_timeout_schedules_retry_without_fallback(
     assert revision.status == ParseRevisionStatus.FAILED
     assert revision.error is not None
     assert revision.error["type"] == "parser_timeout"
+
+
+async def test_success_creates_indexing_run_in_same_transaction(
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo, parser,
+) -> None:
+    """解析成功：结果提交事务内同时创建 indexing Run + run_created 事件 + Outbox。"""
+    version_id = await _add_version(version_repo)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
+    executor = _make_executor(
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
+    )
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
+
+    outcome = await service.execute(run.run_id, correlation_id="job-1")
+
+    assert outcome == ExecutionOutcome.COMPLETED
+    revision = await revision_repo.get_by_version_and_profile(
+        version_id, _PROFILE.profile_hash
+    )
+    assert revision is not None
+    indexing_runs = [
+        r for r in run_repo._runs.values() if r.run_type == RunType.INDEXING.value
+    ]
+    assert len(indexing_runs) == 1
+    indexing_run = indexing_runs[0]
+    assert indexing_run.status == RunStatus.QUEUED
+    # Run 归属与触发它的 ingestion Run 相同
+    assert indexing_run.project_id == run.project_id
+    assert indexing_run.owner_id == run.owner_id
+    assert indexing_run.input_payload == {
+        "parse_revision_id": revision.revision_id,
+        "version_id": version_id,
+    }
+    # run_created 事件与 Outbox 记录已就位（同一事务原子创建）
+    indexing_events = _events(event_repo, indexing_run.run_id)
+    assert [e.event_type for e in indexing_events] == ["run_created"]
+    entry = await outbox_repo.get_by_run_id(indexing_run.run_id)
+    assert entry is not None
+    assert entry.status == OutboxStatus.PENDING
+
+
+async def test_reuse_path_also_creates_indexing_run(
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo, parser,
+) -> None:
+    """复用已有 Revision 的提前返回路径同样触发 indexing Run。"""
+    version_id = await _add_version(version_repo)
+    existing = create_parse_revision(
+        version_id, _PROFILE.parser_name, _PROFILE.parser_version, _PROFILE.profile_hash
+    )
+    from datetime import UTC, datetime
+
+    existing = existing.mark_succeeded(datetime.now(UTC))
+    await revision_repo.add(existing)
+
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
+    executor = _make_executor(
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
+    )
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
+
+    outcome = await service.execute(run.run_id, correlation_id="job-1")
+
+    assert outcome == ExecutionOutcome.COMPLETED
+    assert parser.calls == 0
+    indexing_runs = [
+        r for r in run_repo._runs.values() if r.run_type == RunType.INDEXING.value
+    ]
+    assert len(indexing_runs) == 1
+    assert indexing_runs[0].input_payload["parse_revision_id"] == existing.revision_id
+    entry = await outbox_repo.get_by_run_id(indexing_runs[0].run_id)
+    assert entry is not None
+    assert entry.status == OutboxStatus.PENDING
+
+
+async def test_defense_rejects_non_ingestion_run(
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo, parser,
+) -> None:
+    """防御：IngestionExecutor 收到非 ingestion 类型直接抛错。"""
+    from literature_agent.domain.run import RunType as _RunType
+
+    run = create_run(
+        project_id="p-1",
+        owner_id="user-1",
+        run_type=_RunType.INDEXING,
+        input_payload={"parse_revision_id": "rev-1"},
+    )
+    executor = _make_executor(
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser,
+    )
+
+    with pytest.raises(ValueError, match="非 ingestion"):
+        await executor.execute(run, correlation_id="job-1")
 
 
 async def test_degraded_result_is_persisted_on_revision(

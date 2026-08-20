@@ -10,6 +10,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TypeVar
 
@@ -45,7 +46,8 @@ from literature_agent.domain.parse_revision import (
     ParseRevisionStatus,
     create_parse_revision,
 )
-from literature_agent.domain.run import Run, RunStatus
+from literature_agent.domain.queue_outbox import create_outbox_entry
+from literature_agent.domain.run import Run, RunStatus, RunType, create_run
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -119,6 +121,9 @@ class IngestionExecutor[TSession: Session]:
             run: 已认领的 RUNNING 状态 Run。
             correlation_id: 关联标识符。
         """
+        # 防御：dispatcher 已按 run_type 分发，这里兜底双保险
+        if run.run_type != RunType.INGESTION.value:
+            raise ValueError(f"IngestionExecutor 收到非 ingestion Run: {run.run_type}")
         version_id = run.input_payload.get("version_id", "")
 
         # 事务 A：准备 Revision（复用/创建/重置）并记录 parse_started
@@ -268,6 +273,48 @@ class IngestionExecutor[TSession: Session]:
             },
             correlation_id,
         )
+        # 解析成功必然跟随索引：同事务创建 indexing Run + Event + Outbox
+        await self._create_indexing_run(session, run_row, revision, correlation_id)
+
+    async def _create_indexing_run(
+        self,
+        session: TSession,
+        source_run: Run,
+        revision: DocumentParseRevision,
+        correlation_id: str,
+    ) -> None:
+        """在结果提交事务内创建后续 indexing Run（Run + Event + Outbox 原子）。
+
+        indexing Run 归属与触发它的 ingestion Run 相同（project/owner）；
+        ``input_payload`` 携带 ``parse_revision_id`` 与冗余的 ``version_id``
+        （用于事件与排查）。
+        """
+        indexing_run = create_run(
+            project_id=source_run.project_id,
+            owner_id=source_run.owner_id,
+            run_type=RunType.INDEXING,
+            input_payload={
+                "parse_revision_id": revision.revision_id,
+                "version_id": revision.version_id,
+            },
+        )
+        created_event = create_event(
+            run_id=indexing_run.run_id,
+            sequence=1,
+            event_type="run_created",
+            actor_type="system",
+            correlation_id=correlation_id,
+            payload={"status": indexing_run.status.value},
+        )
+        # run_created 事件占用 sequence 1，Run 推进到 2 再入库
+        await self._run_repo_factory(session).add(
+            replace(indexing_run, event_sequence=2)
+        )
+        await session.flush()
+        await self._event_repo_factory(session).add(created_event)
+        await self._outbox_repo_factory(session).add(
+            create_outbox_entry(indexing_run.run_id)
+        )
 
     async def _commit_success(
         self,
@@ -309,6 +356,8 @@ class IngestionExecutor[TSession: Session]:
                  "reused": False},
                 correlation_id,
             )
+            # 解析成功必然跟随索引：同事务创建 indexing Run + Event + Outbox
+            await self._create_indexing_run(session, run_row, revision, correlation_id)
             await session.commit()
         await notify_run_event(self._event_notifier, run.run_id)
 

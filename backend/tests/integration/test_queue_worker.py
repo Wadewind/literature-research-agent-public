@@ -15,15 +15,18 @@ from arq.worker import Worker
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from testcontainers.community.redis import RedisContainer
 
+from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
+from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
+from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.paper import create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.project import create_project
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
-from literature_agent.domain.run import RunStatus, create_run
+from literature_agent.domain.run import RunStatus, RunType, create_run
 from literature_agent.infrastructure.parsing.fake_parser import (
     PARSER_NAME,
     PARSER_VERSION,
@@ -31,6 +34,12 @@ from literature_agent.infrastructure.parsing.fake_parser import (
 )
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
+)
+from literature_agent.infrastructure.persistence.chunk_repository import (
+    SqlalchemyChunkRepository,
+)
+from literature_agent.infrastructure.persistence.chunk_set_repository import (
+    SqlalchemyChunkSetRepository,
 )
 from literature_agent.infrastructure.persistence.element_repository import (
     SqlalchemyElementRepository,
@@ -116,20 +125,50 @@ def _make_execution_service(session_factory) -> RunExecutionService:
         event_repo_factory=SqlalchemyEventRepository,
         attempt_repo_factory=SqlalchemyAttemptRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
-        executor=IngestionExecutor(
-            session_factory=session_factory,
-            run_repo_factory=SqlalchemyRunRepository,
-            event_repo_factory=SqlalchemyEventRepository,
-            paper_version_repo_factory=SqlalchemyPaperVersionRepository,
-            parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
-            element_repo_factory=SqlalchemyElementRepository,
-            attempt_repo_factory=SqlalchemyAttemptRepository,
-            outbox_repo_factory=SqlalchemyOutboxRepository,
-            parser=FakeDocumentParser(),
-            profile=ParseProfile(PARSER_NAME, PARSER_VERSION, {}),
-        ).execute,
+        executor=_make_dispatcher(session_factory).execute,
         worker_id="test-worker:integration",
         heartbeat_interval_seconds=3600.0,
+    )
+
+
+def _make_dispatcher(session_factory) -> RunDispatcher:
+    """构建 ingestion + indexing 的组合分发器（与 Worker 装配一致）。"""
+    ingestion = IngestionExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+        element_repo_factory=SqlalchemyElementRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        parser=FakeDocumentParser(),
+        profile=ParseProfile(PARSER_NAME, PARSER_VERSION, {}),
+    )
+    indexing = IndexingExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+        element_repo_factory=SqlalchemyElementRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        chunk_repo_factory=SqlalchemyChunkRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        profile=ChunkProfile(
+            embedding_provider="test",
+            embedding_model="m",
+            embedding_dimensions=1024,
+        ),
+    )
+    return RunDispatcher(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        executors={
+            RunType.INGESTION: ingestion.execute,
+            RunType.INDEXING: indexing.execute,
+        },
     )
 
 
@@ -254,3 +293,92 @@ async def test_duplicate_enqueue_deduplicated_by_job_id(valkey_url: str) -> None
         assert job2 is None
     finally:
         await pool.aclose()
+
+
+async def test_ingestion_then_indexing_completes_end_to_end(
+    db_engine, valkey_url: str, queued_run: str
+) -> None:
+    """端到端：ingestion SUCCEEDED 后自动触发 indexing，ChunkSet ready、Chunk 可查。"""
+    queue = ArqRunQueue(valkey_url)
+    session_factory = _session_factory(db_engine)
+    dispatch_service = OutboxDispatchService(
+        session_factory=session_factory,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        queue=queue,
+        max_attempts=10,
+        batch_size=20,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+    )
+
+    async def _run_worker_once() -> None:
+        """以 burst 模式跑一轮 Worker（与 Worker 进程相同的分发装配）。"""
+        worker = Worker(
+            redis_settings=RedisSettings.from_dsn(valkey_url),
+            functions=[execute_run],
+            burst=True,
+            handle_signals=False,
+            max_tries=1,
+            ctx={"run_execution_service": _make_execution_service(session_factory)},
+        )
+        await worker.async_run()
+
+    # 第一轮：ingestion
+    assert await dispatch_service.dispatch_pending() == 1
+    await _run_worker_once()
+
+    # ingestion 成功后在同事务创建了 indexing Run + Outbox
+    indexing_run_id: str | None = None
+    async with session_factory() as session:
+        run_repo = SqlalchemyRunRepository(session)
+        ingestion_run = await run_repo.get_by_id(queued_run)
+        assert ingestion_run is not None
+        assert ingestion_run.status == RunStatus.SUCCEEDED
+        # 找到自动创建的 indexing Run（通过 Outbox 记录定位）
+        outbox_repo = SqlalchemyOutboxRepository(session)
+        due = await outbox_repo.list_due_pending(datetime.now(UTC), limit=10)
+        assert len(due) == 1
+        indexing_run_id = due[0].run_id
+        indexing_run = await run_repo.get_by_id(indexing_run_id)
+        assert indexing_run is not None
+        assert indexing_run.run_type == RunType.INDEXING.value
+        assert indexing_run.project_id == ingestion_run.project_id
+        assert indexing_run.owner_id == ingestion_run.owner_id
+
+    # 第二轮：indexing
+    assert await dispatch_service.dispatch_pending() == 1
+    await _run_worker_once()
+
+    async with session_factory() as session:
+        run_repo = SqlalchemyRunRepository(session)
+        indexing_run = await run_repo.get_by_id(indexing_run_id)
+        assert indexing_run is not None
+        assert indexing_run.status == RunStatus.SUCCEEDED
+        events = await SqlalchemyEventRepository(session).list_by_run(indexing_run_id)
+        assert [e.event_type for e in events] == [
+            "run_created",
+            "run_started",
+            "indexing_started",
+            "chunking_completed",
+            "indexing_completed",
+        ]
+        # ChunkSet ready、Chunk 与 Element 映射可查
+        revision_id = indexing_run.input_payload["parse_revision_id"]
+        # profile hash 由执行器使用的 ChunkProfile 决定，按 revision 反查
+        chunk_repo = SqlalchemyChunkRepository(session)
+        from sqlalchemy import select
+
+        from literature_agent.infrastructure.persistence.models import ChunkSetORM
+
+        result = await session.execute(
+            select(ChunkSetORM).where(ChunkSetORM.parse_revision_id == revision_id)
+        )
+        row = result.scalar_one()
+        assert row.status == "ready"
+        chunks = await chunk_repo.list_by_chunk_set(row.chunk_set_id)
+        assert len(chunks) > 0
+        links = await chunk_repo.list_links([c.chunk_id for c in chunks])
+        assert links
+        assert any("准确率" in c.text for c in chunks)
+
+    await queue.aclose()

@@ -36,6 +36,7 @@ SSE (GET /runs/{run_id}/events/stream)
   QUEUED → CANCELLED
   ```
 - `Run` 是不可变 dataclass，保存 `run_id`、`project_id`、`owner_id`、`run_type`、`status`、`input_payload`、`result_payload`、`event_sequence`、`created_at`、`updated_at`。
+- `run_type` 取值受 `RunType` 枚举（`ingestion`/`indexing`/`rag_answer`）约束（Phase 2 切片 4）：DB 列保持自由字符串以兼容历史数据，`create_run` 创建时校验枚举取值，非法值直接 `ValueError`。
 - `Event` 是不可变值对象，字段包含 `event_id`、`event_version`、`event_type`、`run_id`、`sequence`、`occurred_at`、`actor_type`、`correlation_id`、`payload`。
 - `event_sequence` 表示下一个可用序号；创建 Run 后从 2 开始（`run_created` 占 sequence=1）。
 - 数据库：`runs` 表、`events` 表，唯一约束 `(run_id, sequence)`。

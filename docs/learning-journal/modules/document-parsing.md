@@ -23,6 +23,7 @@ RunExecutionService.execute（认领 QUEUED → RUNNING + run_started）
       │    批量写 parse_completed、normalize_completed 事件
       └─ 事务 C（原子提交）：Element + SourceLocation + Revision succeeded
            （degraded/warnings）+ current 指针 + Run SUCCEEDED + result_committed
+           + 同事务创建 indexing Run + run_created + Outbox（Phase 2 切片 4 起）
 
 DocumentQueryService（读路径）
   → 校验 owner → Project → ProjectPaper(selected_version) → PaperVersion

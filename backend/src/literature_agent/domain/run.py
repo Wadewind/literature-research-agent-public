@@ -8,6 +8,18 @@ from uuid import uuid4
 from literature_agent.domain.exceptions import InvalidRunTransitionError
 
 
+class RunType(StrEnum):
+    """Run 类型枚举。
+
+    Worker 按 ``run_type`` 显式分发到对应执行器；``RAG_ANSWER``
+    在切片 8 接线，本阶段只定义。
+    """
+
+    INGESTION = "ingestion"
+    INDEXING = "indexing"
+    RAG_ANSWER = "rag_answer"
+
+
 class RunStatus(StrEnum):
     """Run 生命周期状态。"""
 
@@ -115,7 +127,7 @@ class Run:
 def create_run(
     project_id: str,
     owner_id: str,
-    run_type: str,
+    run_type: RunType | str,
     input_payload: dict | None = None,
 ) -> Run:
     """创建新的 Run 实体。
@@ -123,18 +135,21 @@ def create_run(
     参数:
         project_id: 所属 Project 标识符。
         owner_id: 所有者标识符。
-        run_type: Run 类型。
+        run_type: Run 类型，必须是 ``RunType`` 的合法取值。
         input_payload: 可选的输入数据。
 
     返回:
         状态为 ``QUEUED``、``event_sequence`` 为 1 的新 Run。
+
+    异常:
+        ValueError: ``run_type`` 不是合法的 ``RunType`` 取值。
     """
     now = datetime.now(UTC)
     return Run(
         run_id=str(uuid4()),
         project_id=project_id,
         owner_id=owner_id,
-        run_type=run_type,
+        run_type=RunType(run_type).value,
         status=RunStatus.QUEUED,
         input_payload=input_payload or {},
         result_payload={},

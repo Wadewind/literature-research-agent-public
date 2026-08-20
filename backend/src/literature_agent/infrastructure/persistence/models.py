@@ -416,6 +416,89 @@ class IdempotencyKeyORM(Base):
     )
 
 
+class ChunkSetORM(Base):
+    """ChunkSet 的持久化映射。"""
+
+    __tablename__ = "chunk_sets"
+
+    chunk_set_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    parse_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("document_parse_revisions.revision_id"),
+        index=True,
+        nullable=False,
+    )
+    profile_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    config: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "parse_revision_id",
+            "profile_hash",
+            name="uq_chunk_sets_revision_profile",
+        ),
+    )
+
+
+class ChunkORM(Base):
+    """Chunk 的持久化映射（search_vector/embedding 列在切片 5 迁移再加）。"""
+
+    __tablename__ = "chunks"
+
+    chunk_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    chunk_set_id: Mapped[str] = mapped_column(
+        ForeignKey("chunk_sets.chunk_set_id"),
+        index=True,
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    token_count: Mapped[int] = mapped_column(nullable=False)
+    section_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    page_start: Mapped[int | None] = mapped_column(nullable=True)
+    page_end: Mapped[int | None] = mapped_column(nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("chunk_set_id", "sequence", name="uq_chunks_chunk_set_sequence"),
+    )
+
+
+class ChunkElementLinkORM(Base):
+    """Chunk 到 Element 有序映射的持久化映射。"""
+
+    __tablename__ = "chunk_element_links"
+
+    chunk_id: Mapped[str] = mapped_column(
+        ForeignKey("chunks.chunk_id"),
+        primary_key=True,
+    )
+    element_id: Mapped[str] = mapped_column(
+        ForeignKey("document_elements.element_id"),
+        index=True,
+        primary_key=True,
+    )
+    sequence: Mapped[int] = mapped_column(nullable=False)
+
+
 class ModelInvocationORM(Base):
     """模型调用记录的持久化映射（不含 Prompt/响应内容）。"""
 

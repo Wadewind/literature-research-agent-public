@@ -260,7 +260,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 1. **资源管理边界**（已完成 2026-08-20，契约见下文「切片 1」）：Project 改名/归档/恢复、Paper 归档/恢复、active 过滤、归档对新 Run/收录的限制；归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时返回 409；
 2. **阶段契约与评测 Fixture**（已完成 2026-08-20，契约见下文「切片 2」）：定最小错误码（`project_not_indexed`、`conversation_busy`、`invalid_scope` 等）；评测语料使用合成 PDF，由子智能体在本切片构建，保证期望 Evidence 的页码/章节完全确定；
 3. **Model Gateway**（已完成 2026-08-20，契约见下文「切片 3」）：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
-4. **ChunkSet + Worker 分发**：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
+4. **ChunkSet + Worker 分发**（已完成 2026-08-20，契约见下文「切片 4」）：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
 5. **Indexing Run**：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
 6. **Hybrid Retrieval**：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
 7. **Evidence/Citation**：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
@@ -395,6 +395,73 @@ Adapter 层对临时错误最多重试 `AGENT_MODEL_MAX_RETRIES` 次（默认 2�
 - Gateway（`tests/application/test_model_gateway.py`，5 例）：成功/失败记录、error_type 分类、记录失败不影响结果、run_id 可空；
 - PostgreSQL 集成（`tests/integration/test_model_invocation_repository.py`，3 例）：字段往返、run_id 可空、空查询；
 - 真实 Provider 冒烟 `AGENT_RUN_PROVIDER_TESTS=1` 显式启用（仿 `AGENT_RUN_DOCLING_TESTS`），默认跳过。
+
+### 切片 4：ChunkSet 与 Worker 分发（契约定稿）
+
+已于 2026-08-20 实现完成。本切片只做到 chunking（结构化 Chunk 落库），Embedding/向量在切片 5。
+
+#### RunType 与 Worker 分发
+
+- `domain/run.py` 新增 `RunType` StrEnum：`INGESTION` / `INDEXING` / `RAG_ANSWER`（三个都定义，`RAG_ANSWER` 切片 8 才接线）；`Run.run_type` 保持 `str` 注解（DB 列与历史调用不变），但 `create_run` 参数收窄为 `RunType | str` 并在创建时校验枚举取值，非法值直接 `ValueError`；
+- `application/run_dispatcher.py` 新增 `RunDispatcher` 组合执行器：按 `run.run_type` 分发到已注册执行器；未知类型或未接线类型把 Run 推进 FAILED（`run_failed` 事件，错误类型 `unknown_run_type`），不静默执行；`RunExecutionService` 的单 executor 签名不变，dispatcher 作为组合 executor 注入；
+- `IngestionExecutor`/`IndexingExecutor` 各自增加 run_type 防御：收到不匹配类型直接抛 `ValueError`（dispatcher 已兜底，双保险）。
+
+#### ChunkProfile
+
+`domain/chunk_profile.py`，冻结 dataclass：
+
+| 字段 | 默认值 | 来源 |
+|---|---|---|
+| `max_tokens` | 512 | `AGENT_CHUNK_MAX_TOKENS` |
+| `overlap_tokens` | 64 | `AGENT_CHUNK_OVERLAP_TOKENS` |
+| `tokenizer` | `cl100k_base` | 固定（tiktoken） |
+| `include_section_prefix` | true | 固定 |
+| `embedding_provider` | — | 切片 3 `AGENT_EMBEDDING_BASE_URL` 的主机名（Settings 无独立 provider 字段，base_url 变化即 Provider 变化） |
+| `embedding_model` | — | `AGENT_EMBEDDING_MODEL` |
+| `embedding_dimensions` | — | `AGENT_EMBEDDING_DIMENSIONS` |
+
+- 512/64 是实验起点，切片 6 检索实验可校准；
+- `profile_hash`：规范化 JSON（sort_keys + 紧凑分隔符）的 sha256，模式照搬 `parser_profile_hash`；chunk 与 embedding 参数共同参与一个 hash——一个 ChunkSet 同时固定两者；
+- 参数校验：`max_tokens > 0`、`0 <= overlap_tokens < max_tokens`、tokenizer 非空。
+
+#### 数据模型
+
+迁移 `e9c4d2f8a1b7`（`down_revision = d6e1f7a3b9c2`），upgrade/downgrade 已在一次性容器中实跑通过：
+
+- `chunk_sets`：`chunk_set_id`（PK）、`parse_revision_id`（FK → document_parse_revisions）、`profile_hash`、`config`（JSONB）、`status`（`running`/`ready`/`failed`）、`error`（JSONB 可空）、`created_at`、`completed_at`；唯一约束 `(parse_revision_id, profile_hash)`（Effectively Once，与 ParseRevision 同构）；
+- `chunks`：`chunk_id`（PK）、`chunk_set_id`（FK）、`sequence`、`text`、`token_count`、`section_path`（可空）、`page_start`/`page_end`（可空）、`content_hash`；唯一约束 `(chunk_set_id, sequence)`。**本切片不建 `search_vector`/`embedding` 列**（切片 5 迁移再加，避免二次迁移 chunk 表）；
+- `chunk_element_links`：`chunk_id`（FK）+ `element_id`（FK）+ `sequence`；复合主键 `(chunk_id, element_id)`（同一 Chunk 不重复绑定同一 Element），`element_id` 上另有普通索引支持反查某 Element 属于哪些 Chunk；Chunk 内 Element 顺序由 `sequence` 表达。
+
+#### ChunkBuilder 规则
+
+`domain/chunk_builder.py`，纯函数 `build_chunks(elements, locations, profile) -> list[ChunkDraft]`（草稿不含持久化 ID，执行器提交时分配，保持确定性可测）：
+
+- 组合相邻文本类 Element，目标 `max_tokens`（预算按单元 token 和估算，最终 `token_count` 对拼接后的完整文本精确计数）；
+- 相邻 Chunk 重叠 `overlap_tokens`：按整 Element 回带，不切半个 Element；最后一个单元单独超过 overlap 预算时该处不重叠；
+- 单个超过 `max_tokens` 的 Element（如大表格）允许独立成 Chunk 超限存在，不硬切；
+- caption 子 Element 并入紧邻前一个单元中的 table/figure 父 Element，保证表格与题注同 Chunk；表格无 `text` 时把 payload 单元格渲染为纯文本行（` | ` 分隔）参与切分；
+- 章节标题（`section_heading`）不单独成 Chunk：是天然 Chunk 边界（遇到标题先关闭当前 Chunk），并作为后续 Chunk 的上下文前缀（`include_section_prefix` 时以 `标题\n\n正文` 拼入 text 开头，前缀计入 token_count）；章节边界不做重叠回带；
+- `page_header`/`page_footer` 不进入 Chunk；text 为空（含纯空白）的 Element（如未抽取的 figure）不成 Chunk；
+- `page_start`/`page_end` 取 Chunk 内 Element 来源定位的最小/最大页码，无定位为 null；
+- `content_hash` 为最终 text 的 sha256；token 计数用 tiktoken `cl100k_base`（进程内缓存编码）。
+
+#### IndexingExecutor 与触发
+
+- `application/indexing_executor.py`，结构与 IngestionExecutor 同构：事务 A 准备（按 `(parse_revision_id, profile_hash)` 查 ChunkSet：ready → 复用直接 SUCCEEDED + `indexing_completed(reused=true)`；failed/running 遗留行重置复用同一行；无 → 创建 running 行 + `indexing_started` 事件）→ 短事务分页读 Element + 定位 → 事务外 ChunkBuilder 构建 → 事务 C 原子提交（chunks + links + ChunkSet ready + Run SUCCEEDED + `chunking_completed` + `indexing_completed`）；取消检查点在事务 A/C 入口；
+- 错误分类：Parse Revision 不存在或尚未成功属永久输入错误（新增 `IndexingInputError`，已注册进 `is_permanent_error`），Run 直接 FAILED 且不创建 ChunkSet；revision 已成功但零 Element 属合法（空文档），产生空 ChunkSet 并 ready；ChunkBuilder 其他未知异常走临时错误——ChunkSet FAILED + Run RETRY_WAIT + Outbox 重置；
+- indexing Run 的 `input_payload`：`{"parse_revision_id": ..., "version_id": ...}`（version_id 冗余用于事件与排查）；`project_id`/`owner_id` 与触发它的 ingestion Run 相同；
+- **触发时机**：IngestionExecutor 结果提交事务内（含复用已有 Revision 的提前返回路径）同时创建 indexing Run + `run_created` 事件 + QueueOutbox（同一事务，沿用「状态 + Event + Outbox 原子」不变量），不引入独立扫描循环；
+- Worker 装配：`RunDispatcher(executors={INGESTION: ..., INDEXING: ...})` 注入 `RunExecutionService`；IndexingExecutor 本切片不接 EmbeddingModel。
+
+#### 事件
+
+新增 `indexing_started`（chunk_set_id、profile_hash）、`chunking_completed`（chunk_set_id、chunk_count、profile_hash）、`indexing_completed`（chunk_set_id、chunk_count、reused）。payload 不含 Chunk 文本。indexing Run 终态事件用 `indexing_completed` 而非 `result_committed`。
+
+#### 测试要点
+
+- Domain：`test_chunk_profile.py`（5 例：默认值、哈希确定性、chunk/embedding 参数均参与哈希、非法参数）；`test_chunk_builder.py`（10 例：分组、整 Element 重叠、超限独立 Chunk、表格题注同 Chunk、章节前缀与开关、章节边界、页眉页脚/空文本排除、页码范围、空文档、content_hash）；
+- Application：`test_indexing_executor.py`（9 例：全链路事件序列、ready 复用、failed 行重置重跑、空文档、revision 缺失/未成功永久 FAILED、构建失败 RETRY_WAIT、取消竞争、run_type 防御）；`test_run_dispatcher.py`（3 例：分发到注册执行器、未知类型 FAILED、未接线枚举类型 FAILED）；`test_ingestion_executor.py` 新增 3 例（成功后同事务产生 indexing Run + run_created + Outbox、复用路径同样触发、run_type 防御）；
+- Integration：`test_chunk_repository.py`（4 例：ChunkSet 往返与唯一约束、状态保存、Chunk 往返与 sequence 唯一、links 复合主键与有序查询）；`test_queue_worker.py` 新增端到端（Outbox → ARQ → ingestion SUCCEEDED → 自动创建 indexing Run → 第二轮派发执行 → ChunkSet ready、Chunk/links 可查，Fake Parser）。
 
 ## 测试方式
 

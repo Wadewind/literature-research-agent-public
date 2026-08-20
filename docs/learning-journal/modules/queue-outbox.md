@@ -45,6 +45,8 @@ Worker 进程（python -m literature_agent.worker）│
 ## 关键决定与替代方案
 
 - **Outbox 而不是 API 直接投递**：API 直接 enqueue 会在“DB 已提交、队列未投递”的崩溃窗口丢任务；Outbox 把投递变成可重放的后台动作。
+- **run_type 显式分发**（Phase 2 切片 4）：Worker 装配 `RunDispatcher` 组合执行器（`application/run_dispatcher.py`），按 `run.run_type` 分发到 ingestion/indexing 执行器；未知或未接线类型把 Run 推进 FAILED（错误类型 `unknown_run_type`），不静默执行。`RunExecutionService` 的单 executor 签名不变，dispatcher 作为组合 executor 注入；各执行器另有 run_type 防御。
+- **indexing Run 的触发**（Phase 2 切片 4）：IngestionExecutor 结果提交事务内（含复用路径）同时创建 indexing Run + `run_created` + Outbox，保证解析成功必然跟随索引，不引入独立扫描循环。
 - **ARQ Job ID 去重**：`_job_id = "run:<run_id>"`，队列内同一 Run 同一时间只有一个待执行 Job，Outbox 补投天然去重。
 - **Worker 端幂等执行**：`RunExecutionService` 只认领 `QUEUED` 的 Run（条件更新），重复 Job、已终态、已取消一律跳过。
 - **`max_tries = 1`**：ARQ 不叠加自动重试，重试只有 Outbox 退避一层主导，避免多层重试相乘。
