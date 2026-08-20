@@ -1,5 +1,6 @@
 """健康检查的领域值对象。"""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -12,3 +13,4 @@ class HealthStatus:
     """
 
     status: str
+    dependencies: Mapping[str, str] | None = None
