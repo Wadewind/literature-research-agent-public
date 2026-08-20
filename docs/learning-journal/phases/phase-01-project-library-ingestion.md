@@ -668,6 +668,7 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - 本地 Storage 只面向单节点开发，S3 替换需要 ADR；
 - 协作式取消不保证立即终止已进入 Parser 的底层计算；
 - 前端仅覆盖本阶段演示闭环。
+- 当前没有 Project 修改/归档和 Paper 归档入口；语义已在产品决策 0002 固定，计划作为 Phase 2 的首个资源管理支撑切片实现。永久删除延后到 Phase 4。
 
 ## 学习笔记和下一步
 

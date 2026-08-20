@@ -18,6 +18,7 @@
 - Retrieval、Citation 和 Review 输出的小型固定评测集与回归阈值；
 - 结构化日志、基础 Metrics、错误码和运行手册；
 - 数据迁移、备份恢复、孤儿 Storage/Artifact 对账和资源上限；
+- 在完整引用检查和备份策略下实现 Project/Paper 永久删除与异步 Storage GC；
 - Playwright 核心旅程和可重复的演示 Fixture；
 - Core v1 安全复核和学习文档收尾。
 

@@ -10,6 +10,8 @@
 
 Workflow 可以在 HTTP 断开、页面刷新或 Worker 重启后恢复；用户可以查看当前 Step、历史 Event、错误、等待事项和最终 Artifact。
 
+入口遵循 `../decisions/0002-archive-and-project-scoped-entrypoints.md`：Review Run 始终属于 Project；全局“新建综述”只是先创建 Project 再启动相同的 Workflow，不为向导建立第二套后端模型。
+
 ```text
 研究问题
   → 检索策略
@@ -92,6 +94,8 @@ Phase 3 新增：
 - `ReviewArtifactService`：输出 Markdown 和清单。
 
 Review Workflow 不依赖 Conversation 或 RAG Chat，只依赖 Phase 2 的共享应用 Port。
+
+Project 是 Workflow 的授权、文献收录和 Artifact 归属边界。创建普通 Project 不自动启动 Workflow；已归档 Project 不能创建或恢复新的 Workflow 执行。
 
 ## 首版 Workflow
 
@@ -334,6 +338,8 @@ GET  /api/v1/artifacts/{artifact_id}/content
 
 Run 查询、取消、Event 和 SSE 继续复用通用接口。
 
+已有 Project 页面直接调用创建端点；全局“新建综述”向导先创建 Project，再调用同一端点。创建 Review Run 时固化初始 ProjectPaper/Version 快照，后续候选仍需人工纳入。
+
 ## Event 方向
 
 新增事件至少包括：
@@ -379,7 +385,7 @@ Event 只保存 ID、状态、数量、错误码和 Usage 摘要，不保存搜�
 10. **大纲闭环**：主题、大纲版本和第二次人工确认；
 11. **分章节撰写**：Claim/Citation、独立重试和一致性检查；
 12. **Artifact**：Markdown、Evidence Matrix 和文献清单；
-13. **最小 Web UI**：Review 创建、Step Timeline、输入和 Artifact；
+13. **最小 Web UI**：已有 Project 启动 Review、全局新建综述向导、Step Timeline、输入和 Artifact；
 14. **验收复盘**：故障注入、E2E、评测和学习笔记。
 
 ## 测试方式
@@ -391,7 +397,7 @@ Event 只保存 ID、状态、数量、错误码和 Usage 摘要，不保存搜�
 - **Downloader**：Redirect、私网地址、超限、HTML 登录页、非 PDF 和响应丢失；
 - **PostgreSQL/Worker**：Run/Step/Input 唯一约束、Worker 重启和依赖对账；
 - **Evidence/Citation**：跨 Project 拒绝、无来源 Claim 和章节重复执行；
-- **E2E**：创建 Review → 自动获取/手动补全文 → 筛选 → 大纲确认 → 下载 Markdown。
+- **E2E**：已有 Project/全局向导两种入口 → 自动获取/手动补全文 → 筛选 → 大纲确认 → 下载 Markdown；归档 Project 拒绝新建或恢复执行。
 
 普通测试使用 Fake Chat/Embedding、HTTP Mock 和合成 PDF，不访问实时学术 API 或付费模型。真实 OpenAlex/Crossref、模型和开放 PDF 只用于显式 Smoke/Evaluation。
 

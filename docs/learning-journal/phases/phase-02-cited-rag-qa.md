@@ -19,6 +19,8 @@ Project Question
 
 Phase 2 交付可复用的 Model Gateway、Retrieval、Evidence 和 Citation 能力。Phase 3 通过这些应用 Port 生成综述，不依赖 Conversation 或 RAG Chat 页面。
 
+入口与归档语义遵循 `../decisions/0002-archive-and-project-scoped-entrypoints.md`：RAG 始终属于 Project，Paper/多选 Paper 只是 Project 内的检索范围。
+
 ## 前置条件
 
 Phase 1 正式验收前先完成以下收口：
@@ -63,6 +65,7 @@ Phase 1 正式验收前先完成以下收口：
 - `EvidenceService`：把检索结果固化为可引用 Evidence；
 - `CitationValidator`：校验 Claim 与 Evidence 的结构和权限关系；
 - `RagAnswerService`：编排 Message、Retrieval、模型调用和最终提交。
+- Conversation 必须绑定 `project_id`，默认 scope 为整个 Project 或 Project 内选中的 Paper；每个回答 Run 在启动时固化实际 `selected_version_ids`，保证历史可重放。
 
 Phase 2 不引入 LangGraph。ARQ Job 仍只携带 `run_id`，Worker 根据 `run_type` 调用 `ingestion`、`indexing` 或 `rag_answer` Executor。
 
@@ -91,7 +94,8 @@ Project
 - `chunk_sets`：`parse_revision_id`、chunk/embedding profile、状态、错误和完成时间；
 - `chunks`：顺序、检索文本、token 数、章节、页码范围、内容哈希、`tsvector` 和向量；
 - `chunk_element_links`：Chunk 到 Element 的稳定映射和顺序；
-- `conversations`：Project、owner、标题和时间；
+- `conversations`：Project、owner、标题、默认 `scope_mode` 和时间；
+- `rag_answer` Run 输入保存本次解析后的 Version 范围快照；Conversation 的默认范围不能替代 Run 快照；
 - `messages`：Conversation 内严格递增顺序、角色、内容、状态和关联 Run；
 - `claim_sets` / `claims`：回答的结构化 Claim；
 - `evidence`：Project、Paper、PaperVersion、ParseRevision、Chunk、页码、章节和摘录；
@@ -207,6 +211,8 @@ GET  /api/v1/projects/{project_id}/paper-versions/{version_id}/index-status
 
 Run 查询、取消和 Event/SSE 继续复用 `/api/v1/runs/{run_id}` 相关接口。
 
+创建 Conversation 时可传 `scope_mode=project|selected_papers` 和 Project 内可见的 `paper_ids`；Paper 页面和多选入口调用同一端点。个人文献库中的 Paper 必须先选择/加入 Project，不提供独立 owner-scoped Chat API。
+
 ## Event 方向
 
 新增小型事件：
@@ -242,7 +248,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 ## 实现切片顺序
 
-1. **Phase 1 收口**：ProjectPaper、`selected_version_id`、文件去重和 Paper Library API；
+1. **资源管理边界**：Project 修改/归档/恢复、Paper 归档/恢复，以及 archived/active 对新 Run 和列表的过滤；
 2. **阶段契约与评测 Fixture**：确定最小模型、错误码和固定问题集；
 3. **Model Gateway**：Embedding/Chat Port、Fake Provider、错误分类和 Usage；
 4. **ChunkSet**：结构感知 Chunk、Element 映射、迁移和确定性测试；
@@ -258,7 +264,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 - **Domain**：Chunk/Profile 哈希、Claim/Evidence 关系和 Citation Validator；
 - **Application**：索引复用、RAG 编排、无证据、重复 Job、取消和最终原子提交；
 - **PostgreSQL**：pgvector/FTS、唯一约束、Project 强过滤和并发提交；
-- **API/SSE**：Conversation、幂等提问、刷新恢复、取消和引用跳转；
+- **API/SSE**：Project/Paper 归档限制、整个 Project/单篇/多篇 Conversation、幂等提问、刷新恢复、取消和引用跳转；
 - **Provider Contract**：Fake Embedding/Fake Chat 为默认，真实 Provider 显式启用；
 - **Evaluation**：固定 Project、问题、期望 Paper/Evidence 和明确无答案问题。
 
@@ -269,6 +275,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 - ParseRevision 可以生成版本化、可复用的 ready ChunkSet；
 - 同一 Paper 跨 Project 不重复解析、Chunking 或 Embedding；
 - Hybrid Retrieval 只返回当前 Project 可见文献；
+- Project、单篇 Paper 和多篇 Paper 三种入口共用 Project-scoped Retrieval，Run 保存不可变 Version 范围快照；
 - 回答只能引用本次 Run 的有效 Evidence；
 - 无证据问题明确返回证据不足；
 - Conversation、Message、Run 和 Citation 刷新后可恢复；
