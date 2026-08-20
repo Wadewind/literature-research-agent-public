@@ -47,6 +47,7 @@
   - `client`：ApiError 解析与 404/400/409/413 文案映射。
 - `npm run build`（tsc strict + vite build）通过。
 - 手动闭环（本地 postgres/valkey + uvicorn + 本地 Worker，真实 Docling 解析）：上传 `text_two_pages.pdf` → SSE 实时事件 → succeeded → papers 列表 `parse_ready=true` → file 端点字节与原件一致（inline disposition）→ SSE `Last-Event-ID: 2` 正确从 sequence 3 重放；queued 状态取消 → cancelled；终态取消 → 409；Playwright 截图验证 4 个页面与 404 呈现。
+- 切片 11 Playwright E2E（1 passed）：隔离 PostgreSQL/Valkey Compose + 宿主 API/Worker/Web + 共享临时 Storage；用 Fake Parser 验证创建 Project、新 PDF 异步解析、Run 事件与刷新恢复、Element/PDF 预览、跨 Project 哈希复用、移出只删关系、个人库保留和重新收录。失败时保留 screenshot/video/trace，不维护易碎的像素截图基线。
 
 ## 代码入口
 
@@ -54,14 +55,15 @@
 - SSE：`web/src/runs/useRunEvents.ts`、`eventStore.ts`、`runStatus.ts`
 - API 封装：`web/src/api/client.ts`、`types.ts`
 - 后端新端点：`backend/src/literature_agent/api/papers.py`、`application/paper_query_service.py`
+- E2E：`web/e2e/phase-01.spec.ts`、`web/e2e/run.sh`、`web/playwright.config.ts`、`deploy/compose/e2e.yml`
 
 ## 已知限制
 
 - Element 仅定位到页码，不做 bbox 高亮；点击切换页码会重建 iframe（整份 PDF 重新加载）。
 - Element 列表固定拉取前 200 条，无虚拟滚动/分页 UI。
 - 具名 SSE 事件类型清单需与后端手工同步。
-- 仅开发代理（Vite proxy），无生产构建部署与 CORS 配置（切片 11 Compose Smoke 再定）。
-- 无 Playwright E2E（切片 11）。
+- 仅开发代理（Vite proxy），无生产构建部署与 CORS 配置；切片 11 只验证宿主 API/Worker/Web，不宣称完整容器部署。
+- E2E 使用 Fake Parser 保持确定性；真实 Docling 由独立 opt-in 契约测试和手动 Smoke 覆盖。
 
 ## 60 秒面试说明
 

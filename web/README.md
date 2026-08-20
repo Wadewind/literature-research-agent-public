@@ -18,6 +18,9 @@ npm run dev   # http://localhost:5173，/api 代理到 127.0.0.1:8000
 ```bash
 npm test        # Vitest：SSE 归并、Run 状态、上传幂等键、错误映射
 npm run build   # tsc strict + vite build
+npm run test:e2e # 隔离 Compose + API/Worker + Chromium 的 Phase 1 完整闭环
 ```
 
-Project 中的“移出”只删除收录关系，原 PDF 和解析结果仍保留在个人文献库。Playwright 固化 E2E 仍属于切片 11。
+首次运行 E2E 前执行 `npx playwright install chromium --no-shell`。测试使用动态映射端口、临时 Storage 和 Fake Parser，不读写日常开发数据库。
+
+Project 中的“移出”只删除收录关系，原 PDF 和解析结果仍保留在个人文献库。

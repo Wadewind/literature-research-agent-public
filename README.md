@@ -1,6 +1,6 @@
 # Literature Review Agent System
 
-面向学习和简历展示的文献综述 Agent 系统。Phase 1（Project、个人文献库与可靠异步导入）的核心功能已完成：同一用户后续上传相同内容时复用 canonical PDF 和解析结果，并可被多个 Project 收录；历史重复资产无损保留。后台提供可恢复导入、Event/SSE 和结构化文档查询，Web 端提供完整演示闭环。切片 11 验收复盘仍保留为后续工作。
+面向学习和简历展示的文献综述 Agent 系统。Phase 1（Project、个人文献库与可靠异步导入）已经完成：同一用户后续上传相同内容时复用 canonical PDF 和解析结果，并可被多个 Project 收录；历史重复资产无损保留。后台提供可恢复导入、Event/SSE 和结构化文档查询，Web 端提供经过 Playwright 固化的完整演示闭环。
 
 ## 仓库布局
 
@@ -38,3 +38,12 @@ cd web && npm install && npm run dev
 首次准备：`cd backend && uv sync`。普通后端测试（pytest 默认套件）不需要真实模型与付费 API。
 
 阶段目标和学习顺序见 `docs/learning-journal/phases/`。
+
+Phase 1 的隔离验收会启动临时 PostgreSQL/Valkey、宿主 API/Worker/Web，并使用
+Fake Parser 完成浏览器闭环（需要 Docker 和 Playwright Chromium）：
+
+```bash
+cd web
+npx playwright install chromium --no-shell  # 首次准备；E2E 使用 Chromium 新 headless 模式
+npm run test:e2e
+```

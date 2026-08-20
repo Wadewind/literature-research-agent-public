@@ -8,10 +8,10 @@ uv sync
 uv run agent-service
 ```
 
-The service is built through Phase 1 vertical slices. The current slices expose:
+The Phase 1 backend is complete. It exposes:
 
 - FastAPI application factory with lifespan-managed application state
-- `GET /health/live`
+- `GET /health/live`（仅进程存活）与 `GET /health/ready`（PostgreSQL/Valkey 就绪；依赖不可用返回 503）
 - Project 创建、列表与详情 API（`POST /api/v1/projects`、`GET /api/v1/projects`、`GET /api/v1/projects/{project_id}`）
 - Paper file upload API (`POST /api/v1/projects/{project_id}/paper-files`) with idempotency
 - owner 级个人文献库（`GET /api/v1/library/papers`）；相同 owner + SHA-256 自动复用 PaperVersion 和解析结果

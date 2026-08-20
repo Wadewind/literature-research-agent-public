@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中。切片 1–10（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环、真实 Parser、取消/恢复、Event/SSE、最小 Web UI）已完成。Spec 初版日期：2026-08-13。
+已完成（2026-08-20）。切片 1–11 已实现并通过隔离 Compose Smoke、故障恢复测试和 Playwright E2E 验收。Spec 初版日期：2026-08-13。
 
 本阶段是第一个正式业务阶段。
 
@@ -262,7 +262,7 @@ Phase 1 不预建通用 Step 引擎，先用稳定进度 Event 表达 `file_vali
 8. **取消/恢复**（已完成）：错误分类、Attempt、lease/heartbeat 和异常 Run 对账；
 9. **Event/SSE**（已完成）：历史分页、Sequence 游标、通知丢失和断线重放；
 10. **Web UI**（已完成）：个人文献库、Project 收录/移除、上传复用、Run Detail、取消和 Element/PDF 来源预览；
-11. **验收复盘**：Compose Smoke、E2E、故障注入和模块学习笔记。
+11. **验收复盘**（已完成）：隔离 Compose Smoke、Playwright E2E、故障注入回归和模块学习笔记。
 
 已完成切片的详细契约保留如下。早期切片契约是当时的历史快照；若与前文“用户级文献库与 Project 收录”冲突，以当前模型和切片 10 收尾契约为准。
 
@@ -609,9 +609,14 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - 后端：个人库/Project 列表、固定 Version、收录/移除、顺序上传复用；file 端点字节一致、无 Revision 可下载、非 Project 成员 404；
 - 前端 Vitest（纯状态逻辑，不挂 DOM）：SSE 事件按 sequence 去重排序与终态收束判断；Run 终态/可取消状态表；上传幂等键复用与重新生成；HTTP 错误到界面提示的映射。
 
-### 切片 11 预告
+### 切片 11：验收复盘
 
-切片 11（验收复盘）再做 Compose Smoke、故障注入与 Playwright E2E，不在本切片范围。
+- 新增 `/health/ready`：实际检查 PostgreSQL 和 Valkey，全部可用返回 200；任一不可用返回 503，`/health/live` 仍只表示 API 进程存活；
+- `deploy/compose/e2e.yml` 只启动隔离的 PostgreSQL/Valkey，并使用动态宿主端口和 tmpfs；API、Worker、Web 在宿主运行，显式共享 `mktemp` Storage；
+- Worker 使用 Fake Parser，固定合成 PDF，不下载模型、不访问付费或实时外部服务；
+- Playwright 固化“创建 Project → 新 PDF 异步解析 → Run 刷新恢复 → 结构预览 → 跨 Project 自动复用 → 移出关系 → 个人库保留 → 重新收录”；
+- screenshot、video 和 trace 仅在失败时保留，不维护对字体和浏览器版本敏感的像素截图基线；
+- 故障注入继续由后端自动测试覆盖：投递失败/重复 Job、Parser 临时失败和超时、取消竞争、Worker lease 过期恢复、通知丢失和 SSE 重放。
 
 ## 测试方式
 
@@ -651,12 +656,12 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - 2026-08-20：解析策略定稿——主路径 Docling 标准 PdfPipeline，默认不开 OCR；文件损坏/加密/结构类异常才尝试 pypdf，成功标记 `degraded`；超时/资源/未知异常不降级，但在 Run 预算内进入 `RETRY_WAIT`；pypdf 也失败视为永久输入错误；空文本给 `possibly_scanned` warning。
 - 2026-08-20：Element 最低 Payload 定稿——枚举维持现有 ElementType，Docling 标签映射不到的归 `paragraph` 并记 warning；`table` 存纯文本网格 `{"rows","cols","cells"}`；`figure` 只存 `storage_key`（首版可 null + warning，不抽图片）；`formula` 存 `{"latex": str|null}`；其余只用 `text` 字段。复杂结构推迟到 Phase 2 有真实消费方再扩展。
 
-## 切片 11 仍需确定
+## 切片 11 决定与延后项
 
-1. Compose Smoke 是否把 API/Web 一并容器化并共享 Storage，还是明确只验证宿主 API + Worker；
-2. Playwright E2E 的固定场景、Fixture 和截图基线；
-3. 并发同 owner + SHA-256 上传发生唯一约束冲突后，是否在 Phase 1 回读 canonical 并返回复用结果；
-4. 本地 Storage 孤儿文件和历史非 canonical 资产的对账/回收策略。
+1. Compose Smoke 采用隔离容器 PostgreSQL/Valkey + 宿主 API/Worker/Web；API 与 Worker 共享同一临时 Storage。当前不建设完整容器部署。
+2. Playwright 使用 `text_two_pages.pdf` 和 Fake Parser 固化业务旅程；失败时保存 screenshot/video/trace，不维护截图基线。
+3. 并发同 owner + SHA-256 上传的唯一约束 loser 仍允许失败后重试；冲突后自动回读 canonical 作为后续可靠性增强，不阻塞 Phase 1。
+4. 本地 Storage 孤儿资产和历史非 canonical 资产不在 Phase 1 自动删除；永久删除、引用检查与异步 GC 延后到 Phase 4。
 
 如果实现需要改变 Run/Event 事实来源、Paper/Version/Parse Revision 所有权、数据隐私或跨用户去重策略，先更新本 Spec；达到 `AGENTS.md` 的触发条件时再写 ADR。
 
@@ -687,6 +692,6 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 切片 9（Event/SSE）→ 已完成（2026-08-20）：events 端点 `after_sequence`/`limit` 游标分页；`EventNotifier` Port + Valkey Pub/Sub（channel `run-events:{run_id}`，payload 只有 run_id）+ Noop 默认；四个写事件服务 commit 后通知（失败只记日志）；SSE `GET /runs/{run_id}/events/stream`（Last-Event-ID 续传、先重放后实时、15s 心跳注释、终态收束关闭、1s 轮询兜底）。
 
-切片 10（Web UI）→ 已完成（2026-08-20）：已升级为 owner 个人文献库 + ProjectPaper 收录模型；同 owner 的相同 SHA-256 会复用 canonical Version 及原 Run/解析结果；项目页可上传、直接收录已有文献、仅移除收录关系；新增个人文献库页展示跨 Project 收录范围。旧重复数据通过 canonical/归并标记无损迁移，不删除历史 Parse Revision/Element。验证：Domain/Application 与相关 API 104 passed，相关 PostgreSQL/Worker Integration 13 passed，Vitest 36 passed，`npm run build` 通过；切片 11 仍负责固化 Compose Smoke、故障注入和 Playwright E2E。
+切片 10（Web UI）→ 已完成（2026-08-20）：已升级为 owner 个人文献库 + ProjectPaper 收录模型；同 owner 的相同 SHA-256 会复用 canonical Version 及原 Run/解析结果；项目页可上传、直接收录已有文献、仅移除收录关系；新增个人文献库页展示跨 Project 收录范围。旧重复数据通过 canonical/归并标记无损迁移，不删除历史 Parse Revision/Element。验证：Domain/Application 与相关 API 104 passed，相关 PostgreSQL/Worker Integration 13 passed，Vitest 36 passed，`npm run build` 通过。
 
-下一步是切片 11（验收复盘）：Compose Smoke、Playwright E2E、故障注入和模块学习笔记收尾。
+切片 11（验收复盘）→ 已完成（2026-08-20）：补齐 PostgreSQL/Valkey readiness；隔离 Compose Smoke 与 Playwright 核心旅程 1 passed；默认后端全量 171 passed + 2 skipped（跳过真实 Docling opt-in 组）；Vitest 36 passed；`ruff check`、`pyright`、`npm run build` 全部通过。Phase 1 正式关闭，下一步进入 Phase 2。
