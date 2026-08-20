@@ -23,6 +23,11 @@ def _to_orm(record: IdempotencyRecord) -> object:
         project_id=record.project_id,
         request_hash=record.request_hash,
         run_id=record.run_id,
+        paper_id=record.paper_id or None,
+        version_id=record.version_id or None,
+        status=record.status,
+        reused=record.reused,
+        already_added=record.already_added,
     )
 
 
@@ -56,6 +61,11 @@ class SqlalchemyIdempotencyRepository(IdempotencyRepository):
             project_id=orm.project_id,
             request_hash=orm.request_hash,
             run_id=orm.run_id,
+            paper_id=orm.paper_id or "",
+            version_id=orm.version_id or "",
+            status=orm.status,
+            reused=orm.reused,
+            already_added=orm.already_added,
         )
 
     async def add(self, record: IdempotencyRecord) -> IdempotencyRecord:

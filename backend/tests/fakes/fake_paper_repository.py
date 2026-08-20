@@ -19,6 +19,6 @@ class FakePaperRepository(PaperRepository):
         """根据 ID 返回 Paper。"""
         return self._papers.get(paper_id)
 
-    async def list_by_project(self, project_id: str) -> list[Paper]:
-        """返回指定 Project 的 Paper 列表。"""
-        return [p for p in self._papers.values() if p.project_id == project_id]
+    async def list_by_owner(self, owner_id: str) -> list[Paper]:
+        """返回指定 owner 的个人文献库。"""
+        return [p for p in self._papers.values() if p.owner_id == owner_id]

@@ -3,7 +3,7 @@
 from io import BytesIO
 
 import pytest_asyncio
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from literature_agent.api.dependencies import get_actor
 from literature_agent.api.paper_files import get_ingestion_service
@@ -16,6 +16,7 @@ from tests.fakes.fake_idempotency_repository import FakeIdempotencyRepository
 from tests.fakes.fake_outbox_repository import FakeOutboxRepository
 from tests.fakes.fake_paper_repository import FakePaperRepository
 from tests.fakes.fake_paper_version_repository import FakePaperVersionRepository
+from tests.fakes.fake_project_paper_repository import FakeProjectPaperRepository
 from tests.fakes.fake_project_repository import FakeProjectRepository, fake_session
 from tests.fakes.fake_run_repository import FakeRunRepository
 from tests.fakes.fake_storage import FakeStorage
@@ -32,6 +33,7 @@ def _build_fake_service(
     run_repo = FakeRunRepository()
     event_repo = FakeEventRepository()
     storage = FakeStorage()
+    project_paper_repo = FakeProjectPaperRepository()
 
     return IngestionService(
         max_upload_size_bytes=1024 * 1024,
@@ -39,6 +41,7 @@ def _build_fake_service(
         project_repo_factory=lambda _session: project_repo,
         paper_repo_factory=lambda _session: paper_repo,
         paper_version_repo_factory=lambda _session: paper_version_repo,
+        project_paper_repo_factory=lambda _session: project_paper_repo,
         idempotency_repo_factory=lambda _session: idempotency_repo,
         run_repo_factory=lambda _session: run_repo,
         event_repo_factory=lambda _session: event_repo,
@@ -57,10 +60,17 @@ async def client():
     service = _build_fake_service(project_repo)
 
     app = create_app()
-    app.dependency_overrides[get_actor] = lambda: ActorContext(owner_id="user-1")
-    app.dependency_overrides[get_ingestion_service] = lambda: service
 
-    with TestClient(app) as test_client:
+    async def actor_override() -> ActorContext:
+        return ActorContext(owner_id="user-1")
+
+    async def service_override() -> IngestionService:
+        return service
+
+    app.dependency_overrides[get_actor] = actor_override
+    app.dependency_overrides[get_ingestion_service] = service_override
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as test_client:
         yield test_client, project.project_id
 
     app.dependency_overrides.clear()
@@ -72,12 +82,12 @@ def _pdf_file() -> tuple[BytesIO, str]:
     return BytesIO(content), "test.pdf"
 
 
-def test_upload_paper_file_returns_202(client) -> None:
+async def test_upload_paper_file_returns_202(client) -> None:
     """上传合法 PDF 应返回 202 和 run_id。"""
     test_client, project_id = client
     file_obj, filename = _pdf_file()
 
-    response = test_client.post(
+    response = await test_client.post(
         f"/api/v1/projects/{project_id}/paper-files",
         headers={"Idempotency-Key": "api-key-1"},
         files={"file": (filename, file_obj, "application/pdf")},
@@ -91,12 +101,12 @@ def test_upload_paper_file_returns_202(client) -> None:
     assert data["version_id"]
 
 
-def test_upload_missing_idempotency_key_returns_400(client) -> None:
+async def test_upload_missing_idempotency_key_returns_400(client) -> None:
     """缺少 Idempotency-Key 应返回 400。"""
     test_client, project_id = client
     file_obj, filename = _pdf_file()
 
-    response = test_client.post(
+    response = await test_client.post(
         f"/api/v1/projects/{project_id}/paper-files",
         files={"file": (filename, file_obj, "application/pdf")},
     )
@@ -104,11 +114,11 @@ def test_upload_missing_idempotency_key_returns_400(client) -> None:
     assert response.status_code == 400
 
 
-def test_upload_non_pdf_returns_400(client) -> None:
+async def test_upload_non_pdf_returns_400(client) -> None:
     """非 PDF 文件应返回 400。"""
     test_client, project_id = client
 
-    response = test_client.post(
+    response = await test_client.post(
         f"/api/v1/projects/{project_id}/paper-files",
         headers={"Idempotency-Key": "api-key-2"},
         files={"file": ("test.txt", BytesIO(b"not pdf"), "text/plain")},
@@ -117,12 +127,12 @@ def test_upload_non_pdf_returns_400(client) -> None:
     assert response.status_code == 400
 
 
-def test_upload_unknown_project_returns_404(client) -> None:
+async def test_upload_unknown_project_returns_404(client) -> None:
     """上传到不存在 Project 应返回 404。"""
     test_client, _ = client
     file_obj, filename = _pdf_file()
 
-    response = test_client.post(
+    response = await test_client.post(
         "/api/v1/projects/00000000-0000-0000-0000-000000000000/paper-files",
         headers={"Idempotency-Key": "api-key-3"},
         files={"file": (filename, file_obj, "application/pdf")},
@@ -131,18 +141,18 @@ def test_upload_unknown_project_returns_404(client) -> None:
     assert response.status_code == 404
 
 
-def test_upload_idempotent_conflict_returns_409(client) -> None:
+async def test_upload_idempotent_conflict_returns_409(client) -> None:
     """相同 Idempotency-Key 不同文件应返回 409。"""
     test_client, project_id = client
     file_obj, filename = _pdf_file()
 
-    test_client.post(
+    await test_client.post(
         f"/api/v1/projects/{project_id}/paper-files",
         headers={"Idempotency-Key": "api-key-4"},
         files={"file": (filename, file_obj, "application/pdf")},
     )
 
-    response = test_client.post(
+    response = await test_client.post(
         f"/api/v1/projects/{project_id}/paper-files",
         headers={"Idempotency-Key": "api-key-4"},
         files={"file": ("other.pdf", BytesIO(b"%PDF-2\n"), "application/pdf")},

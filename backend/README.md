@@ -14,6 +14,8 @@ The service is built through Phase 1 vertical slices. The current slices expose:
 - `GET /health/live`
 - Project CRUD API (`POST /api/v1/projects`, `GET /api/v1/projects`, `GET /api/v1/projects/{project_id}`)
 - Paper file upload API (`POST /api/v1/projects/{project_id}/paper-files`) with idempotency
+- owner 级个人文献库（`GET /api/v1/library/papers`）；相同 owner + SHA-256 自动复用 PaperVersion 和解析结果
+- Project 收录关系 API（`GET/POST /api/v1/projects/{project_id}/papers`、`DELETE .../papers/{paper_id}`）；移出 Project 不删除个人文献库资产
 - Run/Event API (`GET /api/v1/runs/{run_id}`, `POST /api/v1/runs/{run_id}/cancel`, `GET /api/v1/runs/{run_id}/events?after_sequence=&limit=`) with cursor pagination
 - Run event SSE stream (`GET /api/v1/runs/{run_id}/events/stream`) with `Last-Event-ID` resume, 15s heartbeat comments and terminal close; Valkey Pub/Sub lowers latency while 1s DB polling guarantees convergence
 - Document query API (`GET /api/v1/projects/{project_id}/paper-versions/{version_id}/document`, `GET .../elements`) with page/section/type filters
@@ -57,4 +59,3 @@ uv run alembic upgrade head
 cd backend
 uv run pytest
 ```
-

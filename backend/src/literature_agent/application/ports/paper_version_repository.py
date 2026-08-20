@@ -16,6 +16,14 @@ class PaperVersionRepository(Protocol):
         """按 ID 查询 PaperVersion；不存在返回 None。"""
         ...
 
+    async def get_by_owner_and_hash(
+        self,
+        owner_id: str,
+        file_hash: str,
+    ) -> PaperVersion | None:
+        """按 owner 与文件哈希查询可复用的 Version。"""
+        ...
+
     async def list_by_paper(self, paper_id: str) -> list[PaperVersion]:
         """按 Paper ID 列出所有版本。"""
         ...

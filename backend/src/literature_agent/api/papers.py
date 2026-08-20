@@ -1,4 +1,4 @@
-"""Paper 列表与 PDF 文件预览相关的 HTTP 路由（切片 10）。"""
+"""个人文献库、Project 收录与 PDF 预览 HTTP API。"""
 
 from datetime import datetime
 from typing import Annotated, NoReturn
@@ -8,9 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from literature_agent.api.dependencies import ActorDep
-from literature_agent.application.paper_query_service import PaperQueryService
+from literature_agent.application.paper_query_service import (
+    PaperListItem,
+    PaperQueryService,
+)
 from literature_agent.application.ports.storage import StorageError
+from literature_agent.application.project_library_service import ProjectLibraryService
 from literature_agent.domain.exceptions import (
+    PaperNotFoundError,
     PaperVersionNotFoundError,
     ProjectNotFoundError,
 )
@@ -20,32 +25,53 @@ from literature_agent.infrastructure.persistence.paper_repository import (
 from literature_agent.infrastructure.persistence.paper_version_repository import (
     SqlalchemyPaperVersionRepository,
 )
+from literature_agent.infrastructure.persistence.project_paper_repository import (
+    SqlalchemyProjectPaperRepository,
+)
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
 )
 
-router = APIRouter(prefix="/api/v1/projects", tags=["papers"])
+router = APIRouter(prefix="/api/v1", tags=["papers"])
 
 
-class LatestVersionResponse(BaseModel):
-    """Paper 最新 Version 摘要。"""
+class VersionSummaryResponse(BaseModel):
+    """Paper 固定 Version 的摘要。"""
 
     version_id: str
     display_filename: str
     size_bytes: int
     created_at: datetime
     parse_ready: bool
+    ingestion_run_id: str | None
 
 
 class PaperListItemResponse(BaseModel):
-    """Paper 列表条目。"""
+    """个人文献库或 Project 文献列表条目。"""
 
     paper_id: str
     created_at: datetime
-    latest_version: LatestVersionResponse | None
+    version: VersionSummaryResponse
+    project_ids: list[str]
 
 
-def get_paper_query_service(request: Request) -> PaperQueryService:
+class AddPaperRequest(BaseModel):
+    """从个人文献库添加已有 Paper 的请求。"""
+
+    paper_id: str
+    version_id: str
+
+
+class ProjectPaperResponse(BaseModel):
+    """Project 收录关系写入结果。"""
+
+    project_id: str
+    paper_id: str
+    selected_version_id: str
+    already_added: bool
+
+
+async def get_paper_query_service(request: Request) -> PaperQueryService:
     """从应用状态构建 PaperQueryService。"""
     app_state = request.app.state.app_state
     return PaperQueryService(
@@ -53,16 +79,33 @@ def get_paper_query_service(request: Request) -> PaperQueryService:
         project_repo_factory=SqlalchemyProjectRepository,
         paper_repo_factory=SqlalchemyPaperRepository,
         paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
         storage=app_state.storage,
     )
 
 
+async def get_project_library_service(request: Request) -> ProjectLibraryService:
+    """从应用状态构建 ProjectLibraryService。"""
+    app_state = request.app.state.app_state
+    return ProjectLibraryService(
+        session_factory=app_state.session_factory,
+        project_repo_factory=SqlalchemyProjectRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+    )
+
+
 PaperQueryServiceDep = Annotated[PaperQueryService, Depends(get_paper_query_service)]
+ProjectLibraryServiceDep = Annotated[ProjectLibraryService, Depends(get_project_library_service)]
 
 
 def _handle_query_errors(exc: Exception) -> NoReturn:
-    """把领域异常映射为 HTTP 错误；越权与不存在统一 404。"""
-    if isinstance(exc, ProjectNotFoundError | PaperVersionNotFoundError | StorageError):
+    """把不存在、越权和 Storage 错误统一映射为 404。"""
+    if isinstance(
+        exc,
+        ProjectNotFoundError | PaperNotFoundError | PaperVersionNotFoundError | StorageError,
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="资源不存在",
@@ -70,45 +113,104 @@ def _handle_query_errors(exc: Exception) -> NoReturn:
     raise exc
 
 
-@router.get("/{project_id}/papers", response_model=list[PaperListItemResponse])
-async def list_papers(
+def _response(item: PaperListItem) -> PaperListItemResponse:
+    """把应用层 Paper 条目转换成 HTTP 响应。"""
+    return PaperListItemResponse(
+        paper_id=item.paper_id,
+        created_at=item.created_at,
+        version=VersionSummaryResponse(
+            version_id=item.version.version_id,
+            display_filename=item.version.display_filename,
+            size_bytes=item.version.size_bytes,
+            created_at=item.version.created_at,
+            parse_ready=item.version.parse_ready,
+            ingestion_run_id=item.version.ingestion_run_id,
+        ),
+        project_ids=list(item.project_ids),
+    )
+
+
+@router.get("/library/papers", response_model=list[PaperListItemResponse])
+async def list_library_papers(
+    actor: ActorDep,
+    service: PaperQueryServiceDep,
+) -> list[PaperListItemResponse]:
+    """列出当前 owner 的个人文献库。"""
+    return [_response(item) for item in await service.list_library_papers(actor)]
+
+
+@router.get(
+    "/projects/{project_id}/papers",
+    response_model=list[PaperListItemResponse],
+)
+async def list_project_papers(
     project_id: str,
     actor: ActorDep,
     service: PaperQueryServiceDep,
 ) -> list[PaperListItemResponse]:
-    """列出当前 actor 可见 Project 的全部 Paper 及最新 Version 摘要。"""
+    """列出 Project 收录的 Paper 与固定 Version。"""
     try:
-        items = await service.list_papers(actor, project_id)
+        items = await service.list_project_papers(actor, project_id)
     except ProjectNotFoundError as exc:
         _handle_query_errors(exc)
-    return [
-        PaperListItemResponse(
-            paper_id=item.paper_id,
-            created_at=item.created_at,
-            latest_version=(
-                LatestVersionResponse(
-                    version_id=item.latest_version.version_id,
-                    display_filename=item.latest_version.display_filename,
-                    size_bytes=item.latest_version.size_bytes,
-                    created_at=item.latest_version.created_at,
-                    parse_ready=item.latest_version.parse_ready,
-                )
-                if item.latest_version is not None
-                else None
-            ),
-        )
-        for item in items
-    ]
+    return [_response(item) for item in items]
 
 
-@router.get("/{project_id}/paper-versions/{version_id}/file")
+@router.post(
+    "/projects/{project_id}/papers",
+    response_model=ProjectPaperResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_existing_paper(
+    project_id: str,
+    body: AddPaperRequest,
+    actor: ActorDep,
+    service: ProjectLibraryServiceDep,
+    response: Response,
+) -> ProjectPaperResponse:
+    """把个人文献库中的已有 Version 收录到 Project。"""
+    try:
+        result = await service.add_existing_paper(actor, project_id, body.paper_id, body.version_id)
+    except (ProjectNotFoundError, PaperNotFoundError, PaperVersionNotFoundError) as exc:
+        _handle_query_errors(exc)
+    if result.already_added:
+        response.status_code = status.HTTP_200_OK
+    return ProjectPaperResponse(
+        project_id=result.relation.project_id,
+        paper_id=result.relation.paper_id,
+        selected_version_id=result.relation.selected_version_id,
+        already_added=result.already_added,
+    )
+
+
+@router.delete(
+    "/projects/{project_id}/papers/{paper_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_project_paper(
+    project_id: str,
+    paper_id: str,
+    actor: ActorDep,
+    service: ProjectLibraryServiceDep,
+) -> Response:
+    """从 Project 移除 Paper，但保留个人文献库内容。"""
+    try:
+        removed = await service.remove_paper(actor, project_id, paper_id)
+    except ProjectNotFoundError as exc:
+        _handle_query_errors(exc)
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资源不存在")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/projects/{project_id}/paper-versions/{version_id}/file")
 async def get_version_file(
     project_id: str,
     version_id: str,
     actor: ActorDep,
     service: PaperQueryServiceDep,
 ) -> Response:
-    """返回 Version 对应的 PDF 文件内容，供浏览器内联预览。"""
+    """返回 Project 固定 Version 的 PDF 文件。"""
     try:
         result = await service.get_version_file(actor, project_id, version_id)
     except (ProjectNotFoundError, PaperVersionNotFoundError, StorageError) as exc:

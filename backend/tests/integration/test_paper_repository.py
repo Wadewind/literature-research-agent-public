@@ -4,12 +4,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.domain.paper import create_paper
-from literature_agent.domain.project import create_project as create_project_entity
 from literature_agent.infrastructure.persistence.paper_repository import (
     SqlalchemyPaperRepository,
-)
-from literature_agent.infrastructure.persistence.project_repository import (
-    SqlalchemyProjectRepository,
 )
 
 
@@ -26,7 +22,7 @@ async def test_add_and_get_paper(
     project: str,
 ) -> None:
     """保存并查询 Paper。"""
-    paper = create_paper(owner_id="user-1", project_id=project)
+    paper = create_paper(owner_id="user-1")
     await repo.add(paper)
     await session.commit()
 
@@ -38,24 +34,19 @@ async def test_add_and_get_paper(
 
 
 @pytest.mark.asyncio
-async def test_list_by_project_isolation(
+async def test_list_by_owner_isolation(
     repo: SqlalchemyPaperRepository,
     session: AsyncSession,
     project: str,
 ) -> None:
-    """Paper 列表按 Project 隔离。"""
-    project_repo = SqlalchemyProjectRepository(session)
-    other_project = create_project_entity(owner_id="user-1", name="其他项目", description="")
-    await project_repo.add(other_project)
-    await session.flush()
-
-    paper_a = create_paper(owner_id="user-1", project_id=project)
-    paper_b = create_paper(owner_id="user-1", project_id=other_project.project_id)
+    """个人文献库按 owner 隔离。"""
+    paper_a = create_paper(owner_id="user-1")
+    paper_b = create_paper(owner_id="user-2")
     await repo.add(paper_a)
     await repo.add(paper_b)
     await session.commit()
 
-    results = await repo.list_by_project(project)
+    results = await repo.list_by_owner("user-1")
 
     assert len(results) == 1
-    assert results[0].project_id == project
+    assert results[0].owner_id == "user-1"

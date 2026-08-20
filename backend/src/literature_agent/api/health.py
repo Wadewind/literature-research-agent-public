@@ -16,7 +16,7 @@ class LiveResponse(BaseModel):
     status: str
 
 
-def get_health_service() -> HealthService:
+async def get_health_service() -> HealthService:
     """提供健康检查应用服务的依赖。"""
     return HealthService()
 

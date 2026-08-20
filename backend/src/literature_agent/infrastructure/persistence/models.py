@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -110,10 +110,9 @@ class PaperORM(Base):
         default=lambda: str(uuid4()),
     )
     owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
-    project_id: Mapped[str] = mapped_column(
-        ForeignKey("projects.project_id"),
-        index=True,
-        nullable=False,
+    merged_into_paper_id: Mapped[str | None] = mapped_column(
+        ForeignKey("papers.paper_id"),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -137,6 +136,7 @@ class PaperVersionORM(Base):
         index=True,
         nullable=False,
     )
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     size_bytes: Mapped[int] = mapped_column(nullable=False)
@@ -150,6 +150,50 @@ class PaperVersionORM(Base):
         String(36),
         ForeignKey("document_parse_revisions.revision_id", use_alter=True),
         nullable=True,
+    )
+    ingestion_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runs.run_id"),
+        nullable=True,
+    )
+    is_deduplication_canonical: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_paper_versions_owner_file_hash_canonical",
+            "owner_id",
+            "file_hash",
+            unique=True,
+            postgresql_where=is_deduplication_canonical.is_(True),
+        ),
+    )
+
+
+class ProjectPaperORM(Base):
+    """Project 对个人文献库 Paper 的收录关系。"""
+
+    __tablename__ = "project_papers"
+
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"),
+        primary_key=True,
+    )
+    paper_id: Mapped[str] = mapped_column(
+        ForeignKey("papers.paper_id"),
+        primary_key=True,
+    )
+    selected_version_id: Mapped[str] = mapped_column(
+        ForeignKey("paper_versions.version_id"),
+        index=True,
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -342,10 +386,21 @@ class IdempotencyKeyORM(Base):
         nullable=False,
     )
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[str | None] = mapped_column(
         ForeignKey("runs.run_id"),
-        nullable=False,
+        nullable=True,
     )
+    paper_id: Mapped[str | None] = mapped_column(
+        ForeignKey("papers.paper_id"),
+        nullable=True,
+    )
+    version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("paper_versions.version_id"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    reused: Mapped[bool] = mapped_column(default=False, nullable=False)
+    already_added: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

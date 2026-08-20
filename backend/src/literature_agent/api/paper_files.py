@@ -2,7 +2,17 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from literature_agent.api.dependencies import ActorDep
 from literature_agent.application.ingestion_service import IngestionService, UploadResult
@@ -26,6 +36,9 @@ from literature_agent.infrastructure.persistence.paper_repository import (
 from literature_agent.infrastructure.persistence.paper_version_repository import (
     SqlalchemyPaperVersionRepository,
 )
+from literature_agent.infrastructure.persistence.project_paper_repository import (
+    SqlalchemyProjectPaperRepository,
+)
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
 )
@@ -36,7 +49,7 @@ from literature_agent.infrastructure.persistence.run_repository import (
 router = APIRouter(prefix="/api/v1/projects", tags=["paper-files"])
 
 
-def get_ingestion_service(request: Request) -> IngestionService:
+async def get_ingestion_service(request: Request) -> IngestionService:
     """从应用状态构建 IngestionService。"""
     app_state = request.app.state.app_state
     return IngestionService(
@@ -45,6 +58,7 @@ def get_ingestion_service(request: Request) -> IngestionService:
         project_repo_factory=SqlalchemyProjectRepository,
         paper_repo_factory=SqlalchemyPaperRepository,
         paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
         idempotency_repo_factory=SqlalchemyIdempotencyRepository,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
@@ -65,6 +79,7 @@ async def upload_paper_file(
     project_id: str,
     actor: ActorDep,
     service: IngestionServiceDep,
+    response: Response,
     file: Annotated[UploadFile, File(...)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> UploadResult:
@@ -80,7 +95,7 @@ async def upload_paper_file(
     content_type = file.content_type or "application/octet-stream"
 
     try:
-        return await service.upload_paper_file(
+        result = await service.upload_paper_file(
             actor=actor,
             project_id=project_id,
             filename=filename,
@@ -89,6 +104,11 @@ async def upload_paper_file(
             idempotency_key=idempotency_key,
             correlation_id="api-upload-paper-file",
         )
+        if result.already_added:
+            response.status_code = status.HTTP_200_OK
+        elif result.reused:
+            response.status_code = status.HTTP_201_CREATED
+        return result
     except FileValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

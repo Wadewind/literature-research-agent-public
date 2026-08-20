@@ -21,6 +21,21 @@ class FakePaperVersionRepository(PaperVersionRepository):
         """根据 ID 返回 PaperVersion。"""
         return self._versions.get(version_id)
 
+    async def get_by_owner_and_hash(
+        self,
+        owner_id: str,
+        file_hash: str,
+    ) -> PaperVersion | None:
+        """按 owner 与哈希返回 Version。"""
+        return next(
+            (
+                version
+                for version in self._versions.values()
+                if version.owner_id == owner_id and version.file_hash == file_hash
+            ),
+            None,
+        )
+
     async def list_by_paper(self, paper_id: str) -> list[PaperVersion]:
         """返回指定 Paper 的版本列表。"""
         return [v for v in self._versions.values() if v.paper_id == paper_id]

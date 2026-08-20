@@ -126,6 +126,28 @@ Chunk 是为检索、Embedding 或特定模型上下文组合一个或多个 Ele
 - 逻辑去重限定在用户可见范围，不泄漏其他用户是否上传过相同文件；
 - 首版 Storage Key 按 owner 隔离，不优化跨用户物理 Blob 去重。
 
+### 用户级文献库与 Project 收录（2026-08-20 补充决定）
+
+切片 10 完成后发现，早期实现把 `Paper.project_id` 作为直接归属，导致同一用户在多个 Project 上传相同 PDF 时重复存储、解析，并会在 Phase 2 产生重复 Chunk 和 Embedding。Phase 1 收尾按以下规则修正：
+
+- `Paper` 属于 owner 范围的个人文献库，不直接属于单个 Project；
+- `ProjectPaper` 表示 Project 对 Paper 的收录，业务上收录 Paper，技术上固定 `selected_version_id`，避免新增 Version 后静默改变历史语料；
+- 相同 owner 上传 SHA-256 相同的 PDF 时自动复用已有 PaperVersion；跨 owner 不共享身份、文件或解析结果；
+- 复用已解析 Version 时只新增 ProjectPaper，不创建新 Run；Version 尚在解析时复用原 Ingestion Run；
+- 同一 Project 重复收录同一 Paper 幂等返回，不创建第二条关系；
+- 从 Project 移除只删除 ProjectPaper，Paper、PDF 和解析结果继续保留在个人文献库；首版不做自动垃圾回收和 Paper 合并；
+- 不同哈希默认视为不同 Paper。作者稿、出版版等同一学术作品的版本合并留到有 DOI/元数据校验或显式用户操作后实现。
+
+新增 API 契约：
+
+```text
+GET    /api/v1/library/papers
+POST   /api/v1/projects/{project_id}/papers
+DELETE /api/v1/projects/{project_id}/papers/{paper_id}
+```
+
+上传响应增加 `reused`、`already_added`，且 `run_id` 可空：新文件返回 `202 + run_id`；复用已解析文件返回 `201 + run_id=null`；当前 Project 已收录时幂等返回已有关系。
+
 ## 初步数据关系
 
 具体字段和索引在每个切片前通过迁移和测试确定，关系至少包括：
@@ -530,6 +552,8 @@ Worker 崩溃、临时错误或机器故障不再让 Run 永久卡在 `RUNNING`�
 
 #### API 契约（本切片新增的后端端点）
 
+> 2026-08-20 补充：下方最初的 `latest_version` 单 Project 响应已被用户级文献库方案取代。当前响应使用非空 `version`、`project_ids` 和 `ingestion_run_id`；完整契约以前文“用户级文献库与 Project 收录”为准。
+
 ```text
 GET /api/v1/projects/{project_id}/papers
 200 [
@@ -560,7 +584,7 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 #### 前端契约与关键决策
 
-- 路由：`/`（Project 列表/创建）、`/projects/:projectId`（Library：上传 + Paper 列表）、`/runs/:runId`（Run Detail：SSE 时间线 + 取消）、`/projects/:projectId/versions/:versionId/document`（Element 预览 + PDF 跳转）；
+- 路由：`/`（Project 列表/创建）、`/library`（owner 个人文献库与收录范围）、`/projects/:projectId`（上传、复用已有文献、移除收录）、`/runs/:runId`（Run Detail）、`/projects/:projectId/versions/:versionId/document`（Element 预览 + PDF 跳转）；
 - 上传每次选择新文件生成新的 `Idempotency-Key`（`crypto.randomUUID()`），同一文件重试复用同一 Key；
 - SSE 使用原生 `EventSource`（断线重连自动携带 `Last-Event-ID`，与切片 9 的 sequence 游标契约一致）；收到终态事件（Ingestion 成功为 `result_committed`，失败/取消为 `run_failed`/`run_cancelled`，通用路径为 `run_completed`）或轮询发现 Run 终态时主动 `close()`，避免对已收束的流无限重连；
 - PDF 预览用 `<iframe src=".../file#page=N">` 原生查看器页码锚点，零新增依赖；不做 bbox 高亮（已知限制，后续可用 pdf.js 升级）；
@@ -651,6 +675,6 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 切片 9（Event/SSE）→ 已完成（2026-08-20）：events 端点 `after_sequence`/`limit` 游标分页；`EventNotifier` Port + Valkey Pub/Sub（channel `run-events:{run_id}`，payload 只有 run_id）+ Noop 默认；四个写事件服务 commit 后通知（失败只记日志）；SSE `GET /runs/{run_id}/events/stream`（Last-Event-ID 续传、先重放后实时、15s 心跳注释、终态收束关闭、1s 轮询兜底）。
 
-切片 10（最小 Web UI）→ 已完成（2026-08-20）：后端补 `GET .../papers`（Paper + 最新 Version 摘要）与 `GET .../paper-versions/{id}/file`（inline PDF，无需 Parse Revision），`paper_versions` 增加 `display_filename` 迁移；前端 `web/` 脚手架（React 19 + Vite + TS strict + TanStack Query + react-router-dom，无 UI 组件库），四个页面覆盖 Project 创建、上传（Idempotency-Key 复用/重生成）、Run SSE 时间线（原生 EventSource + Last-Event-ID 自动重连 + 终态主动收束 + 2s 轮询兜底）、取消、Element 结构预览与 `#page=N` PDF 定位。冒烟中实测修正：Ingestion 成功终态事件是 `result_committed` 而非 `run_completed`，终态收束清单已两者都含。验证：pytest 165 passed + 2 skipped，ruff/pyright 全绿；Vitest 35 passed；`npm run build` 通过；本地 compose + uvicorn + Worker（真实 Docling）+ Vite dev 手动闭环与 Playwright 截图验证通过。
+切片 10（Web UI）→ 已完成（2026-08-20）：已升级为 owner 个人文献库 + ProjectPaper 收录模型；同 owner 的相同 SHA-256 会复用 canonical Version 及原 Run/解析结果；项目页可上传、直接收录已有文献、仅移除收录关系；新增个人文献库页展示跨 Project 收录范围。旧重复数据通过 canonical/归并标记无损迁移，不删除历史 Parse Revision/Element。本次验证：Domain/Application 89 passed，相关 API 15 passed，PostgreSQL/Valkey Integration 34 passed，Vitest 35 passed，`npm run build` 通过；切片 11 仍负责固化 Compose Smoke、故障注入和 Playwright E2E。
 
 下一步是切片 11（验收复盘）：Compose Smoke、Playwright E2E、故障注入和模块学习笔记收尾。

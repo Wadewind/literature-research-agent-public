@@ -16,6 +16,7 @@ from tests.fakes.fake_idempotency_repository import FakeIdempotencyRepository
 from tests.fakes.fake_outbox_repository import FakeOutboxRepository
 from tests.fakes.fake_paper_repository import FakePaperRepository
 from tests.fakes.fake_paper_version_repository import FakePaperVersionRepository
+from tests.fakes.fake_project_paper_repository import FakeProjectPaperRepository
 from tests.fakes.fake_project_repository import FakeProjectRepository, fake_session
 from tests.fakes.fake_run_repository import FakeRunRepository
 from tests.fakes.fake_storage import FakeStorage
@@ -37,6 +38,12 @@ def paper_repo() -> FakePaperRepository:
 def paper_version_repo() -> FakePaperVersionRepository:
     """提供 Fake PaperVersion Repository。"""
     return FakePaperVersionRepository()
+
+
+@pytest.fixture
+def project_paper_repo() -> FakeProjectPaperRepository:
+    """提供 Fake ProjectPaper Repository。"""
+    return FakeProjectPaperRepository()
 
 
 @pytest.fixture
@@ -74,6 +81,7 @@ async def service(
     project_repo: FakeProjectRepository,
     paper_repo: FakePaperRepository,
     paper_version_repo: FakePaperVersionRepository,
+    project_paper_repo: FakeProjectPaperRepository,
     idempotency_repo: FakeIdempotencyRepository,
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
@@ -87,6 +95,7 @@ async def service(
         project_repo_factory=lambda _session: project_repo,
         paper_repo_factory=lambda _session: paper_repo,
         paper_version_repo_factory=lambda _session: paper_version_repo,
+        project_paper_repo_factory=lambda _session: project_paper_repo,
         idempotency_repo_factory=lambda _session: idempotency_repo,
         run_repo_factory=lambda _session: run_repo,
         event_repo_factory=lambda _session: event_repo,
@@ -306,3 +315,79 @@ async def test_upload_idempotent_different_request_raises_conflict(
             idempotency_key="key-6",
             correlation_id="corr-2",
         )
+
+
+@pytest.mark.asyncio
+async def test_same_owner_hash_reuses_version_across_projects(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    project_repo: FakeProjectRepository,
+    project_paper_repo: FakeProjectPaperRepository,
+) -> None:
+    """同一 owner 的相同 PDF 应复用 Version，并加入另一个 Project。"""
+    other = create_project(actor.owner_id, "另一个项目", "")
+    await project_repo.add(other)
+
+    first = await service.upload_paper_file(
+        actor=actor,
+        project_id=project.project_id,
+        filename="paper.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="hash-first",
+        correlation_id="corr-1",
+    )
+    reused = await service.upload_paper_file(
+        actor=actor,
+        project_id=other.project_id,
+        filename="paper.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="hash-second",
+        correlation_id="corr-2",
+    )
+
+    assert reused.reused is True
+    assert reused.already_added is False
+    assert reused.paper_id == first.paper_id
+    assert reused.version_id == first.version_id
+    assert reused.run_id == first.run_id
+    assert await project_paper_repo.get(other.project_id, first.paper_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_ready_version_reuse_has_no_new_run(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    project_repo: FakeProjectRepository,
+    paper_version_repo: FakePaperVersionRepository,
+) -> None:
+    """复用已经解析完成的 Version 时不应暴露新的 Run。"""
+    other = create_project(actor.owner_id, "另一个项目", "")
+    await project_repo.add(other)
+    first = await service.upload_paper_file(
+        actor=actor,
+        project_id=project.project_id,
+        filename="paper.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="ready-first",
+        correlation_id="corr-1",
+    )
+    await paper_version_repo.set_current_parse_revision(first.version_id, "revision-1")
+
+    reused = await service.upload_paper_file(
+        actor=actor,
+        project_id=other.project_id,
+        filename="renamed.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="ready-second",
+        correlation_id="corr-2",
+    )
+
+    assert reused.reused is True
+    assert reused.run_id is None
+    assert reused.status == "ready"

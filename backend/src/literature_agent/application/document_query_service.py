@@ -13,6 +13,9 @@ from literature_agent.application.ports.paper_version_repository import (
 from literature_agent.application.ports.parse_revision_repository import (
     ParseRevisionRepository,
 )
+from literature_agent.application.ports.project_paper_repository import (
+    ProjectPaperRepository,
+)
 from literature_agent.application.ports.project_repository import ProjectRepository
 from literature_agent.application.ports.session import Session
 from literature_agent.domain.actor import ActorContext
@@ -69,6 +72,7 @@ class DocumentQueryService[TSession: Session]:
         project_repo_factory: Callable[[TSession], ProjectRepository],
         paper_repo_factory: Callable[[TSession], PaperRepository],
         paper_version_repo_factory: Callable[[TSession], PaperVersionRepository],
+        project_paper_repo_factory: Callable[[TSession], ProjectPaperRepository],
         parse_revision_repo_factory: Callable[[TSession], ParseRevisionRepository],
         element_repo_factory: Callable[[TSession], ElementRepository],
     ) -> None:
@@ -86,6 +90,7 @@ class DocumentQueryService[TSession: Session]:
         self._project_repo_factory = project_repo_factory
         self._paper_repo_factory = paper_repo_factory
         self._paper_version_repo_factory = paper_version_repo_factory
+        self._project_paper_repo_factory = project_paper_repo_factory
         self._parse_revision_repo_factory = parse_revision_repo_factory
         self._element_repo_factory = element_repo_factory
 
@@ -179,8 +184,16 @@ class DocumentQueryService[TSession: Session]:
         version = await self._paper_version_repo_factory(session).get_by_id(version_id)
         if version is None:
             raise PaperVersionNotFoundError(version_id)
+        relation = await self._project_paper_repo_factory(session).get_by_version(
+            project_id, version_id
+        )
         paper = await self._paper_repo_factory(session).get_by_id(version.paper_id)
-        if paper is None or paper.project_id != project_id:
+        if (
+            relation is None
+            or relation.paper_id != version.paper_id
+            or paper is None
+            or paper.owner_id != actor.owner_id
+        ):
             raise PaperVersionNotFoundError(version_id)
         if version.current_parse_revision_id is None:
             raise DocumentNotReadyError(version_id)

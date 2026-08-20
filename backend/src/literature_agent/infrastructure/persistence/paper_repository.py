@@ -13,7 +13,6 @@ def _to_domain(orm: PaperORM) -> Paper:
     return Paper(
         paper_id=orm.paper_id,
         owner_id=orm.owner_id,
-        project_id=orm.project_id,
         created_at=orm.created_at,
     )
 
@@ -23,7 +22,6 @@ def _to_orm(paper: Paper) -> PaperORM:
     return PaperORM(
         paper_id=paper.paper_id,
         owner_id=paper.owner_id,
-        project_id=paper.project_id,
         created_at=paper.created_at,
     )
 
@@ -52,11 +50,14 @@ class SqlalchemyPaperRepository(PaperRepository):
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
 
-    async def list_by_project(self, project_id: str) -> list[Paper]:
-        """按 Project ID 列出所有 Paper。"""
+    async def list_by_owner(self, owner_id: str) -> list[Paper]:
+        """列出 owner 个人文献库中的 Paper。"""
         result = await self._session.execute(
             select(PaperORM)
-            .where(PaperORM.project_id == project_id)
+            .where(
+                PaperORM.owner_id == owner_id,
+                PaperORM.merged_into_paper_id.is_(None),
+            )
             .order_by(PaperORM.created_at.desc()),
         )
         return [_to_domain(row) for row in result.scalars().all()]

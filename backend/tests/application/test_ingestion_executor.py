@@ -126,6 +126,7 @@ async def _add_version(version_repo: FakePaperVersionRepository) -> str:
     """创建一个 PaperVersion 并返回其 ID。"""
     version = create_paper_version(
         paper_id="paper-1",
+        owner_id="user-1",
         file_hash="a" * 64,
         storage_key="user-1/proj/paper-1/paper.pdf",
         size_bytes=100,

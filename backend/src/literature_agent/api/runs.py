@@ -77,7 +77,7 @@ class EventResponse(BaseModel):
     payload: dict
 
 
-def get_run_service(request: Request) -> RunService:
+async def get_run_service(request: Request) -> RunService:
     """从应用状态构建 RunService。"""
     app_state = request.app.state.app_state
     return RunService(

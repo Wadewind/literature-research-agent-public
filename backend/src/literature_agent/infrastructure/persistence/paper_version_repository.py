@@ -15,6 +15,7 @@ def _to_domain(orm: PaperVersionORM) -> PaperVersion:
     return PaperVersion(
         version_id=orm.version_id,
         paper_id=orm.paper_id,
+        owner_id=orm.owner_id,
         file_hash=orm.file_hash,
         storage_key=orm.storage_key,
         size_bytes=orm.size_bytes,
@@ -22,6 +23,7 @@ def _to_domain(orm: PaperVersionORM) -> PaperVersion:
         created_at=orm.created_at,
         current_parse_revision_id=orm.current_parse_revision_id,
         display_filename=orm.display_filename,
+        ingestion_run_id=orm.ingestion_run_id,
     )
 
 
@@ -30,12 +32,14 @@ def _to_orm(version: PaperVersion) -> PaperVersionORM:
     return PaperVersionORM(
         version_id=version.version_id,
         paper_id=version.paper_id,
+        owner_id=version.owner_id,
         file_hash=version.file_hash,
         storage_key=version.storage_key,
         size_bytes=version.size_bytes,
         content_type=version.content_type,
         created_at=version.created_at,
         display_filename=version.display_filename,
+        ingestion_run_id=version.ingestion_run_id,
     )
 
 
@@ -59,6 +63,22 @@ class SqlalchemyPaperVersionRepository(PaperVersionRepository):
         """按 ID 查询 PaperVersion。"""
         result = await self._session.execute(
             select(PaperVersionORM).where(PaperVersionORM.version_id == version_id),
+        )
+        orm = result.scalar_one_or_none()
+        return _to_domain(orm) if orm else None
+
+    async def get_by_owner_and_hash(
+        self,
+        owner_id: str,
+        file_hash: str,
+    ) -> PaperVersion | None:
+        """按 owner 与内容哈希查询可复用 Version。"""
+        result = await self._session.execute(
+            select(PaperVersionORM).where(
+                PaperVersionORM.owner_id == owner_id,
+                PaperVersionORM.file_hash == file_hash,
+                PaperVersionORM.is_deduplication_canonical.is_(True),
+            ),
         )
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None

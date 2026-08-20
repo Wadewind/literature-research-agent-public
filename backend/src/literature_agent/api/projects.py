@@ -36,7 +36,7 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
 
 
-def get_project_service(request: Request) -> ProjectService:
+async def get_project_service(request: Request) -> ProjectService:
     """从应用状态构建 ProjectService。"""
     app_state = request.app.state.app_state
     return ProjectService(

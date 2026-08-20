@@ -1,6 +1,6 @@
 # Literature Review Agent System
 
-面向学习和简历展示的文献综述 Agent 系统。Phase 1（Project、文献库与可靠异步导入）进行中，已完成切片 1–10：FastAPI 基线、上传与版本、Queue Outbox + ARQ Worker、Docling/pypdf 解析、Event/SSE 与最小 Web UI。
+面向学习和简历展示的文献综述 Agent 系统。Phase 1（Project、个人文献库与可靠异步导入）的核心功能已完成：同一用户的 PDF 按内容哈希只存储和解析一次，可被多个 Project 收录；后台提供可恢复导入、Event/SSE 和结构化文档查询，Web 端提供完整演示闭环。切片 11 验收复盘仍保留为后续工作。
 
 ## 仓库布局
 

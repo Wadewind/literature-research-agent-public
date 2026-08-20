@@ -16,6 +16,6 @@ class PaperRepository(Protocol):
         """按 ID 查询 Paper；不存在返回 None。"""
         ...
 
-    async def list_by_project(self, project_id: str) -> list[Paper]:
-        """按 Project ID 列出所有 Paper。"""
+    async def list_by_owner(self, owner_id: str) -> list[Paper]:
+        """列出 owner 个人文献库中的 Paper。"""
         ...

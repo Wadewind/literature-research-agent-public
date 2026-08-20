@@ -64,6 +64,14 @@ class PaperVersionNotFoundError(Exception):
         super().__init__(f"PaperVersion {version_id} 不存在")
 
 
+class PaperNotFoundError(Exception):
+    """Paper 不存在或当前 actor 无权访问。"""
+
+    def __init__(self, paper_id: str) -> None:
+        self.paper_id = paper_id
+        super().__init__(f"Paper {paper_id} 不存在")
+
+
 class DocumentNotReadyError(Exception):
     """Paper Version 尚无当前 Parse Revision，文档内容不可用。"""
 

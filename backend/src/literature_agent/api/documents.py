@@ -30,6 +30,9 @@ from literature_agent.infrastructure.persistence.paper_version_repository import
 from literature_agent.infrastructure.persistence.parse_revision_repository import (
     SqlalchemyParseRevisionRepository,
 )
+from literature_agent.infrastructure.persistence.project_paper_repository import (
+    SqlalchemyProjectPaperRepository,
+)
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
 )
@@ -83,7 +86,7 @@ class ElementResponse(BaseModel):
     locations: list[SourceLocationResponse]
 
 
-def get_document_query_service(request: Request) -> DocumentQueryService:
+async def get_document_query_service(request: Request) -> DocumentQueryService:
     """从应用状态构建 DocumentQueryService。"""
     app_state = request.app.state.app_state
     return DocumentQueryService(
@@ -91,6 +94,7 @@ def get_document_query_service(request: Request) -> DocumentQueryService:
         project_repo_factory=SqlalchemyProjectRepository,
         paper_repo_factory=SqlalchemyPaperRepository,
         paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
         parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
         element_repo_factory=SqlalchemyElementRepository,
     )
@@ -112,8 +116,7 @@ def _document_to_response(overview: DocumentOverview) -> DocumentResponse:
         degraded=overview.degraded,
         warnings=overview.warnings,
         sections=[
-            SectionResponse(section_path=s.section_path, title=s.title)
-            for s in overview.sections
+            SectionResponse(section_path=s.section_path, title=s.title) for s in overview.sections
         ],
     )
 

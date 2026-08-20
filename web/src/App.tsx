@@ -1,22 +1,31 @@
-import { Link, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import DocumentPage from "./pages/DocumentPage";
 import LibraryPage from "./pages/LibraryPage";
+import PersonalLibraryPage from "./pages/PersonalLibraryPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import RunDetailPage from "./pages/RunDetailPage";
 
 export default function App() {
   return (
-    <div className="app">
+    <div className="app-shell">
+      <ScrollToTop />
       <header className="app-header">
-        <Link to="/" className="app-title">
-          文献综述 Agent
+        <Link to="/" className="brand" aria-label="返回项目首页">
+          <span className="brand-mark" aria-hidden="true">L·A</span>
+          <span><strong>Literature Atlas</strong><small>文献综述 Agent</small></span>
         </Link>
-        <span className="app-phase">Phase 1 · 文献库与导入</span>
+        <nav className="primary-nav" aria-label="主导航">
+          <NavLink to="/" end>项目</NavLink>
+          <NavLink to="/library">个人文献库</NavLink>
+        </nav>
+        <span className="phase-chip">PHASE 01</span>
       </header>
       <main className="app-main">
         <Routes>
           <Route path="/" element={<ProjectsPage />} />
+          <Route path="/library" element={<PersonalLibraryPage />} />
           <Route path="/projects/:projectId" element={<LibraryPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />
           <Route
@@ -28,6 +37,16 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+function ScrollToTop() {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [pathname]);
+
+  return null;
 }
 
 function NotFound() {

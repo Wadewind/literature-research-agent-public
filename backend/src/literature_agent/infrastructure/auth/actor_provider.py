@@ -5,7 +5,7 @@ from fastapi import Request
 from literature_agent.domain.actor import ActorContext
 
 
-def get_actor(request: Request) -> ActorContext:
+async def get_actor(request: Request) -> ActorContext:
     """从应用状态中提取当前可信 Actor。
 
     当前实现从 ``Settings.dev_actor_id`` 读取本地开发用户。

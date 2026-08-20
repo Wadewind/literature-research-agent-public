@@ -4,7 +4,7 @@ import hashlib
 import re
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
@@ -22,6 +22,9 @@ from literature_agent.application.ports.paper_repository import PaperRepository
 from literature_agent.application.ports.paper_version_repository import (
     PaperVersionRepository,
 )
+from literature_agent.application.ports.project_paper_repository import (
+    ProjectPaperRepository,
+)
 from literature_agent.application.ports.project_repository import ProjectRepository
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
@@ -36,6 +39,7 @@ from literature_agent.domain.exceptions import (
 )
 from literature_agent.domain.paper import create_paper
 from literature_agent.domain.paper_version import create_paper_version
+from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import create_outbox_entry
 from literature_agent.domain.run import Run, create_run
 
@@ -49,10 +53,12 @@ _IDEMPOTENCY_KEY_MAX_LENGTH = 255
 class UploadResult:
     """上传接口返回结果。"""
 
-    run_id: str
+    run_id: str | None
     paper_id: str
     version_id: str
     status: str
+    reused: bool = False
+    already_added: bool = False
 
 
 def _compute_sha256(content: bytes) -> str:
@@ -95,6 +101,7 @@ class IngestionService:
         project_repo_factory: Callable[[TSession], ProjectRepository],
         paper_repo_factory: Callable[[TSession], PaperRepository],
         paper_version_repo_factory: Callable[[TSession], PaperVersionRepository],
+        project_paper_repo_factory: Callable[[TSession], ProjectPaperRepository],
         idempotency_repo_factory: Callable[[TSession], IdempotencyRepository],
         run_repo_factory: Callable[[TSession], RunRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
@@ -122,6 +129,7 @@ class IngestionService:
         self._project_repo_factory = project_repo_factory
         self._paper_repo_factory = paper_repo_factory
         self._paper_version_repo_factory = paper_version_repo_factory
+        self._project_paper_repo_factory = project_paper_repo_factory
         self._idempotency_repo_factory = idempotency_repo_factory
         self._run_repo_factory = run_repo_factory
         self._event_repo_factory = event_repo_factory
@@ -176,7 +184,17 @@ class IngestionService:
             if existing is not None:
                 if existing.request_hash != request_hash:
                     raise IdempotencyConflictError(idempotency_key)
-                # 命中幂等缓存，直接返回已创建的 Run 信息
+                if existing.paper_id and existing.version_id:
+                    return UploadResult(
+                        run_id=existing.run_id,
+                        paper_id=existing.paper_id,
+                        version_id=existing.version_id,
+                        status=existing.status,
+                        reused=existing.reused,
+                        already_added=existing.already_added,
+                    )
+                if existing.run_id is None:
+                    raise RunNotFoundError("missing-idempotency-run")
                 return await self._result_from_run(run_repo, existing.run_id)
 
             project_repo = self._project_repo_factory(session)
@@ -184,10 +202,65 @@ class IngestionService:
             if project is None or project.owner_id != actor.owner_id:
                 raise ProjectNotFoundError(project_id)
 
-            paper = create_paper(actor.owner_id, project_id)
-            storage_key = self._build_storage_key(actor.owner_id, project_id, paper.paper_id)
+            version_repo = self._paper_version_repo_factory(session)
+            existing_version = await version_repo.get_by_owner_and_hash(
+                actor.owner_id, file_hash
+            )
+            if existing_version is not None:
+                paper = await self._paper_repo_factory(session).get_by_id(
+                    existing_version.paper_id
+                )
+                if paper is None or paper.owner_id != actor.owner_id:
+                    raise RunNotFoundError(existing_version.version_id)
+                relation_repo = self._project_paper_repo_factory(session)
+                relation = await relation_repo.get(project_id, paper.paper_id)
+                already_added = relation is not None
+                if relation is None:
+                    await relation_repo.add(
+                        create_project_paper(
+                            project_id, paper.paper_id, existing_version.version_id
+                        )
+                    )
+                ready = existing_version.current_parse_revision_id is not None
+                reused_run_id = None if ready else existing_version.ingestion_run_id
+                reused_status = "ready"
+                if reused_run_id is not None:
+                    reused_run = await run_repo.get_by_id(reused_run_id)
+                    reused_status = (
+                        reused_run.status.value if reused_run is not None else "processing"
+                    )
+                result = UploadResult(
+                    run_id=reused_run_id,
+                    paper_id=paper.paper_id,
+                    version_id=existing_version.version_id,
+                    status=reused_status,
+                    reused=True,
+                    already_added=already_added,
+                )
+                await idempotency_repo.add(
+                    IdempotencyRecord(
+                        owner_id=actor.owner_id,
+                        idempotency_key=idempotency_key,
+                        project_id=project_id,
+                        request_hash=request_hash,
+                        run_id=result.run_id,
+                        paper_id=result.paper_id,
+                        version_id=result.version_id,
+                        status=result.status,
+                        reused=True,
+                        already_added=already_added,
+                    )
+                )
+                await session.commit()
+                return result
+
+            paper = create_paper(actor.owner_id)
+            storage_key = self._build_storage_key(
+                actor.owner_id, paper.paper_id, file_hash
+            )
             version = create_paper_version(
                 paper_id=paper.paper_id,
+                owner_id=actor.owner_id,
                 file_hash=file_hash,
                 storage_key=storage_key,
                 size_bytes=len(content),
@@ -216,9 +289,13 @@ class IngestionService:
                 payload={"status": run.status.value},
             )
             updated_run = self._with_event_sequence(run, 2)
+            version = replace(version, ingestion_run_id=updated_run.run_id)
 
             await self._paper_repo_factory(session).add(paper)
-            await self._paper_version_repo_factory(session).add(version)
+            await version_repo.add(version)
+            await self._project_paper_repo_factory(session).add(
+                create_project_paper(project_id, paper.paper_id, version.version_id)
+            )
             await self._run_repo_factory(session).add(updated_run)
             await session.flush()
             await self._event_repo_factory(session).add(created_event)
@@ -232,6 +309,9 @@ class IngestionService:
                 project_id=project_id,
                 request_hash=request_hash,
                 run_id=updated_run.run_id,
+                paper_id=paper.paper_id,
+                version_id=version.version_id,
+                status=updated_run.status.value,
             )
             try:
                 await idempotency_repo.add(record)
@@ -246,6 +326,8 @@ class IngestionService:
             paper_id=paper.paper_id,
             version_id=version.version_id,
             status=updated_run.status.value,
+            reused=False,
+            already_added=False,
         )
 
     def _validate_upload(self, idempotency_key: str, content: bytes) -> None:
@@ -257,9 +339,9 @@ class IngestionService:
         if not content.startswith(_PDF_MAGIC):
             raise FileValidationError("仅接受 PDF 文件")
 
-    def _build_storage_key(self, owner_id: str, project_id: str, paper_id: str) -> str:
+    def _build_storage_key(self, owner_id: str, paper_id: str, file_hash: str) -> str:
         """生成文件在 Storage 中的键。"""
-        return f"{owner_id}/{project_id}/{paper_id}/paper.pdf"
+        return f"{owner_id}/papers/{paper_id}/{file_hash}.pdf"
 
     def _with_event_sequence(self, run: Run, sequence: int) -> Run:
         """返回 event_sequence 更新后的 Run 实体。"""
@@ -292,4 +374,6 @@ class IngestionService:
             paper_id=payload.get("paper_id", ""),
             version_id=payload.get("version_id", ""),
             status=run.status.value,
+            reused=False,
+            already_added=False,
         )

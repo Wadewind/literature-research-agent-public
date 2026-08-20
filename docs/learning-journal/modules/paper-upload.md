@@ -1,85 +1,69 @@
-# 文献上传与版本模块
+# 文献上传、复用与 Project 收录
 
 ## 解决的问题
 
-让用户可以把 PDF 安全上传到指定 Project，系统在校验、存储后创建稳定的 Paper/PaperVersion，并生成一个 Ingestion Run。通过 `Idempotency-Key` 保证同一请求不重复创建版本和 Run，支持断线重试。
+用户上传 PDF 后，系统需要安全存储、可恢复地解析，并避免同一用户在多个 Project 中反复上传和解析相同 PDF。当前模型将“物理文献资产”与“Project 收录”分开：
 
-## 边界与执行流程
+- `Paper` / `PaperVersion` 属于 owner 级个人文献库；
+- `ProjectPaper` 表示 Project 收录某个 Paper，并固定 `selected_version_id`；
+- 同一 owner + SHA-256 自动复用 canonical PaperVersion；不进行跨 owner 复用。
+
+## 执行流程
 
 ```text
-HTTP Route (api/paper_files.py)
-  → IngestionService (application/ingestion_service.py)
-    → 校验文件 → 计算 SHA-256 → 检查 Idempotency
-      → 校验 Project 所有权
-        → 创建 Paper + PaperVersion
-          → 写入 Storage
-            → 创建 Run + Event + Queue Outbox（同一事务）
-              → 写入 IdempotencyKey
-                → commit
+POST /projects/{project_id}/paper-files
+  → 文件校验 + SHA-256 + Idempotency-Key
+  → 校验 Project 所有权
+  → 查询 owner + file_hash
+      ├─ 命中：补充 ProjectPaper
+      │    ├─ 已解析：立即返回，run_id = null
+      │    └─ 处理中：返回原 ingestion_run_id
+      └─ 未命中：创建 Paper + Version + Run + Event + Outbox + ProjectPaper
 ```
 
-- Route 读取 `UploadFile` 和 `Idempotency-Key` header，把字节流交给 Service。
-- Service 负责所有业务编排：校验、哈希、幂等、Project 所有权、Run/Event 写入、文件存储。
-- `Storage` Port 把文件保存到本地或未来替换为对象存储；key 由系统生成，不依赖用户文件名。
-- `PaperRepository`、`PaperVersionRepository`、`IdempotencyRepository` 参与同一数据库事务。
+用户也可通过 `POST /api/v1/projects/{project_id}/papers` 把个人文献库的已有 Version 直接收录到 Project。`DELETE /api/v1/projects/{project_id}/papers/{paper_id}` 只移除关系，不删除 Paper、Version、PDF 或 Parse Revision。
 
-## 状态、数据模型和事务
+## 数据、事务与不变量
 
-- `Paper`：`paper_id`、`owner_id`、`project_id`、`created_at`。
-- `PaperVersion`：`version_id`、`paper_id`、`file_hash`、`storage_key`、`size_bytes`、`content_type`、`created_at`。
-- `IdempotencyRecord`：`owner_id`、`idempotency_key`、`project_id`、`request_hash`、`run_id`。
-- 数据库表：`papers`、`paper_versions`、`idempotency_keys`；`idempotency_keys` 以 `(owner_id, idempotency_key)` 为主键。
-- 文件校验：必须提供 `Idempotency-Key`、大小不超过 `max_upload_size_bytes`、内容以 `%PDF-` 开头。
-- 请求指纹 `request_hash` 由 `project_id + idempotency_key + file_hash + filename + content_type` 计算，用于检测同一 key 的不同请求。
+- `papers`：`paper_id`、`owner_id`、`merged_into_paper_id`、`created_at`。历史重复 Paper 通过 `merged_into_paper_id` 无损归并，不物理删除。
+- `paper_versions`：包含 `owner_id`、`file_hash`、`ingestion_run_id`、`is_deduplication_canonical` 和解析指针。部分唯一索引仅限 canonical 行，保留旧重复版本的同时约束新写入。
+- `project_papers`：复合主键 `(project_id, paper_id)`，并持有 `selected_version_id`。
+- 新文件的 Paper/Version/Run/Event/Outbox/ProjectPaper/Idempotency 在同一短事务提交。Storage 写入先于数据库 commit，回滚可能遗留孤儿文件。
+- 已有 Version 的复用不写 Storage、不创建新 Run、不重新解析。
+- 跨 owner 查询、收录与文件读取均返回 404，不暴露资源存在性。
 
-## 关键决定与替代方案
+## 历史数据迁移
 
-- 使用系统生成的 `storage_key`（`owner_id/project_id/paper_id/paper.pdf`），避免文件名注入和路径穿越。
-- 先写 Storage 再 commit DB：存储失败不创建业务记录；DB 回滚时可能遗留文件（当前接受，后续可对账清理）。
-- Paper/PaperVersion 与 Run/Event/Queue Outbox 在同一事务创建，保证上传结果、任务历史和投递记录一致。
-- 先查 Idempotency 记录再插入， race 场景由数据库唯一约束兜底。
+`c84f2d7a91e6` 迁移优先选择“已有 Parse Revision，其次创建时间最早”的 Version 作为 canonical，将旧 Project 收录指向 canonical Paper/Version。重复 PaperVersion、Parse Revision、Element 与 Storage 文件均保留，只标记为非 canonical，因此迁移不会为实现去重而删除用户历史数据。
 
-## 失败、重试、重复和取消行为
+## 失败、重试与幂等
 
-- 非法文件/大小/缺失幂等键：`FileValidationError` → HTTP 400。
-- Project 不存在或不属于当前 actor：`ProjectNotFoundError` → HTTP 404。
-- 同一 `Idempotency-Key` 但不同请求指纹：`IdempotencyConflictError` → HTTP 409。
-- 同一 key + 同一请求指纹：直接返回已创建 Run 的信息，业务上 Effectively Once。
-- Run 创建后处于 `QUEUED`，由 Outbox 派发循环投递给 Worker（切片 5 起）；重复 Job 由 Worker 幂等执行兜底。
+- 非 PDF、超大或 Magic Bytes 非法：HTTP 400；Project 不存在/越权：404。
+- 同一 `Idempotency-Key` + 同一请求指纹：返回已保存响应；不同指纹：409。
+- 已在 Project 中的 Paper 再次收录为幂等成功，`already_added=true`。
+- 同哈希的并发新写入最终由 PostgreSQL canonical 部分唯一索引防重。
 
-## 安全和可观测性
+## 重要测试
 
-- 文件名只做展示，经清理后使用；不进入存储路径。
-- 校验 PDF Magic Bytes，拒绝非 PDF 上传。
-- 上传大小在读取完整内容后检查，由反向代理/服务器层做更外层限制。
-- Storage Adapter 阻止 `..` 和越界路径。
-- Event Payload 不保存文件内容或完整路径。
-
-## 重要测试和运行结果
-
-- `tests/application/test_ingestion_service.py`：合法上传、非法文件、超尺寸、缺失幂等键、Project 不存在、幂等命中、幂等冲突。
-- `tests/api/test_paper_files.py`：HTTP 202/400/404/409 契约。
-- `tests/integration/test_paper_repository.py`、`test_paper_version_repository.py`、`test_idempotency_repository.py`：PostgreSQL 持久化、唯一约束、外键隔离。
-
-当前全部通过：`uv run pytest -q` 113 passed（切片 6 完成后）。
+- Domain/Application：新上传、同 Project 幂等、跨 Project 复用、已就绪时无新 Run、移除收录不删资产。
+- API：个人库/Project 列表、收录/移除、Project 成员关系限制的 PDF 读取。
+- PostgreSQL：`ProjectPaperRepository`、owner/hash canonical 唯一性、owner 隔离。
+- 迁移：已在本地含历史重复 PDF 的 PostgreSQL 数据上执行成功，重复资产保留。
 
 ## 代码入口
 
-- 领域：`backend/src/literature_agent/domain/paper.py`、`paper_version.py`、`exceptions.py`
-- 端口：`backend/src/literature_agent/application/ports/storage.py`、`paper_repository.py`、`paper_version_repository.py`、`idempotency_repository.py`、`outbox_repository.py`
-- 服务：`backend/src/literature_agent/application/ingestion_service.py`
-- 适配器：`backend/src/literature_agent/infrastructure/storage/local_storage.py`、`infrastructure/persistence/paper_repository.py`、`paper_version_repository.py`、`idempotency_repository.py`
-- 路由：`backend/src/literature_agent/api/paper_files.py`
-- 迁移：`backend/migrations/versions/3ce12fa8e5a5_create_papers_paper_versions_and_.py`
+- 应用服务：`application/ingestion_service.py`、`project_library_service.py`、`paper_query_service.py`
+- 领域：`domain/paper.py`、`paper_version.py`、`project_paper.py`
+- 路由：`api/paper_files.py`、`api/papers.py`
+- 持久化：`infrastructure/persistence/*paper*_repository.py`、`models.py`
+- 迁移：`migrations/versions/c84f2d7a91e6_新增个人文献库与_project_收录.py`
 
 ## 已知限制
 
-- Storage 写入在 DB 事务内，若 DB 回滚可能产生孤儿文件。
-- Worker 执行体已接入 `IngestionExecutor` + Fake Parser（切片 6），真实 PDF 解析在切片 7 接入。
-- 未实现跨上传的内容去重；相同 PDF 多次上传会创建多个 PaperVersion。
-- 未实现 SSE/实时通知，用户需轮询 Run 状态。
-- 本地文件存储，未替换为 S3 等对象存储。
+- 归并后的历史重复 Storage 文件与解析记录暂不自动回收；待后续有可观测的 GC 机制再处理。
+- 目前不做 DOI/标题/作者模糊合并，不同二进制内容即是不同 Paper。
+- 一个 Project 当前固定单个 Version，尚无前端版本切换功能。
 
 ## 60 秒面试说明
 
-"文献上传模块把 PDF 校验、内容哈希、系统存储、Paper/PaperVersion 元数据和 Ingestion Run 创建放在同一个事务里，并通过 Idempotency-Key 保证重复提交不会创建重复版本。Service 不依赖具体存储实现，Storage 是可替换的 Port；文件名只做展示，存储键由系统生成，避免路径安全问题。当前 Run 创建后停留在 QUEUED，下一步交给 Worker 消费。"
+“我把 Paper 从 Project 直接子资源改成 owner 级个人文献资产，Project 通过显式关系收录它并固定 Version。上传用 owner + SHA-256 查重：命中就复用已有解析或正在运行的 Run，不命中才原子创建 Paper、Version、Run、Event 和 Outbox。迁移面对旧重复数据采用无损 canonical 标记和部分唯一索引，不会为去重删掉用户的历史解析数据。”

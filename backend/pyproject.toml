@@ -66,3 +66,6 @@ indent-style = "space"
 [tool.pyright]
 include = ["src"]
 typeCheckingMode = "standard"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"

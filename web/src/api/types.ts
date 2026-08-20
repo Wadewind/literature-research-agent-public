@@ -34,25 +34,36 @@ export interface RunEvent {
   payload: Record<string, unknown>;
 }
 
-export interface LatestVersion {
+export interface VersionSummary {
   version_id: string;
   display_filename: string;
   size_bytes: number;
   created_at: string;
   parse_ready: boolean;
+  ingestion_run_id: string | null;
 }
 
 export interface PaperListItem {
   paper_id: string;
   created_at: string;
-  latest_version: LatestVersion | null;
+  version: VersionSummary;
+  project_ids: string[];
 }
 
 export interface UploadResult {
-  run_id: string;
+  run_id: string | null;
   paper_id: string;
   version_id: string;
   status: string;
+  reused: boolean;
+  already_added: boolean;
+}
+
+export interface ProjectPaperResult {
+  project_id: string;
+  paper_id: string;
+  selected_version_id: string;
+  already_added: boolean;
 }
 
 export interface SectionInfo {

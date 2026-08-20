@@ -152,8 +152,11 @@ export default function DocumentPage() {
               }}
             >
               <option value="">全部章节</option>
-              {overview.sections.map((section) => (
-                <option key={section.section_path} value={section.section_path}>
+              {overview.sections.map((section, index) => (
+                <option
+                  key={`${section.section_path}-${section.title}-${index}`}
+                  value={section.section_path}
+                >
                   {section.section_path} {section.title}
                 </option>
               ))}

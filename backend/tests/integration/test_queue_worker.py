@@ -78,11 +78,12 @@ async def queued_run(db_engine) -> str:
         await SqlalchemyProjectRepository(session).add(project)
         # UOW 不感知表级 FK 的插入顺序，逐层 flush
         await session.flush()
-        paper = create_paper(owner_id="user-1", project_id=project.project_id)
+        paper = create_paper(owner_id="user-1")
         await SqlalchemyPaperRepository(session).add(paper)
         await session.flush()
         version = create_paper_version(
             paper_id=paper.paper_id,
+            owner_id="user-1",
             file_hash="b" * 64,
             storage_key="user-1/proj/paper/paper.pdf",
             size_bytes=100,

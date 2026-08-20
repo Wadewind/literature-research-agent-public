@@ -36,11 +36,12 @@ _PROFILE = ParseProfile("fake", "1.0", {})
 @pytest_asyncio.fixture
 async def version_id(session, project: str) -> str:
     """创建 Paper 和 PaperVersion，返回 version_id。"""
-    paper = create_paper(owner_id="user-1", project_id=project)
+    paper = create_paper(owner_id="user-1")
     await SqlalchemyPaperRepository(session).add(paper)
     await session.flush()
     version = create_paper_version(
         paper_id=paper.paper_id,
+        owner_id="user-1",
         file_hash="a" * 64,
         storage_key="user-1/proj/paper/paper.pdf",
         size_bytes=100,
