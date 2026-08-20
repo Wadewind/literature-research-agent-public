@@ -40,7 +40,7 @@
 1. **文献 RAG 问答**：针对项目内已经收录的文献进行有出处、可回跳原文的问答；
 2. **综述 Workflow**：按照可观察、可暂停、可恢复的固定流程收集文献、提取证据、生成大纲并撰写带引用的综述。
 
-在核心能力完成、经过评测并具备可靠运行证据后，再建设 **Research Agent Extension**：通过 `ResearchAgentRuntime` 适配边界接入 OpenHands SDK、Deep Agents 或经评审的同类运行时，让 Agent 在受控 Workspace 中发现论文相关的公开项目页、代码仓库、数据集和补充材料，并把结果交回本系统的 Evidence、Artifact、Run 和 Event 体系。
+在核心能力完成、经过评测并具备可靠运行证据后，再建设 **Research Agent Extension**：通过 `ResearchAgentRuntime` 适配边界接入基于 LangGraph 的 Deep Agents，让 Agent 在受控 Workspace 中发现论文相关的公开项目页、代码仓库、数据集和补充材料，并把结果交回本系统的 Evidence、Artifact、Run 和 Event 体系。选型依据见 `docs/learning-journal/decisions/0001-select-deep-agents-runtime.md`。
 
 本项目不以自行重造通用 Agent Harness、浏览器自动化框架或 Sandbox 平台为目标。Agent SDK 负责通用 Agent Loop、上下文管理和环境操作；本系统负责研究领域状态、可靠执行、权限、证据追溯和用户可见历史。
 
@@ -292,7 +292,7 @@ Ports
         ↓
 Adapters
   PostgreSQL / ARQ / LangGraph / HTTPX2 / Docling / filesystem
-  future OpenHands / Deep Agents / sandbox adapters
+  future Deep Agents / MCP / sandbox adapters
 ```
 
 关键规则：
@@ -312,7 +312,7 @@ Adapters
 | Python | CPython 3.13、uv | 统一 API、Worker 和数据处理开发体验 |
 | API | FastAPI、Pydantic v2、Uvicorn | REST、上传、SSE、边界校验 |
 | Workflow | LangGraph 1.2.x | 固定综述图的 State、Checkpoint、Interrupt、Resume |
-| Agent Extension | Phase 5 ADR 后确定 | 候选 OpenHands SDK、Deep Agents 或同类 Runtime |
+| Agent Extension | Deep Agents（Phase 5 起接入） | 基于 LangGraph，经 `ResearchAgentRuntime` 隔离 |
 | 数据访问 | SQLAlchemy 2.0 Async、psycopg 3 | ORM 映射、显式事务和 PostgreSQL 异步访问 |
 | 迁移 | Alembic | 业务 Schema 版本化 |
 | 数据库 | PostgreSQL 18、pgvector 0.8.2 | 业务状态、事件、全文检索、向量和 Checkpoint |
@@ -480,7 +480,7 @@ Valkey 通知可以丢失，PostgreSQL Event 不可以丢失。
 
 ### 7.12 Research Agent Runtime Integration（后续扩展）
 
-本模块不自行实现通用 Agent Loop，而是在 Core Research Backend 完成后通过 `ResearchAgentRuntime` Port 接入经 ADR 选定的 OpenHands SDK、Deep Agents 或同类运行时。
+本模块不自行实现通用 Agent Loop，而是在 Core Research Backend 完成后通过 `ResearchAgentRuntime` Port 接入 ADR 已选定的 Deep Agents。
 
 本系统负责：
 
@@ -810,7 +810,7 @@ Agent 浏览器首版只访问公开资源，优先发现论文官方项目页�
 
 Core v1 不提供任意代码执行。固定图表或导出能力应优先作为确定性的应用服务运行，并使用结构化输入 Schema。
 
-是否开放 `run_python_analysis` 由 Agent SDK 选型后的阶段 Spec 和 ADR 决定。若开放，必须通过选定 Runtime 的 Sandbox Adapter 或经评审的独立 Sandbox，限制：
+是否开放 `run_python_analysis` 由 Deep Agents 集成 Spike 和后续 ADR 决定。若开放，必须通过经验证的 Sandbox Backend 或经评审的独立 Sandbox，限制：
 
 - 非 root；
 - 独立临时 Workspace；
@@ -1266,11 +1266,11 @@ Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Ext
 - 备份和恢复流程至少演练一次；
 - 每个 Core 模块有学习笔记、已知限制和 60 秒面试说明。
 
-### Phase 5：Research Agent SDK 选型与集成验证
+### Phase 5：Deep Agents 集成验证
 
 #### 目标
 
-围绕一个明确研究任务，对 OpenHands SDK、Deep Agents 或经评审的同类方案进行受限 Spike，形成 ADR，并通过 `ResearchAgentRuntime` Adapter 打通最小端到端 Agent Run。本阶段不自行开发通用 Agent Harness，也不以完整 Agent 产品为目标。
+围绕一个明确研究任务，对已选定的 Deep Agents 进行受限 Spike，并通过 `ResearchAgentRuntime` Adapter 打通最小端到端 Agent Run。本阶段验证而不是重新选型：重点确认 MCP、Sandbox Backend、Checkpoint、取消、恢复和事件语义能否遵守平台边界，不自行开发通用 Agent Harness，也不以完整 Agent 产品为目标。
 
 #### 候选用户故事
 
@@ -1278,7 +1278,7 @@ Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Ext
 
 #### 需要学习和验证
 
-- OpenHands SDK 与 Deep Agents 的运行模型、许可、版本和部署边界；
+- Deep Agents 的运行模型、许可、精确版本和部署边界；
 - SDK Conversation/Thread/Checkpoint/Workspace 与业务 Run 的区别；
 - Runtime 事件、Usage、错误、审批和 Artifact 的归一化；
 - ARQ、本系统 Run Control 与 SDK 内部重试/恢复的所有权；
@@ -1301,7 +1301,7 @@ Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Ext
 
 #### 阶段出口
 
-- ADR 记录候选方案、实验证据、选择理由和被拒绝方案；
+- 选型 ADR 已记录选择理由；本阶段集成 ADR 记录实验证据、版本、Provider、部署方式和失败项；
 - `ResearchAgentRuntime` 契约不泄漏具体 SDK 类型到 Domain 和公开 API；
 - 业务 `AgentRun` 与 SDK Conversation/Thread/Workspace ID 有稳定映射；
 - SDK 事件被筛选并映射为版本化业务 Event，不保存完整思考过程和敏感输出；
@@ -1309,11 +1309,11 @@ Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Ext
 - 下载 Artifact 具有来源、内容哈希、大小、类型和 Project 所有权；
 - 明确是否进入 Phase 6；若用例或运行时不成立，Core v1 仍保持完整可交付。
 
-### Phase 6：SDK 驱动的 Research Agent 与安全强化
+### Phase 6：Deep Agents 驱动的 Research Agent 与安全强化
 
 #### 目标
 
-基于 Phase 5 选定的 Agent SDK，将已验证的研究任务扩展为可用、受限、可观察的 Research Agent，并系统验证 Browser、Tool、Workspace 和 Sandbox 的安全与可靠性。
+基于 Phase 5 验证通过的 Deep Agents 集成，将研究任务扩展为可用、受限、可观察的 Research Agent，并系统验证 Browser、MCP、Tool、Workspace 和 Sandbox 的安全与可靠性。
 
 #### 主要内容
 
@@ -1436,7 +1436,7 @@ Agent Extension 另需覆盖：
 - PostgreSQL 向量检索更换为专用向量数据库；
 - 本地文件存储更换为 S3；
 - 模块化单体拆分为独立服务；
-- 选择或更换 OpenHands、Deep Agents 等 Agent Runtime；
+- 更换 Deep Agents 或改变 `ResearchAgentRuntime` 选型边界；
 - 引入外部 Agent Server、Browser 或 Sandbox 服务；
 - 修改业务 Run 与 SDK Conversation/Thread/Checkpoint/Workspace 的所有权或映射；
 - 修改 SDK 原始 Event 到业务 Event 的归一化规则；
@@ -1466,10 +1466,10 @@ Agent Extension 另需覆盖：
 - Citation Style 和 DOCX 模板；
 - Metrics Bucket 和告警阈值。
 
-以下决策明确推迟到 Phase 5/6，而不是在 Core v1 中预先固定：
+以下实现决策明确推迟到 Phase 5/6，而不是在 Core v1 中预先固定：
 
 - Agent 的最终用户故事和是否进入正式产品；
-- OpenHands、Deep Agents 或其他 Runtime 的选择与版本；
+- Deep Agents 的精确版本、升级策略和兼容范围；
 - Runtime 部署在 Worker 内、独立 Agent Server 还是托管服务；
 - SDK Thread、Checkpoint、Conversation 和 Workspace 的生命周期；
 - Browser、MCP、Tool、网络和下载策略；
@@ -1501,7 +1501,7 @@ Core v1 完成需要同时满足：
 
 ### 22.2 Research Agent Extension
 
-若 Phase 5 选型验证通过并继续 Phase 6，Agent 扩展完成还需要：
+若 Phase 5 集成验证通过并继续 Phase 6，Agent 扩展完成还需要：
 
 - 至少一个明确的论文相关资源发现用户故事端到端可运行；
 - Agent SDK 通过 `ResearchAgentRuntime` Adapter 接入，不污染 Domain 和公开 API；
@@ -1567,8 +1567,5 @@ Research Agent Extension 完成后，可以追加：
 - [Docling](https://github.com/docling-project/docling)
 - [OpenAlex API](https://developers.openalex.org/api-reference/introduction)
 - [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/)
-- [OpenHands Software Agent SDK](https://docs.openhands.dev/sdk/index)
-- [OpenHands Agent Server](https://docs.openhands.dev/sdk/guides/agent-server/overview)
-- [OpenHands Browser Use](https://docs.openhands.dev/sdk/guides/agent-browser-use)
 - [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Sandboxes](https://docs.langchain.com/oss/python/deepagents/sandboxes)
