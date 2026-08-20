@@ -8,6 +8,9 @@ build/
 # Virtual environments
 .venv/
 
+# Node / 前端
+node_modules/
+
 # Jupyter
 .ipynb_checkpoints/
 
