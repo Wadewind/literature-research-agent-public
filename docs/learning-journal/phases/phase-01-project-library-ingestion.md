@@ -517,6 +517,65 @@ Worker 崩溃、临时错误或机器故障不再让 Run 永久卡在 `RUNNING`�
 - SSE：重放历史、Last-Event-ID 续传、终态关闭、通知丢失时轮询收敛（不发布通知也能收到事件）；
 - Notifier：commit 后发布、publish 失败不影响响应。
 
+### 切片 10：最小 Web UI（Project、Library、上传、Run Detail、Element/PDF 预览）
+
+#### 目标
+
+用户通过浏览器完成本阶段演示闭环：创建 Project、上传 PDF、实时跟随 Ingestion Run 进度（SSE）、取消 Run，并在解析成功后按文档结构预览 Element、点击 Element 定位到来源 PDF 页码。终态（成功/失败/取消）与错误状态在 UI 上明确可见。
+
+#### 范围
+
+- **包含**：React + Vite + TypeScript strict + TanStack Query 前端脚手架（`web/`）；Project 列表/创建页；Project 内 Paper 列表与 PDF 上传（`Idempotency-Key`）；Run Detail 页（原生 EventSource 跟随、取消按钮、终态呈现）；Document 页（Element 按结构渲染、点击跳转来源 PDF 页码）；后端补齐 `GET .../papers` 列表与 `GET .../paper-versions/{version_id}/file` PDF 预览端点；`paper_versions` 增加 `display_filename` 迁移；Vitest 关键状态逻辑测试。
+- **不包含**：Compose Smoke、Playwright E2E、故障注入（切片 11）；UI 组件库、pdf.js、bbox 高亮；CORS 配置（开发用 Vite proxy）；登录/多用户切换。
+
+#### API 契约（本切片新增的后端端点）
+
+```text
+GET /api/v1/projects/{project_id}/papers
+200 [
+  {
+    "paper_id": "<uuid>",
+    "created_at": "<datetime>",
+    "latest_version": {
+      "version_id": "<uuid>",
+      "display_filename": "paper.pdf",
+      "size_bytes": 12345,
+      "created_at": "<datetime>",
+      "parse_ready": true
+    } | null
+  }
+]
+
+GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
+200  Content-Type: application/pdf
+     Content-Disposition: inline; filename*=UTF-8''<quoted display_filename>
+```
+
+- `papers` 返回当前 actor 可见 Project 的全部 Paper 及最新 Version 摘要；`parse_ready` 表示该 Version 已有当前 Parse Revision；
+- `file` 端点校验同一所有权链（Project 属于 actor 且 Version 属于该 Project），**不要求**已有 Parse Revision（上传成功即可预览原文）；越权或不存在一律 404，不泄漏所有权信息。
+
+#### 数据模型
+
+- `paper_versions` 新增 `display_filename`（`String(255)`，非空）：上传时写入清理后的展示文件名；存量行由迁移回填 `'paper.pdf'`。文件名仅为展示信息，不参与存储路径与幂等指纹逻辑之外的任何判断。
+
+#### 前端契约与关键决策
+
+- 路由：`/`（Project 列表/创建）、`/projects/:projectId`（Library：上传 + Paper 列表）、`/runs/:runId`（Run Detail：SSE 时间线 + 取消）、`/projects/:projectId/versions/:versionId/document`（Element 预览 + PDF 跳转）；
+- 上传每次选择新文件生成新的 `Idempotency-Key`（`crypto.randomUUID()`），同一文件重试复用同一 Key；
+- SSE 使用原生 `EventSource`（断线重连自动携带 `Last-Event-ID`，与切片 9 的 sequence 游标契约一致）；收到终态事件（`run_completed`/`run_failed`/`run_cancelled`）或轮询发现 Run 终态时主动 `close()`，避免对已收束的流无限重连；
+- PDF 预览用 `<iframe src=".../file#page=N">` 原生查看器页码锚点，零新增依赖；不做 bbox 高亮（已知限制，后续可用 pdf.js 升级）；
+- 错误可见：404 越权/不存在、上传 400/409、Run FAILED 均有明确界面呈现；
+- 依赖最小集：react、react-dom、react-router-dom、@tanstack/react-query；dev：vitest。不引入 UI 组件库与 SSE polyfill。
+
+#### 测试要点
+
+- 后端：`display_filename` 落库与迁移升级；papers 列表（最新 Version 摘要、空列表、越权 404）；file 端点（字节一致、inline disposition、无 Revision 可下载、越权/不存在 404）；
+- 前端 Vitest（纯状态逻辑，不挂 DOM）：SSE 事件按 sequence 去重排序与终态收束判断；Run 终态/可取消状态表；上传幂等键复用与重新生成；HTTP 错误到界面提示的映射。
+
+### 切片 11 预告
+
+切片 11（验收复盘）再做 Compose Smoke、故障注入与 Playwright E2E，不在本切片范围。
+
 ## 测试方式
 
 - **Domain**：Run 合法/非法转换、终态、取消竞争、错误分类和确定性 ID/Profile；
