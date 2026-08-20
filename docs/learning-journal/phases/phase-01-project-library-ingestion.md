@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中。切片 1–9（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环、真实 Parser、取消/恢复、Event/SSE）已完成。Spec 初版日期：2026-08-13。
+进行中。切片 1–10（工程基线、Project、Run/Event、上传与版本、可靠投递、Fake Parser 闭环、真实 Parser、取消/恢复、Event/SSE、最小 Web UI）已完成。Spec 初版日期：2026-08-13。
 
 本阶段是第一个正式业务阶段。
 
@@ -562,7 +562,7 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 - 路由：`/`（Project 列表/创建）、`/projects/:projectId`（Library：上传 + Paper 列表）、`/runs/:runId`（Run Detail：SSE 时间线 + 取消）、`/projects/:projectId/versions/:versionId/document`（Element 预览 + PDF 跳转）；
 - 上传每次选择新文件生成新的 `Idempotency-Key`（`crypto.randomUUID()`），同一文件重试复用同一 Key；
-- SSE 使用原生 `EventSource`（断线重连自动携带 `Last-Event-ID`，与切片 9 的 sequence 游标契约一致）；收到终态事件（`run_completed`/`run_failed`/`run_cancelled`）或轮询发现 Run 终态时主动 `close()`，避免对已收束的流无限重连；
+- SSE 使用原生 `EventSource`（断线重连自动携带 `Last-Event-ID`，与切片 9 的 sequence 游标契约一致）；收到终态事件（Ingestion 成功为 `result_committed`，失败/取消为 `run_failed`/`run_cancelled`，通用路径为 `run_completed`）或轮询发现 Run 终态时主动 `close()`，避免对已收束的流无限重连；
 - PDF 预览用 `<iframe src=".../file#page=N">` 原生查看器页码锚点，零新增依赖；不做 bbox 高亮（已知限制，后续可用 pdf.js 升级）；
 - 错误可见：404 越权/不存在、上传 400/409、Run FAILED 均有明确界面呈现；
 - 依赖最小集：react、react-dom、react-router-dom、@tanstack/react-query；dev：vitest。不引入 UI 组件库与 SSE polyfill。
@@ -642,7 +642,8 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - `docs/learning-journal/modules/run-event.md`：Run 状态机、Event 顺序与 SSE 重放；
 - `docs/learning-journal/modules/paper-upload.md`：上传校验、版本与幂等；
 - `docs/learning-journal/modules/queue-outbox.md`：Queue Outbox + ARQ Worker 可靠投递、Attempt/lease 与对账恢复；
-- `docs/learning-journal/modules/document-parsing.md`：Parse Revision、Element 与 Fake Parser 闭环。
+- `docs/learning-journal/modules/document-parsing.md`：Parse Revision、Element 与 Fake Parser 闭环；
+- `docs/learning-journal/modules/web-ui.md`：最小 Web UI、SSE 前端收束与 Element/PDF 预览。
 
 后续模块笔记在对应切片真正完成后撰写，不预建空模板。
 
@@ -650,4 +651,6 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 
 切片 9（Event/SSE）→ 已完成（2026-08-20）：events 端点 `after_sequence`/`limit` 游标分页；`EventNotifier` Port + Valkey Pub/Sub（channel `run-events:{run_id}`，payload 只有 run_id）+ Noop 默认；四个写事件服务 commit 后通知（失败只记日志）；SSE `GET /runs/{run_id}/events/stream`（Last-Event-ID 续传、先重放后实时、15s 心跳注释、终态收束关闭、1s 轮询兜底）。
 
-下一步是切片 10（前端 UI 演示闭环）：React + Vite + TS strict + TanStack Query，覆盖 Project 创建、PDF 上传、Run 进度 SSE 跟随、Element 按结构预览并跳转页码。
+切片 10（最小 Web UI）→ 已完成（2026-08-20）：后端补 `GET .../papers`（Paper + 最新 Version 摘要）与 `GET .../paper-versions/{id}/file`（inline PDF，无需 Parse Revision），`paper_versions` 增加 `display_filename` 迁移；前端 `web/` 脚手架（React 19 + Vite + TS strict + TanStack Query + react-router-dom，无 UI 组件库），四个页面覆盖 Project 创建、上传（Idempotency-Key 复用/重生成）、Run SSE 时间线（原生 EventSource + Last-Event-ID 自动重连 + 终态主动收束 + 2s 轮询兜底）、取消、Element 结构预览与 `#page=N` PDF 定位。冒烟中实测修正：Ingestion 成功终态事件是 `result_committed` 而非 `run_completed`，终态收束清单已两者都含。验证：pytest 165 passed + 2 skipped，ruff/pyright 全绿；Vitest 35 passed；`npm run build` 通过；本地 compose + uvicorn + Worker（真实 Docling）+ Vite dev 手动闭环与 Playwright 截图验证通过。
+
+下一步是切片 11（验收复盘）：Compose Smoke、Playwright E2E、故障注入和模块学习笔记收尾。
