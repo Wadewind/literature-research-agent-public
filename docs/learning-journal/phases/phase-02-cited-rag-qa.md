@@ -638,7 +638,7 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 
 - 模块笔记 `docs/learning-journal/modules/evidence-and-citation-integrity.md` 留到切片 8 接线后一并撰写（模块在 Run 编排中的实际行为届时才完整）；
 - `citations` 无独立查询 API，引用详情读取随切片 8/9 落地；
-- 历史库若执行 `alembic downgrade base`，Phase 1 迁移 `8865966463a6` 的 paper_versions 未命名 FK 会导致失败（既有问题，与本切片无关；本切片迁移单步 upgrade/downgrade 已验证）。
+- ~~历史库若执行 `alembic downgrade base`，Phase 1 迁移 `8865966463a6` 的 paper_versions 未命名 FK 会导致失败~~（已修复 2026-08-21：upgrade 与 downgrade 改用显式约束名 `paper_versions_current_parse_revision_id_fkey`，与 PostgreSQL 自动命名一致，存量库零影响，`upgrade head → downgrade base` 两个来回在一次性容器中实跑通过）。
 
 ## 测试方式
 
