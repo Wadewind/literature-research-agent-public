@@ -8,6 +8,11 @@ build/
 # Virtual environments
 .venv/
 
+# 本地配置和密钥；只提交无密钥模板 .env.example。
+.env
+.env.*
+!.env.example
+
 # Node / 前端
 node_modules/
 web/test-results/

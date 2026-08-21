@@ -8,7 +8,7 @@ uv sync
 uv run agent-service
 ```
 
-The Phase 1 backend is complete. It exposes:
+The Phase 1–2 backend is complete. It additionally exposes Project-scoped RAG conversations, indexing status, hybrid retrieval, Evidence/Citation and background `rag_answer` runs.
 
 - FastAPI application factory with lifespan-managed application state
 - `GET /health/live`（仅进程存活）与 `GET /health/ready`（PostgreSQL/Valkey 就绪；依赖不可用返回 503）
@@ -35,6 +35,8 @@ The worker requires PostgreSQL and Valkey; see `deploy/compose/compose.yml`.
 Parser timeout defaults to 300s (`AGENT_PARSER_TIMEOUT_SECONDS`). Docling
 downloads its layout models on first run; the real-parsing contract tests are
 opt-in: `AGENT_RUN_DOCLING_TESTS=1 uv run pytest tests/infrastructure/test_docling_parser.py`.
+Fake Embedding/Chat are the safe defaults. Real model configuration and the one-command
+Fake/real startup modes are documented in the repository root `README.md` and `.env.example`.
 
 ## 本地开发
 
