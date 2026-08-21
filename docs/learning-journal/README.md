@@ -22,4 +22,4 @@ learning-journal/
 
 ## 当前阶段
 
-[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)和 [Phase 1：Project、个人文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)已经完成。Phase 1 已通过隔离 Compose Smoke、故障恢复测试和 Playwright E2E 验收；当前进行的是 [Phase 2：有引用的 RAG 问答](phases/phase-02-cited-rag-qa.md)（切片 1–9 已完成：资源管理边界、评测 Fixture、Model Gateway、ChunkSet 与 Worker 分发、Indexing Run 与 pgvector、Hybrid Retrieval、Evidence 与 Citation Validator、RAG Conversation 全链路、API 与最小 Web UI；只剩切片 10 验收复盘）。
+[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)、[Phase 1：Project、个人文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)和 [Phase 2：有引用的 RAG 问答](phases/phase-02-cited-rag-qa.md)已经完成。Phase 2 已通过固定 14 题管线评测、可靠性证据审计、Phase 1–2 Playwright E2E、真实 Docling 以及真实 Embedding/结构化 Chat 显式 Smoke；Fake 评测只证明工程闭环，真实 Provider 只证明最小调用契约，均不宣称生产模型质量。下一阶段为 Phase 3：可暂停恢复的固定文献综述 Workflow。

@@ -56,6 +56,7 @@
 - 后端非集成回归：`pytest tests -q --ignore=tests/integration`，366 passed、4 skipped（前端改动未改变后端契约）。
 - 手动闭环（本地 postgres/valkey + uvicorn + 本地 Worker，真实 Docling 解析）：上传 `text_two_pages.pdf` → SSE 实时事件 → succeeded → papers 列表 `parse_ready=true` → file 端点字节与原件一致（inline disposition）→ SSE `Last-Event-ID: 2` 正确从 sequence 3 重放；queued 状态取消 → cancelled；终态取消 → 409；Playwright 截图验证 4 个页面与 404 呈现。
 - 切片 11 Playwright E2E（1 passed）：隔离 PostgreSQL/Valkey Compose + 宿主 API/Worker/Web + 共享临时 Storage；用 Fake Parser 验证创建 Project、新 PDF 异步解析、Run 事件与刷新恢复、Element/PDF 预览、跨 Project 哈希复用、移出只删关系、个人库保留和重新收录。失败时保留 screenshot/video/trace，不维护易碎的像素截图基线。
+- Phase 2 Playwright E2E（1 passed；与 Phase 1 合跑 2 passed）：导入后等待 ingestion/indexing、Project 问答与 rag_answer SSE、刷新恢复 Message/Claim/Citation、引用查看 Evidence 与 PDF `#page=N`、单篇 scope、Project 归档只读。E2E 发现并修复 active Project 的归档按钮误调用 restore 的缺陷。
 
 ## 代码入口
 
@@ -64,7 +65,7 @@
 - RAG 交互状态：`web/src/conversations/messageIntent.ts`、`scopeSelection.ts`
 - API 封装：`web/src/api/client.ts`、`types.ts`
 - 后端消费端点：`backend/src/literature_agent/api/conversations.py`、`documents.py`、`papers.py`、`projects.py`
-- E2E：`web/e2e/phase-01.spec.ts`、`web/e2e/run.sh`、`web/playwright.config.ts`、`deploy/compose/e2e.yml`
+- E2E：`web/e2e/phase-01.spec.ts`、`phase-02.spec.ts`、`web/e2e/run.sh`、`web/playwright.config.ts`、`deploy/compose/e2e.yml`
 
 ## 已知限制
 
@@ -73,7 +74,7 @@
 - 具名 SSE 事件类型清单需与后端手工同步。
 - 回答在结构化生成与 Citation Validator 成功后一次性显示，不做 token 级流式输出。
 - `index-status` 当前按 Project 文献行独立查询；适合最小 UI 规模，尚无批量状态端点。
-- Phase 2 切片 9 未新增 Playwright E2E；RAG 全旅程、真实 Provider Smoke 与评测在切片 10 固化。
+- Phase 2 E2E 使用 Fake Provider 固化工程旅程，不代表真实模型回答质量；
 - 仅开发代理（Vite proxy），无生产构建部署与 CORS 配置；切片 11 只验证宿主 API/Worker/Web，不宣称完整容器部署。
 - E2E 使用 Fake Parser 保持确定性；真实 Docling 由独立 opt-in 契约测试和手动 Smoke 覆盖。
 

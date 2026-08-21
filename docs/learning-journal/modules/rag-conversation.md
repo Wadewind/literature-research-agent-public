@@ -74,6 +74,7 @@ Route 只做 HTTP 与身份上下文；Domain 保存状态机与不变量；模�
 - Integration：`test_conversation_repository.py` 8 例（含并发 try_claim 双会话恰一个成功）、`test_chunk_retrieval.py` +5 例（移出 Project 后快照仍命中、跨 owner 拒绝）、`test_queue_worker.py` +1 例（ingestion → indexing → rag_answer 三轮派发端到端）；
 - 迁移 `d7f3a1c9e5b2` 在一次性 pgvector 容器实跑 `upgrade head → downgrade c5b8e2f7a3d1 → upgrade head` 通过；
 - 全量：`pytest tests -q --ignore=tests/integration` 366 passed, 4 skipped；`pytest tests/integration -q` 全部通过；`ruff`/`pyright` 零告警。
+- 切片 10 回归：非集成 370 passed、4 skipped，integration 79 passed；可靠性证据逐项审计未发现需复制断言的缺口，完整矩阵见 `rag-evaluation.md`。
 
 ## 代码入口
 
@@ -85,7 +86,7 @@ Route 只做 HTTP 与身份上下文；Domain 保存状态机与不变量；模�
 
 ## 已知限制
 
-- SSE 推送与前端 Conversation UI 属切片 9；当前前端需轮询 Run/消息；
+- SSE 推送与前端 Conversation UI 已在切片 9 完成，并于切片 10 用 Playwright 固化刷新恢复与引用旅程；
 - `project` 模式快照每次提问重新解析（新提问看到最新收录，历史 Run 不变）；
 - 无对话级上下文（每次提问独立检索，不带历史消息进 Prompt）；
 - Context Budget 超限只按 rank 丢弃，不做摘要压缩。

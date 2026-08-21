@@ -52,6 +52,7 @@ Evidence 固化是独立短事务；Claim/ClaimSet/Citation 与 Assistant Messag
 - Application：`test_evidence_service.py`（7 例）、`test_rag_answer_executor.py` 的修复重试/伪造引用用例（13 例文件内）；
 - Integration：`test_evidence_repository.py`（5 例，唯一约束与 FK 拒绝）、`test_queue_worker.py::test_rag_answer_completes_end_to_end`（端到端断言 citations 全部指向本次 Run 的 Evidence）；
 - 全量：2026-08-21 `pytest tests -q --ignore=tests/integration` 366 passed；`pytest tests/integration -q` 79 passed（含端到端）。
+- 切片 10 固定 14 题完整管线：Citation Validator 14/14，must-cite completeness 11/11；这是结构与范围有效性，不是 Claim 文本 Groundedness，后者未运行、未宣称。
 
 ## 代码入口
 
@@ -62,7 +63,7 @@ Evidence 固化是独立短事务；Claim/ClaimSet/Citation 与 Assistant Messag
 ## 已知限制
 
 - `citations` 无独立查询 API（随消息列表的 Claim 摘要读取）；
-- 校验是结构性的（ID 存在、归属正确、无重复），不校验 Claim 文本与 Evidence 内容的语义一致性（Groundedness 由评测人工抽查）；
+- 校验是结构性的（ID 存在、归属正确、无重复），不校验 Claim 文本与 Evidence 内容的语义一致性；本阶段没有实际运行人工 Groundedness；
 - 修复重试只有一次。
 
 ## 60 秒面试说明

@@ -10,6 +10,8 @@ COMPOSE_PROJECT="agent-service-e2e"
 export AGENT_STORAGE_ROOT
 AGENT_STORAGE_ROOT="$(mktemp -d /tmp/agent-service-e2e-storage.XXXXXX)"
 export AGENT_PARSER_BACKEND="fake"
+export AGENT_EMBEDDING_BACKEND="fake"
+export AGENT_CHAT_BACKEND="fake"
 export AGENT_OUTBOX_POLL_INTERVAL_SECONDS="0.05"
 export VITE_API_PROXY_TARGET="http://127.0.0.1:18000"
 

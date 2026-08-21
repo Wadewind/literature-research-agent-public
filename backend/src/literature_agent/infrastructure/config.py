@@ -46,6 +46,7 @@ _DEFAULT_RETRIEVAL_TOKEN_BUDGET = 3000
 # 本地开发与测试默认不触网（仿 AGENT_EMBEDDING_BACKEND）；输出 token
 # 上限约束 ChatModel 结构化回答长度
 _DEFAULT_CHAT_BACKEND = "fake"
+_DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED = True
 _DEFAULT_ANSWER_MAX_OUTPUT_TOKENS = 2048
 
 
@@ -95,6 +96,9 @@ class Settings:
     retrieval_per_paper_limit: int = field(default=_DEFAULT_RETRIEVAL_PER_PAPER_LIMIT)
     retrieval_token_budget: int = field(default=_DEFAULT_RETRIEVAL_TOKEN_BUDGET)
     chat_backend: str = field(default=_DEFAULT_CHAT_BACKEND)
+    chat_json_schema_supported: bool = field(
+        default=_DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED
+    )
     answer_max_output_tokens: int = field(default=_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS)
 
     @classmethod
@@ -218,5 +222,9 @@ class Settings:
             retrieval_per_paper_limit=retrieval_per_paper_limit,
             retrieval_token_budget=retrieval_token_budget,
             chat_backend=os.getenv("AGENT_CHAT_BACKEND", _DEFAULT_CHAT_BACKEND),
+            chat_json_schema_supported=os.getenv(
+                "AGENT_CHAT_JSON_SCHEMA_SUPPORTED", "true"
+            ).lower()
+            in {"1", "true", "yes"},
             answer_max_output_tokens=answer_max_output_tokens,
         )

@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中。实施前方案已于 2026-08-20 与用户逐项讨论确认，结论见文末「已确定事项」。本文为阶段实施 Spec，建立在 Phase 1 完成 Project、文献库、可靠导入和结构化 Element 层之后。
+已完成（2026-08-21）。实施前方案已于 2026-08-20 与用户逐项讨论确认，结论见文末「已确定事项」。切片 10 已完成固定评测、故障证据审计、Phase 2 Playwright E2E、真实 Docling/Embedding/Chat Smoke 与文档收口；Fake 与真实 Provider 结论严格分开。
 
 ## 目标和用户可见结果
 
@@ -266,7 +266,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 7. **Evidence/Citation**（已完成 2026-08-21，契约见下文「切片 7」）：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
 8. **RAG Conversation**（已完成 2026-08-21，契约见下文「切片 8」）：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
 9. **API 与最小 Web UI**（已完成 2026-08-21，契约见下文「切片 9」）：Chat 三入口、Run 进度（前端 `KNOWN_EVENT_TYPES` 扩充）、引用详情和 PDF 页码跳转；
-10. **验收复盘**：评测实跑报告（Fake Provider 验证管线 + 真实 Provider 显式启用）、故障测试和学习笔记。
+10. **验收复盘**（已完成 2026-08-21，契约见下文「切片 10」）：评测实跑报告（Fake Provider 验证管线 + 真实 Provider 显式启用）、故障证据审计、Phase 2 E2E 和学习笔记。
 
 ### 切片 1：资源管理边界（契约定稿）
 
@@ -339,7 +339,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 四类问题覆盖：单篇事实型（期望引用特定 paper + 页码/章节）5 题、跨篇综合型（must_cite 恰好两篇，`gnn-survey` 与 `gnn-molecular` 主题相近）3 题、明确无答案型（期望 `insufficient_evidence`）3 题、范围边界型（selected_papers 排除答案所在 paper，期望 `insufficient_evidence`）3 题。
 
-评测指标（切片 10 实跑，只报告实跑结果，不使用虚构质量指标）：Retrieval Recall@K（期望 paper/页面的 Chunk 是否进入 Top-K）、Citation validity（是否通过确定性 Validator）、Citation completeness（must_cite 覆盖率）、少量人工 Groundedness；无答案/范围边界题以 `answer_status == insufficient_evidence` 为通过。
+评测指标（切片 10 实跑，只报告实跑结果，不使用虚构质量指标）：Retrieval Recall@K（期望 paper/页面的 Chunk 是否进入 Top-K）、Citation validity（是否通过确定性 Validator）、Citation completeness（must_cite 覆盖率）；无答案/范围边界题以 `answer_status == insufficient_evidence` 为通过。Groundedness 只有实际人工核对后才可报告，本阶段未运行该指标。
 
 #### 语料语言决定
 
@@ -746,6 +746,37 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 - 2026-08-21 实跑：`cd web && npm test` → 59 passed；`cd web && npm run build` → TypeScript strict 与 Vite 构建通过；`cd backend && .venv/bin/pytest tests -q --ignore=tests/integration` → 366 passed、4 skipped；
 - 本切片不做 Playwright E2E、真实 Provider Smoke 或评测实跑，统一留到切片 10；回答不做 token 流式输出；索引状态按文献行独立查询，适合当前最小列表规模，批量状态接口留到有性能证据后再评估。
 
+### 切片 10：验收复盘与 Phase 2 收口（契约定稿）
+
+已于 2026-08-21 完成。本切片不新增产品功能，只补可复现验收入口、真实组件显式 Smoke、Phase 2 E2E，并审计既有可靠性覆盖。
+
+#### 固定评测契约与实跑
+
+- `tests/evaluation/run_phase2_eval.py` 复用正式 `IngestionService`、三个 Executor、Retriever、Evidence 与 Citation Validator，在一次性 pgvector 数据库中跑 manifest 全部 14 题；报告记录时间、Provider/profile、参数、逐题指标与限制；
+- 正式 Fake Parser 会忽略输入 PDF 并返回固定结构，不能验证 manifest 页码事实，因此完整确定性评测使用正式本地 `PypdfDocumentParser`；Embedding/Chat 保持 Fake，真实 Docling 由独立 opt-in Smoke 覆盖；
+- 参数为 chunk 512/64、Top-K 20、每篇上限 8、预算 3000。实跑结果：answered Retrieval 8/8，must-cite Retrieval 11/11，Citation completeness 11/11，Validator 14/14，selected scope 3/3；状态匹配 8/14（answered 8/8、insufficient 0/6）；
+- insufficient 0/6 是 Fake Chat 的已知能力边界：只要有任意 Evidence 就返回 answered，不能判断语义证据充分性。不得解释为真实模型质量，也未报告 Groundedness、性能或 Provider 质量。
+
+#### 真实组件与 Provider
+
+- Docling opt-in：清除本机不完整 SOCKS 代理环境后，2 passed；本机 CUDA 驱动不兼容时自动 CPU fallback，并有 Docling 弃用告警；
+- Embedding opt-in：真实 `embedding-3` 返回 1 个 1024 维向量，usage 非空；Base URL 必须为 API 根，Adapter 自行追加 `/embeddings`；
+- Chat opt-in：当前真实模型不支持 `response_format=json_schema`；新增 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED`（默认 true），显式 false 时使用 `json_object`，输出仍经本地 `RagAnswerOutput` 校验。真实结构化 Chat Smoke 通过且 usage 非空；
+- 普通测试继续默认 Fake、不联网；Key、Prompt 全文、向量和敏感响应未写入日志、Event 或报告。
+
+#### E2E 与故障证据
+
+- `web/e2e/phase-02.spec.ts` 覆盖创建 Project、导入 PDF、等待 ingestion/indexing、Project 问答与 RAG SSE、刷新恢复、Citation → Evidence → PDF `#page=N`、单篇 selected scope、Project 归档只读；与 Phase 1 同跑共 2 passed；
+- E2E 发现并修复 Project 归档按钮 active 状态误调用 restore 的真实缺陷；测试使用 Fake Parser/Embedding/Chat，不产生费用；
+- 对幂等/重复执行、busy 自愈、Provider 错误分类、结构修复、取消、最终原子性、终态 Event、SSE 重放、归档/隔离/scope/Evidence 授权逐项对照现有测试，未发现需要复制断言的缺口。证据矩阵见 `../modules/rag-evaluation.md`。
+
+#### 完整验证结果
+
+- Web：Vitest 59 passed；TypeScript strict + Vite build 通过；Playwright Phase 1–2 共 2 passed；
+- Backend：非集成 370 passed、4 skipped；integration 79 passed；`ruff check src tests` 通过；pyright 0 errors；
+- Evaluation：指标单元与 Fixture 6 passed；完整 14 题 runner 成功；
+- Provider：默认入口 2 skipped；真实 Docling 2 passed；真实 Embedding 1 passed；真实结构化 Chat 1 passed。
+
 ## 测试方式
 
 - **Domain**：Chunk/Profile 哈希、Claim/Evidence 关系和 Citation Validator；
@@ -755,7 +786,7 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 - **Provider Contract**：Fake Embedding/Fake Chat 为默认，真实 Provider 显式启用；
 - **Evaluation**：固定 Project、问题、期望 Paper/Evidence 和明确无答案问题。
 
-普通测试不得访问真实模型。评测至少记录 Retrieval Recall@K、Citation validity/completeness 和少量人工 Groundedness 结果；不使用虚构质量指标。
+普通测试不得访问真实模型。评测至少记录 Retrieval Recall@K、Citation validity/completeness；Groundedness 只有实际人工核对后才记录。本次未运行 Groundedness，不使用虚构质量指标。
 
 ## 阶段完成条件
 
@@ -770,6 +801,8 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 - Provider 临时错误、重复 Job、取消和 SSE 重连有自动测试；
 - 有固定 Retrieval/Citation 评测数据和真实运行报告；
 - 阶段 Spec、模块学习笔记和已知限制已更新。
+
+2026-08-21 对照结论：以上条件全部满足。真实 Provider 只证明最小 Adapter/结构契约可调用，不代表真实语料质量或生产可用；Fake 评测暴露的 insufficient 0/6 作为模型能力限制保留，不影响“无检索结果时确定性返回证据不足”的产品不变量与自动测试。
 
 ## 实现前需要确定
 

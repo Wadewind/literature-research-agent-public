@@ -14,6 +14,10 @@ tests/evaluation/
 │  └─ rl-robotics.pdf           # 四足机器人模型强化学习（4 页）
 ├─ generate.py              # 确定性再生成脚本
 ├─ manifest.json            # 固定问题集（14 题）+ 语料映射与植入事实声明
+├─ metrics.py               # 指标纯函数与汇总数据结构
+├─ test_metrics.py          # 指标边界单元测试
+├─ run_retrieval_eval.py    # 切片 6 的检索参数校准入口
+├─ run_phase2_eval.py       # 切片 10 的完整确定性管线评测入口
 └─ README.md
 ```
 
@@ -65,21 +69,36 @@ cd backend && uv run python tests/evaluation/generate.py
 分类统计：单篇事实型 5 题、跨篇综合型 3 题（must_cite 恰好两篇）、明确无答案型 3 题、
 范围边界型 3 题（selected_papers 排除答案所在 paper，期望 `insufficient_evidence`）。
 
-## 如何在后续切片运行评测
+## 如何运行完整评测
 
-评测 harness 属后续切片（切片 10 验收复盘实跑）。预期流程：
+```bash
+cd backend
+.venv/bin/python tests/evaluation/run_phase2_eval.py \
+  --json-output /tmp/phase-02-evaluation.json
+```
+
+Runner 使用一次性 `pgvector/pgvector:pg18` 数据库，并复用正式的导入服务、
+`IngestionExecutor`、`IndexingExecutor`、`Retriever`、`RagAnswerExecutor` 和
+Citation Validator：
 
 1. 创建一个专用评测 Project，把 4 篇语料 PDF 经正常上传/解析/索引链路导入，
    等待 ChunkSet ready；
 2. 建立语料 ID（如 `gnn-survey`）到实际 `paper_id` / `version_id` 的映射；
 3. 逐题创建 Conversation（按 `scope` 设置 project / selected_papers 模式）并提交问题，
    等待 `rag_answer` Run 终态；
-4. 对照 `expected` 计算指标，只报告实跑结果：
+4. 对照 `expected` 计算指标并输出非敏感 JSON 报告：
    - **Retrieval Recall@K**：期望 paper/页面对应的 Chunk 是否进入 Top-K 候选；
    - **Citation validity**：引用是否通过 Citation Validator（结构/范围合法）；
    - **Citation completeness**：`must_cite` 声明的 paper 是否都被实际引用；
-   - **人工 Groundedness**：少量样本人工核对 Claim 是否被 Evidence 语义支持；
    - `unanswerable` / `scope_boundary` 题以 `answer_status == insufficient_evidence` 为通过。
+
+2026-08-21 使用本地 `pypdf 6.16.1`、Fake Embedding、Fake Chat 和默认参数
+`512/64、Top-K 20、per-paper 8、budget 3000` 实跑：answered 题 Retrieval
+Recall 为 8/8、must-cite 条目为 11/11，Citation completeness 11/11，Validator
+14/14，selected scope 边界 3/3；回答状态总匹配 8/14，其中 answered 8/8、
+insufficient 0/6。后一个结果是 Fake Chat 的能力边界：只要存在任意 Evidence 就返回
+answered，不能判断语义证据是否充分，不能解释成真实模型质量。完整说明见
+`docs/learning-journal/modules/rag-evaluation.md`。
 
 Fixture 改动后必须重跑 `generate.py` 与
 `pytest tests/infrastructure/test_evaluation_fixtures.py`，保证 PDF 与 manifest 不漂移。
@@ -91,3 +110,7 @@ Fixture 改动后必须重跑 `generate.py` 与
 - 表格为 Courier 文本排版而非真实表格结构，Docling/Element 层的表格识别行为需在
   索引切片实跑时确认；
 - 语料规模小（4 篇），只覆盖管线正确性，不代表真实检索质量。
+- 完整评测使用正式 `PypdfDocumentParser` 而非生产 Fake Parser：Fake Parser 有意忽略
+  输入字节并返回固定中文文档，无法验证 manifest 的论文、章节和页码事实；真实 Docling
+  由独立 opt-in Smoke 覆盖。
+- 不报告 Groundedness、性能或 Provider 质量；未实际运行的指标不会写入报告。

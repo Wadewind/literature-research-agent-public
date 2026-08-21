@@ -19,7 +19,7 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
             记录失败只记日志，不影响调用结果）
 ```
 
-- Port 只表达意图：`json_schema` 由 Adapter 映射为 OpenAI `response_format`（`json_schema` 优先，`json_schema_supported=False` 时降级 `json_object`）；JSON 解析与业务 Schema 校验在上层（RAG 切片）；
+- Port 只表达意图：`json_schema` 由 Adapter 映射为 OpenAI `response_format`（`json_schema` 优先，`json_schema_supported=False` 时降级 `json_object`）；Worker 由 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED` 显式配置能力（默认 true）；JSON 解析与业务 Schema 校验在上层（RAG 切片）；
 - 空批量 `embed([])` 直接返回空结果，不发起请求；
 - Port 暴露 `provider`/`model` 属性供调用记录使用。
 
@@ -56,6 +56,7 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - Gateway `tests/application/test_model_gateway.py`（5 例）：成功/失败记录、error_type、记录失败不影响结果、不掩盖模型错误、run_id 可空；
 - PostgreSQL 集成 `tests/integration/test_model_invocation_repository.py`（3 例）；
 - 切片 3 完成时：非集成 216 passed + 4 skipped，integration 43 passed，ruff/pyright 全绿。
+- 切片 10 真实 Smoke（2026-08-21）：`embedding-3` 返回 1 个 1024 维向量且 usage 非空；真实 Chat 在 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false` 的 `json_object` 模式返回符合 `RagAnswerOutput` 的 `insufficient_evidence`，usage 非空。普通入口仍为 2 skipped，不触网。初次实跑还验证了 401 正确映射认证错误、完整端点误作 Base URL 会形成 404，以及不支持 `json_schema` 时 400 被归为永久非法请求；修正配置后通过。
 
 ## 代码入口
 
@@ -63,7 +64,7 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - 端口：`application/ports/embedding_model.py`、`chat_model.py`、`model_invocation_repository.py`
 - 服务：`application/model_gateway.py`
 - 适配器：`infrastructure/models/openai_compatible.py`、`fake_models.py`（生产侧 Fake，切片 5 起 fake 为 bag-of-words 向量）
-- 配置：`infrastructure/config.py`（`AGENT_EMBEDDING_*`/`AGENT_CHAT_*`/`AGENT_MODEL_TIMEOUT_SECONDS`/`AGENT_MODEL_MAX_RETRIES`/`AGENT_EMBEDDING_BACKEND`）
+- 配置：`infrastructure/config.py`（`AGENT_EMBEDDING_*`/`AGENT_CHAT_*`/`AGENT_CHAT_JSON_SCHEMA_SUPPORTED`/`AGENT_MODEL_TIMEOUT_SECONDS`/`AGENT_MODEL_MAX_RETRIES`/`AGENT_EMBEDDING_BACKEND`）
 - 迁移：`migrations/versions/d6e1f7a3b9c2_create_model_invocations_table.py`
 - 测试：`tests/infrastructure/test_openai_compatible_models.py`、`test_provider_smoke.py`（显式启用）
 
@@ -73,6 +74,7 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - 网络连接失败（非超时）归类为 `ModelServerError`（临时），是三类具名临时错误之外的归类选择；
 - 重试是固定退避，不读 `Retry-After`；无并发限制与配额管理（个人项目规模）；
 - `model_invocations` 尚无查询 API，只作运维记录。
+- `json_object` 降级不能由 Provider 强制 Schema，依赖 Prompt 明确字段形状；Pydantic 解析、一次修复和 Citation Validator 仍是不可省略的确定性边界。
 
 ## 60 秒面试说明
 

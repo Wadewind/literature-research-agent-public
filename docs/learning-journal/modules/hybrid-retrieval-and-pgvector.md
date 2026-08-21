@@ -68,6 +68,7 @@ projects.owner_id = :owner_id AND projects.project_id = :project_id
 - Application `tests/application/test_retriever.py`（7 例）：编排与 invocation 记录（含 run_id）、空查询、FTS 零命中纯语义路径、上限+预算组合、范围透传、Embedding 失败传播、非法参数；
 - Fake 模型 `tests/infrastructure/test_fake_models.py`（7 例）：确定性、L2 归一化、词汇重叠相似度、零向量；
 - 校准实验 `tests/evaluation/run_retrieval_eval.py` 实跑（非自动测试）：4 篇语料 62 elements → 33 chunks，answered 8 题——起始参数 7/8（q08 被每篇上限截掉），校准 per_paper_limit=8 后 **8/8、条目级 11/11，连续三次实跑一致**；
+- 切片 10 完整管线评测 `run_phase2_eval.py`：经正式导入/索引/RAG 提交再次得到 answered 题 8/8、must-cite 条目 11/11，selected scope 3/3；使用 Fake Embedding，只证明固定语料下的管线与过滤边界；
 - 切片完成时：非集成 281 passed + 4 skipped，integration 60 passed，ruff/pyright 全绿。
 
 ## 代码入口
@@ -82,11 +83,11 @@ projects.owner_id = :owner_id AND projects.project_id = :project_id
 
 ## 已知限制
 
-- Fake Embedding 只表达词汇重叠，Recall 结论只对管线正确性有效；真实 Provider 检索质量评测属切片 10；
+- Fake Embedding 只表达词汇重叠，Recall 结论只对管线正确性有效；切片 10 只做真实 Embedding 最小 Smoke，未用真实 Provider 重跑语料质量评测；
 - `plainto_tsquery` 对查询词取 AND：自然语言长问题 FTS 常零命中（q08 实测 fts=0，纯语义路径兜底）；首版不引入 OR 语义、查询改写或独立 reranker；
 - 语义路同距离候选按随机 chunk_id 决胜，并列集合的成员跨运行不稳定（校准后参数下 Recall 有余量，三次实跑一致）；
 - embedding 列无向量索引，精确检索随语料增长的性能待 Phase 4 评估是否引入 HNSW；
-- 评测语料仅 4 篇 33 chunks；per_paper_limit=8 的绝对值在小语料上校准，真实论文（数百 chunks）下待切片 10 复评。
+- 评测语料仅 4 篇 33 chunks；per_paper_limit=8 的绝对值只在小语料上校准，真实论文（数百 chunks）下仍需 Phase 4 质量/规模评测。
 
 ## 60 秒面试说明
 

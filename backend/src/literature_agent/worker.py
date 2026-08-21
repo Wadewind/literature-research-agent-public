@@ -200,6 +200,7 @@ def _build_model_stack(
             model=settings.chat_model,
             timeout_seconds=settings.model_timeout_seconds,
             max_retries=settings.model_max_retries,
+            json_schema_supported=settings.chat_json_schema_supported,
         )
         chat_model = chat_adapter
         closables.append(chat_adapter)

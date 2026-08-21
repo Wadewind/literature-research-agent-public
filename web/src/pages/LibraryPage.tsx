@@ -209,7 +209,7 @@ export default function LibraryPage() {
         </div>
         <div className="project-heading-actions">
           <div className="metric-block"><strong>{papersQuery.data?.length ?? "—"}</strong><span>已收录</span></div>
-          <button type="button" className="button-quiet" disabled={projectArchiveMutation.isPending} onClick={() => projectArchiveMutation.mutate(!archived)}>
+          <button type="button" className="button-quiet" disabled={projectArchiveMutation.isPending} onClick={() => projectArchiveMutation.mutate(archived)}>
             {archived ? "恢复 Project" : "归档 Project"}
           </button>
           {!archived && <button type="button" className="button-plain" onClick={() => setEditing((value) => !value)}>修改信息</button>}

@@ -11,6 +11,11 @@ import os
 
 import pytest
 
+from literature_agent.domain.answer_schema import (
+    parse_rag_answer_output,
+    rag_answer_json_schema,
+)
+from literature_agent.domain.evidence import AnswerStatus
 from literature_agent.domain.model_types import ChatMessage
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.models.openai_compatible import (
@@ -49,7 +54,7 @@ async def test_real_embedding_smoke() -> None:
 
 
 async def test_real_chat_smoke() -> None:
-    """真实 Chat 调用：返回非空 content 与 usage。"""
+    """真实 Chat 调用：遵循 RAG JSON Schema 并返回 usage。"""
     settings = Settings.from_env()
     if not settings.chat_api_key:
         pytest.skip("未配置 AGENT_CHAT_API_KEY")
@@ -60,15 +65,29 @@ async def test_real_chat_smoke() -> None:
         model=settings.chat_model,
         timeout_seconds=settings.model_timeout_seconds,
         max_retries=settings.model_max_retries,
+        json_schema_supported=settings.chat_json_schema_supported,
     )
     try:
         result = await adapter.generate(
-            [ChatMessage(role="user", content="用一句话回答：什么是文献综述？")],
+            [
+                ChatMessage(
+                    role="system",
+                    content=(
+                        "你正在执行结构化 RAG JSON 冒烟测试。当前没有任何 Evidence。"
+                        "只返回以下 JSON，不得增加、删除或改名字段："
+                        '{"answer_status":"insufficient_evidence","claims":[]}'
+                    ),
+                ),
+                ChatMessage(role="user", content="当前证据能回答这个问题吗？"),
+            ],
+            json_schema=rag_answer_json_schema(),
             max_tokens=100,
         )
     finally:
         await adapter.aclose()
 
-    assert result.content.strip()
+    output = parse_rag_answer_output(result.content)
+    assert output.answer_status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert output.claims == []
     assert result.usage.prompt_tokens is not None and result.usage.prompt_tokens > 0
     assert result.usage.completion_tokens is not None and result.usage.completion_tokens > 0
