@@ -142,7 +142,7 @@ Project
  Evidence Candidates
 ```
 
-首版不做 LLM Query Expansion、不做独立 reranker。FTS 使用 PostgreSQL `tsvector`，语言配置 `english`（语料为英文学术论文；中文支持不在本阶段范围，2026-08-20 定稿）；向量使用 pgvector cosine 距离精确检索；合并使用 RRF（`k=60`）。各路 Top-K（起始候选 20）、每篇论文结果上限和总 Token Budget 在检索切片的小实验中确定并记录于此。
+首版不做 LLM Query Expansion、不做独立 reranker。FTS 使用 PostgreSQL `tsvector`，语言配置 `english`（语料为英文学术论文；中文支持不在本阶段范围，2026-08-20 定稿）；向量使用 pgvector cosine 距离精确检索；合并使用 RRF（`k=60`）。各路 Top-K、每篇论文结果上限和总 Token Budget 已经切片 6 小实验校准（2026-08-21）：`top_k=20`、`per_paper_limit=8`、`token_budget=3000`，实验过程见下文「切片 6」小节。
 
 Retriever 必须先限制 `owner_id`、`project_id`、`ProjectPaper`、`selected_version_id` 和 ready ChunkSet，再进行排序，不能在检索后仅靠应用层删除越权结果。
 
@@ -611,13 +611,11 @@ Settings 新增（扁平 `AGENT_` 前缀）：`AGENT_RETRIEVAL_TOP_K` / `AGENT_R
 
 以下事项已于 2026-08-20 定稿：Provider 方案（OpenAI-compatible Adapter + Fake）、pgvector 镜像替换（本地库可重建）、`tiktoken` 引入、scope 模型（两值、不可改）、段落级 Claim 严格绑定、indexing Run 创建时机、Worker run_type 分发、评测语料用合成 PDF。详见「已确定事项」。
 
-以下参数仍在对应切片的小实验中确定，不阻塞当前阶段边界：
+已随切片实验确定：Chunk 参数 512/64（切片 4 设定起点，切片 6 实验未暴露问题，保持不动）；Embedding/Chat Model 与维度（切片 3/5：智谱 embedding-3 @1024、DeepSeek deepseek-v4-flash）；Top-K/每篇上限/Token 预算（切片 6：20/8/3000）；评测语料与问题集（切片 2）。
 
-1. Chunk 长度、Overlap 和表格处理规则（切片 4）；
-2. 首个 Embedding/Chat Model 及向量维度（切片 3/5）；
-3. semantic/FTS Top-K、RRF 之外的每篇论文上限和总 Token Budget（切片 6）；
-4. Context Token Budget 和结构化输出 Schema 细节（切片 7/8）；
-5. 小型评测集的具体合成论文与问题清单（切片 2，子智能体构建）。
+仍在对应切片确定，不阻塞当前阶段边界：
+
+1. Context Token Budget 和结构化输出 Schema 细节（切片 7/8）。
 
 ## 已确定事项
 
