@@ -193,3 +193,43 @@ def test_invalid_parameters_rejected() -> None:
         _make_retriever(
             FakeChunkRepository(), FakeModelInvocationRepository(), token_budget=-1
         )
+
+
+async def test_retrieve_for_scope_passes_snapshot_to_both_paths() -> None:
+    """快照检索：version_scope/owner/run_id 原样透传给两路 scope 查询。"""
+    chunk_repo = FakeChunkRepository()
+    chunk_repo.semantic_results = [_retrieved("a", "p1", version_id="v1")]
+    invocation_repo = FakeModelInvocationRepository()
+    embedding = FakeEmbeddingModel()
+    retriever = _make_retriever(chunk_repo, invocation_repo, embedding_model=embedding)
+    scope = [("p1", "v1"), ("p2", "v2")]
+
+    results = await retriever.retrieve_for_scope(
+        owner_id="user-1", query="graph neural networks",
+        version_scope=scope, run_id="run-9",
+    )
+
+    assert [r.chunk.chunk_id for r in results] == ["a"]
+    assert embedding.calls == [["graph neural networks"]]
+    assert invocation_repo.all()[0].run_id == "run-9"
+    paths = [call["path"] for call in chunk_repo.search_calls]
+    assert paths == ["semantic_by_scope", "fulltext_by_scope"]
+    assert all(call["version_scope"] == scope for call in chunk_repo.search_calls)
+    assert all(call["owner_id"] == "user-1" for call in chunk_repo.search_calls)
+
+
+async def test_retrieve_for_scope_empty_snapshot_skips_model() -> None:
+    """空快照直接返回空结果，不调用模型也不访问数据库。"""
+    chunk_repo = FakeChunkRepository()
+    invocation_repo = FakeModelInvocationRepository()
+    embedding = FakeEmbeddingModel()
+    retriever = _make_retriever(chunk_repo, invocation_repo, embedding_model=embedding)
+
+    results = await retriever.retrieve_for_scope(
+        owner_id="user-1", query="q", version_scope=[], run_id="run-9"
+    )
+
+    assert results == []
+    assert embedding.calls == []
+    assert invocation_repo.all() == []
+    assert chunk_repo.search_calls == []

@@ -646,3 +646,93 @@ class CitationORM(Base):
         index=True,
         primary_key=True,
     )
+
+
+class ConversationORM(Base):
+    """Conversation 的持久化映射（切片 8）。
+
+    ``active_run_id`` 是会话级单活跃 Run 的认领字段：提交问题时条件
+    更新认领（``WHERE active_run_id IS NULL``），Run 终态时清理。
+    """
+
+    __tablename__ = "conversations"
+
+    conversation_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"),
+        index=True,
+        nullable=False,
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    scope_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    active_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runs.run_id"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class ConversationScopePaperORM(Base):
+    """Conversation 固化默认范围的持久化映射。
+
+    paper/version 为创建时解析固化的快照列，不建 FK（历史范围不因
+    后续移出或换版而改变）。
+    """
+
+    __tablename__ = "conversation_scope_papers"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.conversation_id"),
+        primary_key=True,
+    )
+    paper_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    version_id: Mapped[str] = mapped_column(String(36), nullable=False)
+
+
+class MessageORM(Base):
+    """Message 的持久化映射（会话内 sequence 严格递增）。"""
+
+    __tablename__ = "messages"
+
+    message_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.conversation_id"),
+        index=True,
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runs.run_id"),
+        index=True,
+        nullable=True,
+    )
+    claim_set_id: Mapped[str | None] = mapped_column(
+        ForeignKey("claim_sets.claim_set_id"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "sequence", name="uq_messages_conversation_sequence"
+        ),
+    )

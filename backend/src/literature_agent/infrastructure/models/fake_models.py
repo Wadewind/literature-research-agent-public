@@ -17,6 +17,7 @@ Embedding 向量采用确定性 bag-of-words 哈希（hashing trick，切片 6 �
 """
 
 import hashlib
+import json
 import math
 import re
 
@@ -33,6 +34,11 @@ from literature_agent.domain.model_types import (
 EMBEDDING_COLUMN_DIMENSIONS = 1024
 
 _DEFAULT_CHAT_RESPONSE = '{"answer_status": "insufficient_evidence", "claims": []}'
+
+# Prompt 中证据块的 ID 标记（与 RagAnswerExecutor 的证据块格式对应）
+_EVIDENCE_ID_PATTERN = re.compile(r"evidence_id=([0-9a-fA-F-]{36})")
+# 单条 Claim 引用的证据 ID 上限（保持响应小而确定）
+_FAKE_MAX_CITATIONS_PER_CLAIM = 5
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
@@ -91,7 +97,18 @@ class FakeEmbeddingModel(EmbeddingModel):
 
 
 class FakeChatModel(ChatModel):
-    """不依赖外部服务的 Chat 假实现（固定结构化响应，占位到切片 8 接线）。"""
+    """不依赖外部服务的 Chat 假实现（确定性结构化响应，切片 8 接线）。
+
+    默认行为由 Prompt 中的证据 ID 驱动（保证端到端确定性）：
+
+    - 用户消息中含 ``evidence_id=<uuid>`` 标记（RagAnswerExecutor 的
+      证据块格式）→ 返回合法的 ``answered`` JSON，一条 Claim 引用
+      提取到的前若干个证据 ID；
+    - 不含任何证据 ID → 返回合法的 ``insufficient_evidence`` JSON。
+
+    修复重试场景（消息列表带反馈）行为相同：从全部 user 消息中提取
+    证据 ID，输出不变。
+    """
 
     provider = "fake"
     model = "fake-chat"
@@ -103,9 +120,34 @@ class FakeChatModel(ChatModel):
         json_schema: dict | None = None,
         max_tokens: int | None = None,
     ) -> ChatResult:
-        """返回固定的最小结构化响应。"""
+        """返回确定性的合法结构化响应。"""
+        content = self._scripted_response(messages)
         return ChatResult(
-            content=_DEFAULT_CHAT_RESPONSE,
+            content=content,
             model=self.model,
             usage=ModelUsage(prompt_tokens=10, completion_tokens=5),
         )
+
+    @staticmethod
+    def _scripted_response(messages: list[ChatMessage]) -> str:
+        """按 Prompt 中的证据 ID 脚本化生成合法 RagAnswerOutput JSON。"""
+        evidence_ids: list[str] = []
+        for message in messages:
+            if message.role != "user":
+                continue
+            for found in _EVIDENCE_ID_PATTERN.findall(message.content):
+                if found not in evidence_ids:
+                    evidence_ids.append(found)
+        if not evidence_ids:
+            return _DEFAULT_CHAT_RESPONSE
+        cited = evidence_ids[:_FAKE_MAX_CITATIONS_PER_CLAIM]
+        payload = {
+            "answer_status": "answered",
+            "claims": [
+                {
+                    "text": "基于给定证据的回答（fake 模型确定性生成）。",
+                    "evidence_ids": cited,
+                }
+            ],
+        }
+        return json.dumps(payload, ensure_ascii=False)

@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from arq.connections import RedisSettings
 from arq.worker import run_worker
 
+from literature_agent.application.evidence_service import EvidenceService
 from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.model_gateway import ModelGateway
@@ -27,6 +28,8 @@ from literature_agent.application.outbox_dispatch_service import OutboxDispatchS
 from literature_agent.application.ports.chat_model import ChatModel
 from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.ports.embedding_model import EmbeddingModel
+from literature_agent.application.rag_answer_executor import RagAnswerExecutor
+from literature_agent.application.retriever import Retriever
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.application.run_reconcile_service import RunReconcileService
@@ -57,6 +60,12 @@ from literature_agent.infrastructure.persistence.chunk_repository import (
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
+from literature_agent.infrastructure.persistence.claim_set_repository import (
+    SqlalchemyClaimSetRepository,
+)
+from literature_agent.infrastructure.persistence.conversation_repository import (
+    SqlalchemyConversationRepository,
+)
 from literature_agent.infrastructure.persistence.database import (
     create_engine,
     create_session_factory,
@@ -66,6 +75,12 @@ from literature_agent.infrastructure.persistence.element_repository import (
 )
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
+)
+from literature_agent.infrastructure.persistence.evidence_repository import (
+    SqlalchemyEvidenceRepository,
+)
+from literature_agent.infrastructure.persistence.message_repository import (
+    SqlalchemyMessageRepository,
 )
 from literature_agent.infrastructure.persistence.model_invocation_repository import (
     SqlalchemyModelInvocationRepository,
@@ -137,7 +152,7 @@ def _build_model_stack(
     settings: Settings,
     session_factory: Callable[[], AbstractAsyncContextManager[Any]],
 ) -> tuple[ModelGateway, ChunkProfile, list[Any]]:
-    """按 ``embedding_backend`` 装配模型栈与活动 ChunkProfile（切片 5）。
+    """按 ``embedding_backend``/``chat_backend`` 装配模型栈与活动 ChunkProfile。
 
     ``fake``（默认）：确定性 Fake 模型，本地开发与测试默认不触网；
     profile 的 embedding 三元组固定为 fake 标识
@@ -145,13 +160,13 @@ def _build_model_stack(
     避免 fake 产出的 ChunkSet 与真实 profile 混淆。
     ``openai_compatible``：OpenAI 兼容 Adapter；profile 三元组来自
     ``AGENT_EMBEDDING_*``，缺 API Key 时首次调用抛 ModelAuthError。
+    Embedding 与 Chat 的 backend 独立开关（切片 8 起），互不影响。
 
     返回 ``(gateway, profile, closables)``：closables 为需要随 Worker
     关闭释放的 Adapter（Fake 无资源，不在其中）。
     """
     if settings.embedding_backend == "fake":
         embedding_model: EmbeddingModel = FakeEmbeddingModel()
-        chat_model: ChatModel = FakeChatModel()
         profile = ChunkProfile(
             max_tokens=settings.chunk_max_tokens,
             overlap_tokens=settings.chunk_overlap_tokens,
@@ -171,7 +186,14 @@ def _build_model_stack(
             max_retries=settings.model_max_retries,
             dimensions=settings.embedding_dimensions,
         )
-        chat_model = OpenAiCompatibleChat(
+        profile = _build_chunk_profile(settings)
+        closables = [embedding_model]
+    else:
+        raise ValueError(f"未知 embedding_backend: {settings.embedding_backend}")
+    if settings.chat_backend == "fake":
+        chat_model: ChatModel = FakeChatModel()
+    elif settings.chat_backend == "openai_compatible":
+        chat_adapter = OpenAiCompatibleChat(
             provider=urlparse(settings.chat_base_url).netloc or settings.chat_base_url,
             base_url=settings.chat_base_url,
             api_key=settings.chat_api_key,
@@ -179,10 +201,10 @@ def _build_model_stack(
             timeout_seconds=settings.model_timeout_seconds,
             max_retries=settings.model_max_retries,
         )
-        profile = _build_chunk_profile(settings)
-        closables = [embedding_model, chat_model]
+        chat_model = chat_adapter
+        closables.append(chat_adapter)
     else:
-        raise ValueError(f"未知 embedding_backend: {settings.embedding_backend}")
+        raise ValueError(f"未知 chat_backend: {settings.chat_backend}")
     gateway = ModelGateway(
         embedding_model=embedding_model,
         chat_model=chat_model,
@@ -292,6 +314,36 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         event_notifier=event_notifier,
     )
     # 组合 dispatcher：按 run_type 显式分发，未知类型显式失败
+    retriever = Retriever(
+        session_factory=session_factory,
+        chunk_repo_factory=SqlalchemyChunkRepository,
+        model_gateway=model_gateway,
+        top_k=settings.retrieval_top_k,
+        per_paper_limit=settings.retrieval_per_paper_limit,
+        token_budget=settings.retrieval_token_budget,
+    )
+    evidence_service = EvidenceService(
+        session_factory=session_factory,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+    )
+    rag_answer_executor = RagAnswerExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        conversation_repo_factory=SqlalchemyConversationRepository,
+        message_repo_factory=SqlalchemyMessageRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        retriever=retriever,
+        evidence_service=evidence_service,
+        model_gateway=model_gateway,
+        answer_max_output_tokens=settings.answer_max_output_tokens,
+        context_token_budget=settings.retrieval_token_budget,
+        max_run_attempts=settings.max_run_attempts,
+        event_notifier=event_notifier,
+    )
     dispatcher = RunDispatcher(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -299,6 +351,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         executors={
             RunType.INGESTION: ingestion_executor.execute,
             RunType.INDEXING: indexing_executor.execute,
+            RunType.RAG_ANSWER: rag_answer_executor.execute,
         },
         event_notifier=event_notifier,
     )

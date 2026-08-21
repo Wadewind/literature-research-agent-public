@@ -9,6 +9,8 @@ from literature_agent.domain.exceptions import (
     FileValidationError,
     IndexingInputError,
     InvalidPdfInputError,
+    ModelOutputInvalidError,
+    RagAnswerInputError,
 )
 from literature_agent.domain.model_errors import (
     ModelAuthError,
@@ -23,6 +25,8 @@ _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     FileValidationError,
     IndexingInputError,
     EvidenceScopeError,
+    RagAnswerInputError,
+    ModelOutputInvalidError,
     ModelAuthError,
     ModelInvalidRequestError,
     ModelResponseError,

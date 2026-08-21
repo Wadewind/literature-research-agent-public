@@ -141,6 +141,71 @@ class EvidenceScopeError(Exception):
         super().__init__(message)
 
 
+class ConversationNotFoundError(Exception):
+    """Conversation 不存在或当前 actor 无权访问。"""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = conversation_id
+        super().__init__(f"Conversation {conversation_id} 不存在")
+
+
+class ConversationBusyError(Exception):
+    """Conversation 已有未完成的回答 Run，拒绝并发提问。"""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = conversation_id
+        super().__init__(f"Conversation {conversation_id} 已有进行中的回答")
+
+
+class ProjectNotIndexedError(Exception):
+    """提问范围内没有任何 ready ChunkSet，快速失败。"""
+
+    def __init__(self, project_id: str) -> None:
+        self.project_id = project_id
+        super().__init__(f"Project {project_id} 的提问范围尚未完成索引")
+
+
+class InvalidScopeError(Exception):
+    """Conversation 范围非法：scope_mode 非法、selected_papers 为空，
+    或含未收录/已归档/其他 owner 的 Paper。"""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+class EvidenceNotFoundError(Exception):
+    """Evidence 不存在或不属于当前 actor 可见的 Project。"""
+
+    def __init__(self, evidence_id: str) -> None:
+        self.evidence_id = evidence_id
+        super().__init__(f"Evidence {evidence_id} 不存在")
+
+
+class RagAnswerInputError(Exception):
+    """rag_answer Run 输入类永久错误：缺少 conversation_id、
+    user_message_id、版本范围快照，或关联的 User Message 不存在。
+
+    重试无法改变结果，直接令 Run 进入 FAILED。
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+class ModelOutputInvalidError(Exception):
+    """模型结构化输出经一次修复重试后仍非法（解析失败或引用校验失败）。
+
+    属稳定的永久失败：Run 直接 FAILED（错误类型 model_output_invalid），
+    不再消耗 Run 层重试预算。
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 class AnswerOutputParseError(Exception):
     """模型结构化输出解析失败：非 JSON 或不符合 RagAnswerOutput Schema。
 

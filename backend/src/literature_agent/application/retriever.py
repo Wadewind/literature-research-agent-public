@@ -20,6 +20,7 @@ from literature_agent.application.ports.chunk_repository import ChunkRepository
 from literature_agent.application.ports.session import Session
 from literature_agent.domain.chunk import Chunk
 from literature_agent.domain.retrieval import (
+    RetrievedChunk,
     ScoredChunk,
     apply_per_paper_limit,
     apply_token_budget,
@@ -146,6 +147,70 @@ class Retriever[TSession: Session]:
                 paper_ids=selected_paper_ids,
             )
 
+        return self._merge_and_rank(
+            semantic, fts, log_context=f"project_id={project_id}"
+        )
+
+    async def retrieve_for_scope(
+        self,
+        *,
+        owner_id: str,
+        query: str,
+        version_scope: list[tuple[str, str]],
+        run_id: str | None = None,
+    ) -> list[RetrievalResult]:
+        """按 Run 固化的版本范围快照执行混合检索（切片 8）。
+
+        与 ``retrieve`` 的差别：不按 ``project_papers`` 当前收录关系
+        过滤，只按显式 ``(paper_id, version_id)`` 快照集合过滤——
+        Paper 被移出 Project 后，本次 Run 仍按快照检索完（快照语义
+        优先）。owner 校验与 ready ChunkSet 过滤保留。
+
+        参数:
+            owner_id: 所有者（SQL 过滤保留）。
+            query: 原始问题；空查询（含纯空白）直接报错。
+            version_scope: Run ``input_payload`` 固化的版本范围快照；
+                空快照直接返回空列表，不调用模型。
+            run_id: 关联的 rag_answer Run（查询向量调用记录）。
+
+        异常:
+            ValueError: 查询为空。
+            ModelError: 查询向量生成失败（已记录后原样抛出）。
+        """
+        query = query.strip()
+        if not query:
+            raise ValueError("查询不能为空")
+        if not version_scope:
+            return []
+
+        embedding = await self._model_gateway.embed([query], run_id=run_id)
+        query_vector = embedding.vectors[0]
+
+        async with self._session_factory() as session:
+            chunk_repo = self._chunk_repo_factory(session)
+            semantic = await chunk_repo.search_semantic_by_scope(
+                owner_id=owner_id,
+                query_vector=query_vector,
+                limit=self._top_k,
+                version_scope=version_scope,
+            )
+            fts = await chunk_repo.search_fulltext_by_scope(
+                owner_id=owner_id,
+                query=query,
+                limit=self._top_k,
+                version_scope=version_scope,
+            )
+
+        return self._merge_and_rank(semantic, fts, log_context=f"run_id={run_id}")
+
+    def _merge_and_rank(
+        self,
+        semantic: list[RetrievedChunk],
+        fts: list[RetrievedChunk],
+        *,
+        log_context: str,
+    ) -> list[RetrievalResult]:
+        """两路候选 RRF 合并、每篇上限与预算截断、重新编号排名。"""
         candidates = rrf_merge(
             [
                 ScoredChunk(
@@ -183,8 +248,8 @@ class Retriever[TSession: Session]:
         ]
         # 日志只记录候选数量摘要，不记录问题文本或 Chunk 内容
         logger.info(
-            "检索完成: project_id=%s semantic=%d fts=%d merged=%d final=%d",
-            project_id,
+            "检索完成: %s semantic=%d fts=%d merged=%d final=%d",
+            log_context,
             len(semantic),
             len(fts),
             merged_count,

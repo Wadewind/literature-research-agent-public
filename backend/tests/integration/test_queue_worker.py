@@ -15,11 +15,15 @@ from arq.worker import Worker
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from testcontainers.community.redis import RedisContainer
 
+from literature_agent.application.conversation_service import ConversationService
 from literature_agent.application.document_query_service import DocumentQueryService
+from literature_agent.application.evidence_service import EvidenceService
 from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
+from literature_agent.application.rag_answer_executor import RagAnswerExecutor
+from literature_agent.application.retriever import Retriever
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.domain.actor import ActorContext
@@ -49,11 +53,26 @@ from literature_agent.infrastructure.persistence.chunk_repository import (
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
+from literature_agent.infrastructure.persistence.claim_set_repository import (
+    SqlalchemyClaimSetRepository,
+)
+from literature_agent.infrastructure.persistence.conversation_repository import (
+    SqlalchemyConversationRepository,
+)
 from literature_agent.infrastructure.persistence.element_repository import (
     SqlalchemyElementRepository,
 )
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
+)
+from literature_agent.infrastructure.persistence.evidence_repository import (
+    SqlalchemyEvidenceRepository,
+)
+from literature_agent.infrastructure.persistence.idempotency_repository import (
+    SqlalchemyIdempotencyRepository,
+)
+from literature_agent.infrastructure.persistence.message_repository import (
+    SqlalchemyMessageRepository,
 )
 from literature_agent.infrastructure.persistence.model_invocation_repository import (
     SqlalchemyModelInvocationRepository,
@@ -151,7 +170,13 @@ def _make_execution_service(session_factory) -> RunExecutionService:
 
 
 def _make_dispatcher(session_factory) -> RunDispatcher:
-    """构建 ingestion + indexing 的组合分发器（与 Worker 装配一致）。"""
+    """构建 ingestion + indexing + rag_answer 的组合分发器（与 Worker 装配一致）。"""
+    model_gateway = ModelGateway(
+        embedding_model=FakeEmbeddingModel(),
+        chat_model=FakeChatModel(),
+        session_factory=session_factory,
+        invocation_repo_factory=SqlalchemyModelInvocationRepository,
+    )
     ingestion = IngestionExecutor(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -179,13 +204,31 @@ def _make_dispatcher(session_factory) -> RunDispatcher:
             embedding_model="fake-embedding",
             embedding_dimensions=1024,
         ),
-        model_gateway=ModelGateway(
-            embedding_model=FakeEmbeddingModel(),
-            chat_model=FakeChatModel(),
-            session_factory=session_factory,
-            invocation_repo_factory=SqlalchemyModelInvocationRepository,
-        ),
+        model_gateway=model_gateway,
         embedding_batch_size=2,
+    )
+    retriever = Retriever(
+        session_factory=session_factory,
+        chunk_repo_factory=SqlalchemyChunkRepository,
+        model_gateway=model_gateway,
+    )
+    evidence_service = EvidenceService(
+        session_factory=session_factory,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+    )
+    rag_answer = RagAnswerExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        conversation_repo_factory=SqlalchemyConversationRepository,
+        message_repo_factory=SqlalchemyMessageRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        retriever=retriever,
+        evidence_service=evidence_service,
+        model_gateway=model_gateway,
     )
     return RunDispatcher(
         session_factory=session_factory,
@@ -194,6 +237,7 @@ def _make_dispatcher(session_factory) -> RunDispatcher:
         executors={
             RunType.INGESTION: ingestion.execute,
             RunType.INDEXING: indexing.execute,
+            RunType.RAG_ANSWER: rag_answer.execute,
         },
     )
 
@@ -456,5 +500,142 @@ async def test_ingestion_then_indexing_completes_end_to_end(
         assert index_status.chunk_set.chunk_count == len(chunks)
         assert index_status.chunk_set.embedded_count == len(chunks)
         assert index_status.indexing_run_id == indexing_run_id
+
+    await queue.aclose()
+
+
+async def test_rag_answer_completes_end_to_end(
+    db_engine, valkey_url: str, queued_run: str
+) -> None:
+    """端到端第三轮（切片 8）：提问 → rag_answer Run → 带引用的 Assistant Message。
+
+    复用 ingestion → indexing 两轮派发完成索引，然后经真实
+    ConversationService 提交提问（Outbox → ARQ → Worker → 回答）。
+    """
+    queue = ArqRunQueue(valkey_url)
+    session_factory = _session_factory(db_engine)
+    dispatch_service = OutboxDispatchService(
+        session_factory=session_factory,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        queue=queue,
+        max_attempts=10,
+        batch_size=20,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+    )
+
+    async def _run_worker_once() -> None:
+        """以 burst 模式跑一轮 Worker（与 Worker 进程相同的分发装配）。"""
+        worker = Worker(
+            redis_settings=RedisSettings.from_dsn(valkey_url),
+            functions=[execute_run],
+            burst=True,
+            handle_signals=False,
+            max_tries=1,
+            ctx={"run_execution_service": _make_execution_service(session_factory)},
+        )
+        await worker.async_run()
+
+    # 前两轮：ingestion → indexing，文献进入可检索状态
+    assert await dispatch_service.dispatch_pending() == 1
+    await _run_worker_once()
+    assert await dispatch_service.dispatch_pending() == 1
+    await _run_worker_once()
+
+    async with session_factory() as session:
+        ingestion_run = await SqlalchemyRunRepository(session).get_by_id(queued_run)
+        assert ingestion_run is not None
+        project_id = ingestion_run.project_id
+
+    # 经真实 ConversationService 创建会话并提交提问
+    conversation_service = ConversationService(
+        session_factory=session_factory,
+        project_repo_factory=SqlalchemyProjectRepository,
+        conversation_repo_factory=SqlalchemyConversationRepository,
+        message_repo_factory=SqlalchemyMessageRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+        idempotency_repo_factory=SqlalchemyIdempotencyRepository,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+    )
+    actor = ActorContext(owner_id="user-1")
+    view = await conversation_service.create_conversation(
+        actor, project_id, title=None, scope_mode="project", paper_ids=None
+    )
+    conversation_id = view.conversation.conversation_id
+    # 问题包含英文词 "fake"：与 Fake Parser 产出的标题 Chunk 词汇重叠，
+    # 保证确定性 bag-of-words 向量检索必有命中
+    posted = await conversation_service.post_message(
+        actor,
+        conversation_id,
+        content="fake 论文讲了什么？",
+        idempotency_key="e2e-key-1",
+        correlation_id="e2e-post",
+    )
+    assert posted.status == "queued"
+
+    # 第三轮：rag_answer
+    assert await dispatch_service.dispatch_pending() == 1
+    await _run_worker_once()
+
+    async with session_factory() as session:
+        run_repo = SqlalchemyRunRepository(session)
+        run = await run_repo.get_by_id(posted.run_id)
+        assert run is not None
+        assert run.status == RunStatus.SUCCEEDED
+        assert run.run_type == RunType.RAG_ANSWER.value
+
+        events = await SqlalchemyEventRepository(session).list_by_run(posted.run_id)
+        assert [e.event_type for e in events] == [
+            "run_created",
+            "run_started",
+            "retrieval_started",
+            "retrieval_completed",
+            "model_generation_started",
+            "model_generation_completed",
+            "citation_validation_completed",
+            "answer_committed",
+        ]
+
+        # 回答产物：Assistant Message + ClaimSet + Claims + Citations
+        message_repo = SqlalchemyMessageRepository(session)
+        from literature_agent.domain.conversation import MessageRole
+
+        assistant = await message_repo.get_by_run_and_role(
+            posted.run_id, MessageRole.ASSISTANT
+        )
+        assert assistant is not None
+        assert assistant.conversation_id == conversation_id
+        assert assistant.claim_set_id is not None
+        claim_set_repo = SqlalchemyClaimSetRepository(session)
+        claims = await claim_set_repo.list_claims(assistant.claim_set_id)
+        assert len(claims) == 1
+        citations = await claim_set_repo.list_citations(claims[0].claim_id)
+        assert citations
+        evidence = await SqlalchemyEvidenceRepository(session).list_by_run(
+            posted.run_id
+        )
+        assert evidence
+        evidence_ids = {e.evidence_id for e in evidence}
+        assert all(c.evidence_id in evidence_ids for c in citations)
+
+        # 模型调用记录：查询向量（embedding）与回答生成（chat）都带 run_id
+        invocations = await SqlalchemyModelInvocationRepository(session).list_by_run(
+            posted.run_id
+        )
+        capabilities = {i.capability.value for i in invocations}
+        assert capabilities == {"embedding", "chat"}
+
+        # 终态后活跃认领已清理，会话可继续提问
+        conversation = await SqlalchemyConversationRepository(session).get_by_id(
+            conversation_id
+        )
+        assert conversation is not None
+        assert conversation.active_run_id is None
 
     await queue.aclose()

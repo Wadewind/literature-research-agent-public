@@ -640,6 +640,78 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 - `citations` 无独立查询 API，引用详情读取随切片 8/9 落地；
 - ~~历史库若执行 `alembic downgrade base`，Phase 1 迁移 `8865966463a6` 的 paper_versions 未命名 FK 会导致失败~~（已修复 2026-08-21：upgrade 与 downgrade 改用显式约束名 `paper_versions_current_parse_revision_id_fkey`，与 PostgreSQL 自动命名一致，存量库零影响，`upgrade head → downgrade base` 两个来回在一次性容器中实跑通过）。
 
+### 切片 8：RAG Conversation（契约定稿）
+
+已于 2026-08-21 实现完成。本切片交付 Conversation/Message 数据模型、6 个 API 端点、`ConversationService`、快照检索路径与 `RagAnswerExecutor` 全链路，并接线 Worker 分发。
+
+#### 数据模型
+
+迁移 `d7f3a1c9e5b2`（`down_revision = c5b8e2f7a3d1`，upgrade/downgrade 已在一次性 pgvector 容器中实跑通过）：
+
+- `conversations`：`conversation_id`（PK）、`project_id`（FK）、`owner_id`、`title`（可空，≤200 字符，首条提问回填前 50 字符）、`scope_mode`（`project`/`selected_papers`，创建后不可改）、`active_run_id`（可空 FK → runs，单活跃 Run 认领指针）、`created_at`；
+- `conversation_scope_papers`：复合主键 `(conversation_id, paper_id)` + `version_id`——`selected_papers` 模式创建时固化的默认范围；
+- `messages`：`message_id`（PK）、`conversation_id`（FK）、`sequence`、`role`（`user`/`assistant`）、`content`（≤4000 字符）、`run_id`（可空 FK）、`claim_set_id`（可空 FK → claim_sets，切片 7 已建）、`created_at`；唯一约束 `(conversation_id, sequence)`。
+
+#### API（api/conversations.py）
+
+- `POST /api/v1/projects/{project_id}/conversations`（201）、`GET …/conversations`、`GET /api/v1/conversations/{id}`；
+- `GET /api/v1/conversations/{id}/messages`：assistant 消息携带 Claim 与 Evidence 摘要（evidence_id/paper_id/version_id/section/pages/excerpt），供前端直接渲染引用；
+- `POST /api/v1/conversations/{id}/messages`（202 `{user_message_id, run_id, status: "queued"}`，`Idempotency-Key` 必填，缺失 400）；
+- `GET /api/v1/projects/{project_id}/evidence/{evidence_id}`：Evidence 详情（含 version_id 与页码，供 PDF 跳转）。
+
+错误码：404 `conversation_not_found`/`evidence_not_found`；409 `project_archived`/`conversation_busy`/`project_not_indexed`；422 `invalid_scope`。Run 查询/取消/SSE 复用 `/api/v1/runs/{run_id}` 现有接口。
+
+#### ConversationService（application/conversation_service.py）
+
+- 创建：校验 Project 归属/归档；`selected_papers` 要求 paper_ids 非空且全部已收录、未归档、属当前 owner，并解析固化默认范围版本；`project` 模式不在创建时固化（提问时解析）；
+- 提交提问：幂等键重放（复用 IdempotencyRecord，`request_hash = sha256(conversation_id:key:sha256(content))`，重放经 `run_id` 回读 User Message）→ 归档/busy/not_indexed 校验 → User Message + rag_answer Run（`input_payload` 含 `conversation_id`/`user_message_id`/`version_scope` 快照）+ `run_created` + Outbox + 幂等记录同一事务；Run 落库即推进 `event_sequence=2`（`run_created` 占用 1，与 `RunService.create_run` 语义一致——集成测试曾暴露该遗漏）；
+- 单活跃 Run 双层语义：服务层预检（`active_run_id` 指向非终态 Run 直接 409；指向终态/已消失 Run 自愈清理，覆盖 QUEUED 被直接取消等未经执行器的路径）+ SQL 条件更新 `WHERE active_run_id IS NULL` 并发兜底；
+- `project_not_indexed`：范围内无任何 ready ChunkSet 时快速失败，部分就绪不阻塞。
+
+#### 快照检索（切片 6 Retriever 扩展）
+
+新增 `ChunkRepository.search_semantic_by_scope`/`search_fulltext_by_scope` 与 `Retriever.retrieve_for_scope`：不 join `project_papers`，按 `(paper_id, version_id)` 快照集合 + `paper_versions.owner_id` + ready ChunkSet 过滤——**Paper 移出 Project 后本次 Run 仍按快照检索完**（快照语义优先）；合并逻辑抽为 `_merge_and_rank` 与 `retrieve` 共用。
+
+#### RagAnswerExecutor（application/rag_answer_executor.py）
+
+事务 A/B/C/D + 最终事务，模型调用全部在事务外：
+
+1. 事务 A：持锁取消检查 + `retrieval_started`；
+2. 快照检索（零结果直接走证据不足提交，不调模型）；
+3. 事务 B：取消检查 + `retrieval_completed`（候选计数）；
+4. `EvidenceService.commit_evidence` 固化 Evidence（幂等）；
+5. 事务 C：取消检查 + `model_generation_started`；事务外经 ModelGateway 调 ChatModel（json_schema 结构化输出）→ 解析 → Citation Validator；解析或校验失败把失败原因作为反馈消息追加后**修复重试一次**，仍失败 → FAILED（`model_output_invalid`）；
+6. 事务 D：`model_generation_completed`（用量）+ `citation_validation_completed`（只含 passed 与 reason code 计数）；
+7. 最终事务：Assistant Message + ClaimSet + Claims + Citations + 清 `active_run_id` + Run SUCCEEDED + `answer_committed` 原子提交；`claim_sets.run_id` 唯一兜底重复提交（已有 ClaimSet 回读幂等完成，不重复建 Message）。
+
+任何终态（SUCCEEDED/FAILED/CANCELLED）都清理 `active_run_id`；`RETRY_WAIT` 保留认领（Run 未结束，会话仍忙）。assistant content = claims 段落 `\n\n` 拼接；证据不足用固定文案 `INSUFFICIENT_EVIDENCE_TEXT`。
+
+#### Context Token Budget（2026-08-21 定稿）
+
+证据上下文沿用检索预算截断结果（≤ `retrieval_token_budget`）；模板 + 证据总 token 超过 `context_token_budget`（默认同检索预算 3000，tiktoken cl100k_base 精确计数）时按 rank 从低到高丢弃 Evidence，缩减一次，不循环压缩。Chat 输出上限 `AGENT_ANSWER_MAX_OUTPUT_TOKENS`（默认 2048）。
+
+#### Worker 接线与 Fake Chat
+
+`worker.py` 的 `_build_model_stack` 拆出独立 `chat_backend` 开关（`AGENT_CHAT_BACKEND`，默认 `fake`）；dispatcher 注册 `RunType.RAG_ANSWER`。生产侧 `FakeChatModel` 改为**证据 ID 驱动**：Prompt 含 `evidence_id=<uuid>` 标记 → 确定性返回引用前若干个证据 ID 的合法 `answered` JSON；不含 → `insufficient_evidence`。保证本地开发与端到端测试不触网且确定性。
+
+#### 事件
+
+`run_created` → `run_started` → `retrieval_started` → `retrieval_completed`（candidate_count）→ `model_generation_started` → `model_generation_completed`（prompt/completion tokens）→ `citation_validation_completed`（passed + failure_reasons 计数）→ `answer_committed`（claim_set_id/answer_status/claim_count）。取消路径以 `run_cancelled` 收尾；失败路径 `run_failed`（error type + 截断消息）。事件 payload 不含问题/回答文本或证据摘录。
+
+#### 测试要点（2026-08-21 实跑）
+
+- Domain：`test_conversation.py`（7 例）；
+- Application：`test_conversation_service.py`（24 例：scope 校验全分支、幂等重放/冲突、归档/busy/not_indexed、自愈清理、快照固化、标题回填、event_sequence 推进、消息摘要视图、Evidence 授权）、`test_rag_answer_executor.py`（13 例：answered 全链路事件序列与产物、零结果不调模型、模型返回不足、解析/校验失败修复重试、两次非法 FAILED、临时错误 RETRY_WAIT 保留认领、永久错误 FAILED 清认领、检索后/模型后取消、ClaimSet 幂等回读、run_type 防御、缺 conversation_id 永久失败）、`test_retriever.py` 追加 2 例（快照透传、空快照不调模型）；
+- API：`test_conversations.py`（14 例）；
+- Integration：`test_conversation_repository.py`（8 例：三表往返、唯一约束、并发 try_claim 双会话只有一个成功）、`test_chunk_retrieval.py` 追加 5 例（快照过滤、移出后仍命中、跨 owner 拒绝、非 ready 不命中、空快照）、`test_queue_worker.py` 追加 1 例（ingestion → indexing → rag_answer 三轮派发端到端，断言事件序列、citations 与 model_invocations）。
+
+#### 已知限制
+
+- SSE 推送与前端 Conversation UI 属切片 9；
+- `project` 模式快照在每次提问时重新解析（收录变化对新提问生效，历史 Run 不变）；
+- 修复重试只有一次，不做多轮自我修正；
+- Context Budget 超限时只按 rank 丢弃，不做摘要压缩。
+
 ## 测试方式
 
 - **Domain**：Chunk/Profile 哈希、Claim/Evidence 关系和 Citation Validator；
@@ -673,7 +745,7 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 
 仍在对应切片确定，不阻塞当前阶段边界：
 
-1. Context Token Budget 细节（切片 8）。结构化输出 Schema 已于切片 7 定稿（2026-08-21，见「切片 7」小节）。
+~~1. Context Token Budget 细节（切片 8）。~~ 已定稿（2026-08-21，见「切片 8」小节）：证据上下文沿用检索预算截断，超预算按 rank 从低到高丢弃一次，`AGENT_ANSWER_MAX_OUTPUT_TOKENS` 默认 2048。
 
 ## 已确定事项
 

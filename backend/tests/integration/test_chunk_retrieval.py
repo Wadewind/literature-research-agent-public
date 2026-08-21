@@ -422,3 +422,148 @@ async def test_result_carries_chunk_fields(session, project: str) -> None:
     assert result.chunk.embedding is not None
     assert result.paper_id == seeded.paper_id
     assert result.version_id == seeded.version_id
+
+
+# ---------- 切片 8：版本范围快照检索（search_*_by_scope） ----------
+
+
+async def test_scope_search_only_hits_snapshot_entries(session, project: str) -> None:
+    """快照检索只返回快照内的 (paper_id, version_id)，范围外论文不命中。"""
+    included = await _seed_indexed_paper(
+        session,
+        owner_id="user-1",
+        project_id=project,
+        texts=["graphweave included"],
+        vectors=[_one_hot(0)],
+    )
+    excluded = await _seed_indexed_paper(
+        session,
+        owner_id="user-1",
+        project_id=project,
+        texts=["graphweave excluded"],
+        vectors=[_one_hot(0)],
+    )
+    repo = SqlalchemyChunkRepository(session)
+    scope = [(included.paper_id, included.version_id)]
+
+    fts = await repo.search_fulltext_by_scope(
+        owner_id="user-1", query="graphweave", limit=10, version_scope=scope
+    )
+    semantic = await repo.search_semantic_by_scope(
+        owner_id="user-1", query_vector=_one_hot(0), limit=10, version_scope=scope
+    )
+
+    assert [r.chunk.chunk_id for r in fts] == included.chunk_ids
+    assert {r.chunk.chunk_id for r in semantic} == set(included.chunk_ids)
+    assert all(r.paper_id == included.paper_id for r in [*fts, *semantic])
+    assert excluded.chunk_ids[0] not in {r.chunk.chunk_id for r in semantic}
+
+
+async def test_scope_search_survives_project_paper_removal(
+    session, project: str
+) -> None:
+    """移出 Project 后快照检索仍命中：快照语义优先于当前收录关系。"""
+    seeded = await _seed_indexed_paper(
+        session,
+        owner_id="user-1",
+        project_id=project,
+        texts=["graphweave removed paper"],
+        vectors=[_one_hot(0)],
+    )
+    removed = await SqlalchemyProjectPaperRepository(session).remove(
+        project, seeded.paper_id
+    )
+    assert removed
+    await session.commit()
+    repo = SqlalchemyChunkRepository(session)
+    scope = [(seeded.paper_id, seeded.version_id)]
+
+    fts = await repo.search_fulltext_by_scope(
+        owner_id="user-1", query="graphweave", limit=10, version_scope=scope
+    )
+    semantic = await repo.search_semantic_by_scope(
+        owner_id="user-1", query_vector=_one_hot(0), limit=10, version_scope=scope
+    )
+
+    assert [r.chunk.chunk_id for r in fts] == seeded.chunk_ids
+    assert {r.chunk.chunk_id for r in semantic} == set(seeded.chunk_ids)
+
+
+async def test_scope_search_rejects_other_owner_version(
+    session, project: str, other_project: str
+) -> None:
+    """快照指向他人 owner 的 Version：owner 过滤保留，不命中。"""
+    foreign = await _seed_indexed_paper(
+        session,
+        owner_id="user-2",
+        project_id=other_project,
+        texts=["graphweave foreign"],
+        vectors=[_one_hot(0)],
+    )
+    repo = SqlalchemyChunkRepository(session)
+    scope = [(foreign.paper_id, foreign.version_id)]
+
+    assert (
+        await repo.search_fulltext_by_scope(
+            owner_id="user-1", query="graphweave", limit=10, version_scope=scope
+        )
+        == []
+    )
+    assert (
+        await repo.search_semantic_by_scope(
+            owner_id="user-1", query_vector=_one_hot(0), limit=10, version_scope=scope
+        )
+        == []
+    )
+
+
+async def test_scope_search_skips_non_ready_chunk_set(session, project: str) -> None:
+    """非 ready ChunkSet 的 Chunk 在快照检索两路中都不出现。"""
+    for chunk_set_status in (ChunkSetStatus.RUNNING, ChunkSetStatus.FAILED):
+        seeded = await _seed_indexed_paper(
+            session,
+            owner_id="user-1",
+            project_id=project,
+            texts=["graphweave non-ready scope"],
+            vectors=[_one_hot(0)],
+            chunk_set_status=chunk_set_status,
+        )
+        repo = SqlalchemyChunkRepository(session)
+        scope = [(seeded.paper_id, seeded.version_id)]
+        assert (
+            await repo.search_fulltext_by_scope(
+                owner_id="user-1", query="graphweave", limit=10, version_scope=scope
+            )
+            == []
+        )
+        assert (
+            await repo.search_semantic_by_scope(
+                owner_id="user-1", query_vector=_one_hot(0), limit=10,
+                version_scope=scope,
+            )
+            == []
+        )
+
+
+async def test_scope_search_empty_snapshot_returns_empty(session, project: str) -> None:
+    """空快照等价于无候选（tuple IN 空集），两路都返回空。"""
+    await _seed_indexed_paper(
+        session,
+        owner_id="user-1",
+        project_id=project,
+        texts=["graphweave anything"],
+        vectors=[_one_hot(0)],
+    )
+    repo = SqlalchemyChunkRepository(session)
+    assert (
+        await repo.search_fulltext_by_scope(
+            owner_id="user-1", query="graphweave", limit=10, version_scope=[]
+        )
+        == []
+    )
+    assert (
+        await repo.search_semantic_by_scope(
+            owner_id="user-1", query_vector=_one_hot(0), limit=10, version_scope=[]
+        )
+        == []
+    )

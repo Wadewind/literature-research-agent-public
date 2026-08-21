@@ -1,6 +1,6 @@
 """Chunk Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.chunk_repository import ChunkRepository
@@ -240,3 +240,82 @@ class SqlalchemyChunkRepository(ChunkRepository):
         if paper_ids is not None:
             statement = statement.where(ProjectPaperORM.paper_id.in_(paper_ids))
         return statement
+
+    async def search_semantic_by_scope(
+        self,
+        *,
+        owner_id: str,
+        query_vector: list[float],
+        limit: int,
+        version_scope: list[tuple[str, str]],
+    ) -> list[RetrievedChunk]:
+        """按版本范围快照的向量检索 Top-K（不依赖当前收录关系）。"""
+        if not version_scope:
+            return []
+        statement = (
+            self._snapshot_select(owner_id=owner_id, version_scope=version_scope)
+            .where(ChunkORM.embedding.is_not(None))
+            .order_by(ChunkORM.embedding.cosine_distance(query_vector), ChunkORM.chunk_id)
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return [
+            RetrievedChunk(chunk=_chunk_to_domain(row), paper_id=paper_id, version_id=version_id)
+            for row, paper_id, version_id in result.all()
+        ]
+
+    async def search_fulltext_by_scope(
+        self,
+        *,
+        owner_id: str,
+        query: str,
+        limit: int,
+        version_scope: list[tuple[str, str]],
+    ) -> list[RetrievedChunk]:
+        """按版本范围快照的全文检索 Top-K（english 配置，ts_rank 降序）。"""
+        if not version_scope:
+            return []
+        ts_query = func.plainto_tsquery("english", query)
+        statement = (
+            self._snapshot_select(owner_id=owner_id, version_scope=version_scope)
+            .where(ChunkORM.search_vector.bool_op("@@")(ts_query))
+            .order_by(func.ts_rank(ChunkORM.search_vector, ts_query).desc(), ChunkORM.chunk_id)
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return [
+            RetrievedChunk(chunk=_chunk_to_domain(row), paper_id=paper_id, version_id=version_id)
+            for row, paper_id, version_id in result.all()
+        ]
+
+    @staticmethod
+    def _snapshot_select(
+        *,
+        owner_id: str,
+        version_scope: list[tuple[str, str]],
+    ):
+        """构造按版本范围快照过滤的 Chunk 查询（不含排序与 limit）。
+
+        与 ``_scoped_select`` 的差别：不 join ``project_papers`` 当前
+        收录关系，只按显式 ``(paper_id, version_id)`` 快照集合过滤；
+        owner 校验保留（paper_versions.owner_id），ChunkSet 仍需 ready。
+        """
+        return (
+            select(ChunkORM, PaperVersionORM.paper_id, PaperVersionORM.version_id)
+            .join(ChunkSetORM, ChunkORM.chunk_set_id == ChunkSetORM.chunk_set_id)
+            .join(
+                DocumentParseRevisionORM,
+                ChunkSetORM.parse_revision_id == DocumentParseRevisionORM.revision_id,
+            )
+            .join(
+                PaperVersionORM,
+                DocumentParseRevisionORM.version_id == PaperVersionORM.version_id,
+            )
+            .where(
+                PaperVersionORM.owner_id == owner_id,
+                tuple_(PaperVersionORM.paper_id, PaperVersionORM.version_id).in_(
+                    version_scope
+                ),
+                ChunkSetORM.status == ChunkSetStatus.READY.value,
+            )
+        )

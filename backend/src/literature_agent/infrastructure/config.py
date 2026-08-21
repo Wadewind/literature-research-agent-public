@@ -42,6 +42,11 @@ _DEFAULT_EMBEDDING_BATCH_SIZE = 32
 _DEFAULT_RETRIEVAL_TOP_K = 20
 _DEFAULT_RETRIEVAL_PER_PAPER_LIMIT = 8
 _DEFAULT_RETRIEVAL_TOKEN_BUDGET = 3000
+# RAG 回答默认值（切片 8，2026-08-21 定稿）：chat backend 默认 fake——
+# 本地开发与测试默认不触网（仿 AGENT_EMBEDDING_BACKEND）；输出 token
+# 上限约束 ChatModel 结构化回答长度
+_DEFAULT_CHAT_BACKEND = "fake"
+_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS = 2048
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +94,8 @@ class Settings:
     retrieval_top_k: int = field(default=_DEFAULT_RETRIEVAL_TOP_K)
     retrieval_per_paper_limit: int = field(default=_DEFAULT_RETRIEVAL_PER_PAPER_LIMIT)
     retrieval_token_budget: int = field(default=_DEFAULT_RETRIEVAL_TOKEN_BUDGET)
+    chat_backend: str = field(default=_DEFAULT_CHAT_BACKEND)
+    answer_max_output_tokens: int = field(default=_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -169,6 +176,12 @@ class Settings:
         retrieval_token_budget = (
             int(raw_token_budget) if raw_token_budget else _DEFAULT_RETRIEVAL_TOKEN_BUDGET
         )
+        raw_answer_max_tokens = os.getenv("AGENT_ANSWER_MAX_OUTPUT_TOKENS")
+        answer_max_output_tokens = (
+            int(raw_answer_max_tokens)
+            if raw_answer_max_tokens
+            else _DEFAULT_ANSWER_MAX_OUTPUT_TOKENS
+        )
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -204,4 +217,6 @@ class Settings:
             retrieval_top_k=retrieval_top_k,
             retrieval_per_paper_limit=retrieval_per_paper_limit,
             retrieval_token_budget=retrieval_token_budget,
+            chat_backend=os.getenv("AGENT_CHAT_BACKEND", _DEFAULT_CHAT_BACKEND),
+            answer_max_output_tokens=answer_max_output_tokens,
         )

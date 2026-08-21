@@ -1,14 +1,25 @@
 """ChunkSet Repository 的内存假实现。"""
 
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
-from literature_agent.domain.chunk import ChunkSet
+from literature_agent.application.ports.parse_revision_repository import (
+    ParseRevisionRepository,
+)
+from literature_agent.domain.chunk import ChunkSet, ChunkSetStatus
 
 
 class FakeChunkSetRepository(ChunkSetRepository):
-    """不依赖数据库的 ChunkSet Repository 假实现。"""
+    """不依赖数据库的 ChunkSet Repository 假实现。
 
-    def __init__(self) -> None:
+    ``count_ready_by_version_ids`` 需要 Revision → Version 的映射，
+    通过可选注入的 ParseRevisionRepository 解析；未注入时返回 0。
+    """
+
+    def __init__(
+        self,
+        parse_revision_repo: ParseRevisionRepository | None = None,
+    ) -> None:
         self._chunk_sets: dict[str, ChunkSet] = {}
+        self._parse_revision_repo = parse_revision_repo
 
     async def add(self, chunk_set: ChunkSet) -> ChunkSet:
         """将 ChunkSet 存入内存。"""
@@ -41,6 +52,21 @@ class FakeChunkSetRepository(ChunkSetRepository):
         if not matches:
             return None
         return max(matches, key=lambda c: c.created_at)
+
+    async def count_ready_by_version_ids(self, version_ids: list[str]) -> int:
+        """统计给定 Version 集合下 ready ChunkSet 的数量。"""
+        if not version_ids or self._parse_revision_repo is None:
+            return 0
+        count = 0
+        for chunk_set in self._chunk_sets.values():
+            if chunk_set.status != ChunkSetStatus.READY:
+                continue
+            revision = await self._parse_revision_repo.get_by_id(
+                chunk_set.parse_revision_id
+            )
+            if revision is not None and revision.version_id in version_ids:
+                count += 1
+        return count
 
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新。"""

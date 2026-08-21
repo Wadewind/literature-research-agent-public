@@ -1,11 +1,14 @@
 """ChunkSet Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
 from literature_agent.domain.chunk import ChunkSet, ChunkSetStatus
-from literature_agent.infrastructure.persistence.models import ChunkSetORM
+from literature_agent.infrastructure.persistence.models import (
+    ChunkSetORM,
+    DocumentParseRevisionORM,
+)
 
 
 def _to_domain(orm: ChunkSetORM) -> ChunkSet:
@@ -85,6 +88,25 @@ class SqlalchemyChunkSetRepository(ChunkSetRepository):
         )
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
+
+    async def count_ready_by_version_ids(self, version_ids: list[str]) -> int:
+        """统计给定 PaperVersion 集合下 ready ChunkSet 的数量。"""
+        if not version_ids:
+            return 0
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(ChunkSetORM)
+            .join(
+                DocumentParseRevisionORM,
+                ChunkSetORM.parse_revision_id
+                == DocumentParseRevisionORM.revision_id,
+            )
+            .where(
+                DocumentParseRevisionORM.version_id.in_(version_ids),
+                ChunkSetORM.status == ChunkSetStatus.READY.value,
+            ),
+        )
+        return result.scalar_one()
 
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新。"""

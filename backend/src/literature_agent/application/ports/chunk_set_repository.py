@@ -28,6 +28,14 @@ class ChunkSetRepository(Protocol):
         """按 Parse Revision 查询最新创建的 ChunkSet；不存在返回 None。"""
         ...
 
+    async def count_ready_by_version_ids(self, version_ids: list[str]) -> int:
+        """统计给定 PaperVersion 集合下 ready ChunkSet 的数量。
+
+        提问提交时用于快速失败判断（范围内无任何 ready ChunkSet →
+        ``project_not_indexed``）；空列表返回 0。
+        """
+        ...
+
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新（就绪/失败/重置收尾）。"""
         ...

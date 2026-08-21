@@ -75,3 +75,35 @@ class ChunkRepository(Protocol):
         并按 ``ts_rank`` 降序；强过滤链与 ``search_semantic`` 相同。
         """
         ...
+
+    async def search_semantic_by_scope(
+        self,
+        *,
+        owner_id: str,
+        query_vector: list[float],
+        limit: int,
+        version_scope: list[tuple[str, str]],
+    ) -> list[RetrievedChunk]:
+        """按 Run 固化的版本范围快照做向量检索 Top-K（cosine 距离升序）。
+
+        与 ``search_semantic`` 的差别：不 join ``project_papers`` 当前
+        收录关系，只按显式 ``(paper_id, version_id)`` 快照集合过滤——
+        Paper 被移出 Project 后，本次 Run 仍按快照检索完（快照语义
+        优先）。owner 校验保留（paper_versions.owner_id），ChunkSet
+        仍需 ready。空快照直接返回空列表。
+        """
+        ...
+
+    async def search_fulltext_by_scope(
+        self,
+        *,
+        owner_id: str,
+        query: str,
+        limit: int,
+        version_scope: list[tuple[str, str]],
+    ) -> list[RetrievedChunk]:
+        """按版本范围快照的全文检索 Top-K（english 配置，ts_rank 降序）。
+
+        过滤语义与 ``search_semantic_by_scope`` 相同。
+        """
+        ...

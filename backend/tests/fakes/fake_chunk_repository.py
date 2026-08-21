@@ -113,3 +113,42 @@ class FakeChunkRepository(ChunkRepository):
             }
         )
         return list(self.fts_results)[:limit]
+
+    async def search_semantic_by_scope(
+        self,
+        *,
+        owner_id: str,
+        query_vector: list[float],
+        limit: int,
+        version_scope: list[tuple[str, str]],
+    ) -> list[RetrievedChunk]:
+        """返回预设的语义检索结果并记录快照范围参数。"""
+        self.search_calls.append(
+            {
+                "path": "semantic_by_scope",
+                "owner_id": owner_id,
+                "limit": limit,
+                "version_scope": version_scope,
+            }
+        )
+        return list(self.semantic_results)[:limit]
+
+    async def search_fulltext_by_scope(
+        self,
+        *,
+        owner_id: str,
+        query: str,
+        limit: int,
+        version_scope: list[tuple[str, str]],
+    ) -> list[RetrievedChunk]:
+        """返回预设的全文检索结果并记录快照范围参数。"""
+        self.search_calls.append(
+            {
+                "path": "fulltext_by_scope",
+                "owner_id": owner_id,
+                "query": query,
+                "limit": limit,
+                "version_scope": version_scope,
+            }
+        )
+        return list(self.fts_results)[:limit]
