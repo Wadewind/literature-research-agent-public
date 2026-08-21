@@ -263,7 +263,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 4. **ChunkSet + Worker 分发**（已完成 2026-08-20，契约见下文「切片 4」）：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
 5. **Indexing Run**（已完成 2026-08-21，契约见下文「切片 5」）：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
 6. **Hybrid Retrieval**（已完成 2026-08-21，契约见下文「切片 6」）：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
-7. **Evidence/Citation**：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
+7. **Evidence/Citation**（已完成 2026-08-21，契约见下文「切片 7」）：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
 8. **RAG Conversation**：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
 9. **API 与最小 Web UI**：Chat 三入口、Run 进度（前端 `KNOWN_EVENT_TYPES` 扩充）、引用详情和 PDF 页码跳转；
 10. **验收复盘**：评测实跑报告（Fake Provider 验证管线 + 真实 Provider 显式启用）、故障测试和学习笔记。
@@ -582,6 +582,64 @@ Settings 新增（扁平 `AGENT_` 前缀）：`AGENT_RETRIEVAL_TOP_K` / `AGENT_R
 - embedding 列无向量索引（精确检索），数据量增长后性能待 Phase 4 评估；
 - 评测语料仅 4 篇 33 chunks，只覆盖管线正确性；真实 Provider 的检索质量评测属切片 10。
 
+### 切片 7：Evidence 与 Citation Validator（契约定稿）
+
+已于 2026-08-21 实现完成。本切片只交付领域/持久化能力，不接 API、不接 rag_answer Run 执行器（切片 8 接线）。
+
+#### 数据模型
+
+迁移 `c5b8e2f7a3d1`（`down_revision = f2a7b3c9d4e1`，upgrade/downgrade 已在一次性容器中实跑通过）：
+
+- `evidence`：`evidence_id`（PK）、`run_id`（FK → runs，Evidence 属于产生它的 rag_answer Run）、`project_id`、`paper_id`、`version_id`、`parse_revision_id`、`chunk_id`（FK → chunks）、`section_path`（可空）、`page_start`/`page_end`（可空）、`excerpt`（Chunk 文本摘录，截断上限 500 字符，常量 `EVIDENCE_EXCERPT_MAX_CHARS`）、`created_at`；唯一约束 `(run_id, chunk_id)`（一次 Run 中一个 Chunk 只固化一条 Evidence，Effectively Once 兜底）。paper/version/parse_revision 为 denormalize 的历史快照列，不建 FK（历史 Evidence 不因后续移出、换版或归档而改变，ADR 0002）；
+- `claim_sets`：`claim_set_id`（PK）、`run_id`（FK → runs，唯一——一个 RAG Run 只提交一个 ClaimSet）、`answer_status`（`answered`/`insufficient_evidence`）、`created_at`。Message 表切片 8 才建，届时 Message 经 claim_set_id 关联；
+- `claims`：`claim_id`（PK）、`claim_set_id`（FK）、`sequence`、`text`；唯一约束 `(claim_set_id, sequence)`；
+- `citations`：复合主键 `(claim_id, evidence_id)`，双 FK，不存额外字段。
+
+#### 结构化输出 Schema（定稿）
+
+`domain/answer_schema.py`（Pydantic v2，严格 `extra="forbid"`），即切片 8 传给 ChatModel 的 `json_schema`（`rag_answer_json_schema()`）与解析校验模型（`parse_rag_answer_output(content)`，失败抛 `AnswerOutputParseError`，属可修复模型输出问题，不注册为 Run 层永久错误）：
+
+```text
+RagAnswerOutput:
+  answer_status: "answered" | "insufficient_evidence"
+  claims: list[ClaimDraft]        # answered 时非空；insufficient_evidence 时必须为空（Validator 校验）
+ClaimDraft: { text: str, evidence_ids: list[str] }
+```
+
+条件一致性规则无法在 JSON Schema 表达，由 Citation Validator 确定性校验。
+
+#### EvidenceService（application/evidence_service.py）
+
+`commit_evidence(run, retrieval_results) -> list[Evidence]`：
+
+- 校验每条结果的 `(paper_id, version_id)` 属于 Run `input_payload["version_scope"]` 快照（键名常量 `RUN_INPUT_VERSION_SCOPE_KEY`，切片 8 创建 Run 时写入）；快照缺失/形状非法或结果在快照外 → `EvidenceScopeError`（永久错误，已注册 `is_permanent_error`），不写入任何 Evidence；
+- `parse_revision_id` 经 `ChunkSetRepository.get_by_id(chunk.chunk_set_id)` 解析（RetrievalResult 不携带该字段，切片 6 契约不动）；
+- excerpt 截断 500 字符，不复制 Chunk 全文；
+- 幂等：先 `list_by_run` 回读，已固化的 chunk_id 复用既有行，只插入新行，同一短事务提交；输入内 chunk_id 防御性去重；
+- 空检索结果合法，返回空列表不写入。
+
+#### CitationValidator（domain/citation_validator.py，纯函数）
+
+`validate_citations(output, *, evidence, run_id) -> CitationValidationResult`（`passed` + `failures`，失败按 Claim 顺序全部收集；只含稳定 reason code 与 claim 下标，不存文本内容）。规则：
+
+1. `answered`：claims 非空（否则 `empty_claims`）；每个段落级 Claim `evidence_ids` 非空（否则 `uncited_claim`，严格策略无例外）；
+2. `insufficient_evidence`：claims 必须为空（否则 `status_mismatch`）；
+3. 所有 `evidence_ids` 必须存在于本次 Run 固化的 Evidence 集合（伪造/缺失 ID → `fabricated_evidence`）；
+4. 同一 Claim 内重复引用同一 Evidence 拒绝（`duplicate_citation`；不同 Claim 共享同一 Evidence 合法）；
+5. 链完整性复核：Evidence 的 `run_id` 必须等于当前 Run（否则 `cross_run_evidence`；paper/version 属于快照由 EvidenceService 固化时保证）。
+
+#### 测试要点
+
+- Domain：`test_answer_schema.py`（8 例：合法 answered/insufficient 解析、缺字段、非法 status、claims 类型错误、额外字段拒绝、非 JSON、JSON Schema 形状稳定）；`test_citation_validator.py`（10 例：全规则与多失败顺序收集）；
+- Application：`test_evidence_service.py`（7 例：字段 denormalize 与顺序、excerpt 截断、幂等重复提交、快照外 version 拒绝、paper/version 配对不符拒绝、缺快照拒绝、空结果）；
+- Integration：`test_evidence_repository.py`（5 例：Evidence 往返与 `(run_id, chunk_id)` 唯一、跨 Run 隔离与 `list_by_ids`、claim_sets.run_id 唯一、claims `(claim_set_id, sequence)` 唯一、citations 复合主键与 FK 拒绝）。
+
+#### 已知限制
+
+- 模块笔记 `docs/learning-journal/modules/evidence-and-citation-integrity.md` 留到切片 8 接线后一并撰写（模块在 Run 编排中的实际行为届时才完整）；
+- `citations` 无独立查询 API，引用详情读取随切片 8/9 落地；
+- 历史库若执行 `alembic downgrade base`，Phase 1 迁移 `8865966463a6` 的 paper_versions 未命名 FK 会导致失败（既有问题，与本切片无关；本切片迁移单步 upgrade/downgrade 已验证）。
+
 ## 测试方式
 
 - **Domain**：Chunk/Profile 哈希、Claim/Evidence 关系和 Citation Validator；
@@ -615,7 +673,7 @@ Settings 新增（扁平 `AGENT_` 前缀）：`AGENT_RETRIEVAL_TOP_K` / `AGENT_R
 
 仍在对应切片确定，不阻塞当前阶段边界：
 
-1. Context Token Budget 和结构化输出 Schema 细节（切片 7/8）。
+1. Context Token Budget 细节（切片 8）。结构化输出 Schema 已于切片 7 定稿（2026-08-21，见「切片 7」小节）。
 
 ## 已确定事项
 

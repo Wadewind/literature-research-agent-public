@@ -538,3 +538,111 @@ class ModelInvocationORM(Base):
         default=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+
+class EvidenceORM(Base):
+    """Evidence 的持久化映射（一次 Run 固化的可引用证据快照）。
+
+    paper/version/parse_revision 为 denormalize 的历史快照列，不建 FK：
+    历史 Evidence 不因后续移出、换版或归档而改变（ADR 0002）。
+    """
+
+    __tablename__ = "evidence"
+
+    evidence_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id"),
+        index=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    paper_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    version_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    parse_revision_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    chunk_id: Mapped[str] = mapped_column(
+        ForeignKey("chunks.chunk_id"),
+        nullable=False,
+    )
+    section_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    page_start: Mapped[int | None] = mapped_column(nullable=True)
+    page_end: Mapped[int | None] = mapped_column(nullable=True)
+    excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        # 一次 Run 中一个 Chunk 只固化一条 Evidence（Effectively Once 兜底）
+        UniqueConstraint("run_id", "chunk_id", name="uq_evidence_run_chunk"),
+    )
+
+
+class ClaimSetORM(Base):
+    """ClaimSet 的持久化映射（一个 rag_answer Run 至多一个）。"""
+
+    __tablename__ = "claim_sets"
+
+    claim_set_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id"),
+        nullable=False,
+    )
+    answer_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_claim_sets_run_id"),
+    )
+
+
+class ClaimORM(Base):
+    """Claim 的持久化映射（回答中的段落级论述）。"""
+
+    __tablename__ = "claims"
+
+    claim_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    claim_set_id: Mapped[str] = mapped_column(
+        ForeignKey("claim_sets.claim_set_id"),
+        index=True,
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("claim_set_id", "sequence", name="uq_claims_claim_set_sequence"),
+    )
+
+
+class CitationORM(Base):
+    """Citation 的持久化映射（Claim 与 Evidence 的关联，无额外字段）。"""
+
+    __tablename__ = "citations"
+
+    claim_id: Mapped[str] = mapped_column(
+        ForeignKey("claims.claim_id"),
+        primary_key=True,
+    )
+    evidence_id: Mapped[str] = mapped_column(
+        ForeignKey("evidence.evidence_id"),
+        index=True,
+        primary_key=True,
+    )

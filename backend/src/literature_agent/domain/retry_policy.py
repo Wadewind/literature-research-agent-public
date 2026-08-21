@@ -5,6 +5,7 @@
 """
 
 from literature_agent.domain.exceptions import (
+    EvidenceScopeError,
     FileValidationError,
     IndexingInputError,
     InvalidPdfInputError,
@@ -21,6 +22,7 @@ _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     InvalidPdfInputError,
     FileValidationError,
     IndexingInputError,
+    EvidenceScopeError,
     ModelAuthError,
     ModelInvalidRequestError,
     ModelResponseError,

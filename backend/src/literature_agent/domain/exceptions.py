@@ -127,3 +127,27 @@ class IndexingInputError(Exception):
     def __init__(self, message: str) -> None:
         self.message = message
         super().__init__(message)
+
+
+class EvidenceScopeError(Exception):
+    """Evidence 范围类永久错误：Run 缺少版本范围快照，或检索结果
+    的 paper/version 不在快照内（防御纵深，正常链路不应发生）。
+
+    重试无法改变结果，直接令 rag_answer Run 进入 FAILED。
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+class AnswerOutputParseError(Exception):
+    """模型结构化输出解析失败：非 JSON 或不符合 RagAnswerOutput Schema。
+
+    属可修复的模型输出问题：由 Run 编排层触发一次结构修复重试，
+    仍失败则 Run 稳定 FAILED（不注册为 Run 层永久错误）。
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
