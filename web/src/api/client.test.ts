@@ -49,6 +49,18 @@ describe("errorMessage", () => {
     expect(errorMessage(new ApiError(409, "冲突"))).toContain("冲突");
   });
 
+  it.each([
+    ["conversation_busy", "当前对话正在生成回答，请稍后再试"],
+    ["project_not_indexed", "文献索引尚未就绪，请等待索引完成后再提问"],
+    ["invalid_scope", "提问范围无效，请重新选择当前项目中的文献"],
+    ["project_archived", "项目已归档，当前为只读状态"],
+    ["paper_archived", "文献已归档，请先恢复后再操作"],
+  ])("稳定业务码 %s 映射为操作指引", (detail, expected) => {
+    expect(errorMessage(new ApiError(detail === "invalid_scope" ? 422 : 409, detail))).toBe(
+      expected,
+    );
+  });
+
   it("413 映射为大小限制提示", () => {
     expect(errorMessage(new ApiError(413, ""))).toBe("文件超过大小限制");
   });

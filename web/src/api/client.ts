@@ -11,6 +11,17 @@ export class ApiError extends Error {
   }
 }
 
+const BUSINESS_ERROR_MESSAGES: Record<string, string> = {
+  conversation_busy: "当前对话正在生成回答，请稍后再试",
+  project_not_indexed: "文献索引尚未就绪，请等待索引完成后再提问",
+  invalid_scope: "提问范围无效，请重新选择当前项目中的文献",
+  project_archived: "项目已归档，当前为只读状态",
+  paper_archived: "文献已归档，请先恢复后再操作",
+  project_has_active_runs: "项目仍有运行中的任务，请等待完成或先取消任务",
+  conversation_not_found: "资源不存在或无权访问",
+  evidence_not_found: "资源不存在或无权访问",
+};
+
 /** 读取响应错误体中的 detail 字段（FastAPI 错误格式）。 */
 async function readDetail(response: Response): Promise<string> {
   try {
@@ -39,6 +50,9 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 /** 把错误映射为面向用户的可见提示。 */
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    if (BUSINESS_ERROR_MESSAGES[error.detail]) {
+      return BUSINESS_ERROR_MESSAGES[error.detail];
+    }
     if (error.status === 404) return "资源不存在或无权访问";
     if (error.status === 409) return `请求冲突：${error.detail}`;
     if (error.status === 400) return `请求被拒绝：${error.detail}`;

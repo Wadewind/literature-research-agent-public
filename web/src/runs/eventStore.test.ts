@@ -86,4 +86,27 @@ describe("applyEvent", () => {
     expect(state.closed).toBe(true);
     expect(state.lastSequence).toBe(6);
   });
+
+  it.each([
+    "indexing_started",
+    "chunking_completed",
+    "embedding_completed",
+    "indexing_completed",
+    "retrieval_started",
+    "retrieval_completed",
+    "model_generation_started",
+    "model_generation_completed",
+    "citation_validation_completed",
+    "answer_committed",
+  ])("订阅 Phase 2 具名事件 %s", (eventType) => {
+    expect(KNOWN_EVENT_TYPES).toContain(eventType);
+  });
+
+  it.each(["indexing_completed", "answer_committed"])(
+    "Phase 2 成功终态事件 %s 触发收束",
+    (eventType) => {
+      const state = applyEvent(createEventStreamState(), makeEvent(8, eventType));
+      expect(state.closed).toBe(true);
+    },
+  );
 });

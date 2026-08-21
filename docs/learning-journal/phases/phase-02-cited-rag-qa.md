@@ -264,8 +264,8 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 5. **Indexing Run**（已完成 2026-08-21，契约见下文「切片 5」）：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
 6. **Hybrid Retrieval**（已完成 2026-08-21，契约见下文「切片 6」）：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
 7. **Evidence/Citation**（已完成 2026-08-21，契约见下文「切片 7」）：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
-8. **RAG Conversation**：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
-9. **API 与最小 Web UI**：Chat 三入口、Run 进度（前端 `KNOWN_EVENT_TYPES` 扩充）、引用详情和 PDF 页码跳转；
+8. **RAG Conversation**（已完成 2026-08-21，契约见下文「切片 8」）：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
+9. **API 与最小 Web UI**（已完成 2026-08-21，契约见下文「切片 9」）：Chat 三入口、Run 进度（前端 `KNOWN_EVENT_TYPES` 扩充）、引用详情和 PDF 页码跳转；
 10. **验收复盘**：评测实跑报告（Fake Provider 验证管线 + 真实 Provider 显式启用）、故障测试和学习笔记。
 
 ### 切片 1：资源管理边界（契约定稿）
@@ -711,6 +711,40 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 - `project` 模式快照在每次提问时重新解析（收录变化对新提问生效，历史 Run 不变）；
 - 修复重试只有一次，不做多轮自我修正；
 - Context Budget 超限时只按 rank 丢弃，不做摘要压缩。
+
+### 切片 9：API 与最小 Web UI（契约定稿）
+
+已于 2026-08-21 实现完成。本切片不新增后端资源模型，消费切片 1/5/8 已有 REST/SSE 契约，交付 Project-scoped RAG 的用户可见闭环与延期的归档管理入口。
+
+#### Chat 三入口与路由
+
+- Project 页「询问整个项目」创建 `{scope_mode: "project"}` Conversation；Paper 行内「询问此篇」与 Project 文献多选「询问选中」都创建 `{scope_mode: "selected_papers", paper_ids: [...]}` Conversation；三者只调用 `POST /api/v1/projects/{project_id}/conversations`，成功后进入 `/projects/{project_id}/conversations/{conversation_id}`，不引入 owner-scoped Paper Chat；
+- 多选是浏览器交互状态，空选择退化为 Project scope；已归档 Paper 不能进入 selected scope；Conversation 创建后范围不可修改；
+- 对话页左侧恢复 Project 内 Conversation 列表，中间按 sequence 渲染 Message；assistant 优先按 `claims[]` 渲染段落，每条 Citation 显示稳定的引用标记，刷新后全部从 REST 恢复。
+
+#### 提问幂等与 Run 进度
+
+- `messageIntent` 与 Phase 1 `uploadIntent` 同构：首次提交问题时生成 `crypto.randomUUID()`；同一内容失败重试复用原 Key，内容改变生成新 Key，成功后清空意图；
+- 提问返回 202 后以 `run_id` 复用 `useRunEvents`；`eventStore.KNOWN_EVENT_TYPES` 已按后端实际事件补充 `indexing_started`、`chunking_completed`、`embedding_completed`、`indexing_completed`、`retrieval_started`、`retrieval_completed`、`model_generation_started`、`model_generation_completed`、`citation_validation_completed`、`answer_committed`；
+- `indexing_completed` 与 `answer_committed` 是各自 Run 的成功终态事件，收到后主动关闭 EventSource；对话页收到 `answer_committed` 后失效 Message/Conversation 查询，重新读取 PostgreSQL 已提交的回答，不从 Event payload 组装业务结果。
+
+#### Evidence、PDF 与索引状态
+
+- 点击引用标记按 `GET /projects/{project_id}/evidence/{evidence_id}` 打开右侧 Evidence 面板，展示 excerpt、section、page 与 Paper 快照 ID；
+- PDF 继续复用浏览器原生 `<iframe src=".../file#page=N">`；以 `key={page}` 按页码重建 iframe，零新增依赖；
+- Project 文献行按固定 `version_id` 查询 `index-status`，区分等待解析、等待索引、正在索引、索引就绪，并在存在 `indexing_run_id` 时链接 Run 详情。
+
+#### 归档与错误呈现
+
+- Project 列表与个人文献库提供 `include_archived` 开关和归档徽标；Project 页提供改名/说明修改、归档/恢复，并在归档状态显示只读提示、禁用上传/收录/移出/新建问答；
+- 个人库和 Project 文献行均提供 Paper 归档/恢复；Project 行把「归档个人库资产」与「移出项目」显示为两个独立动作，并明确前者不删除 `ProjectPaper`；
+- `conversation_busy`、`project_not_indexed`、`invalid_scope`、`project_archived`、`paper_archived`、`project_has_active_runs` 映射为可操作中文提示；404 统一为「资源不存在或无权访问」。
+
+#### 测试与已知限制
+
+- Vitest 使用 node 环境、只测纯状态逻辑：SSE 事件归并/终态、Phase 2 具名事件清单、提问幂等 Key、错误文案和 scope 选择；不挂 DOM；
+- 2026-08-21 实跑：`cd web && npm test` → 59 passed；`cd web && npm run build` → TypeScript strict 与 Vite 构建通过；`cd backend && .venv/bin/pytest tests -q --ignore=tests/integration` → 366 passed、4 skipped；
+- 本切片不做 Playwright E2E、真实 Provider Smoke 或评测实跑，统一留到切片 10；回答不做 token 流式输出；索引状态按文献行独立查询，适合当前最小列表规模，批量状态接口留到有性能证据后再评估。
 
 ## 测试方式
 

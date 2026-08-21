@@ -41,6 +41,7 @@ export default function RunDetailPage() {
     run && typeof run.input_payload.version_id === "string"
       ? run.input_payload.version_id
       : null;
+  const runTitle = run?.run_type === "rag_answer" ? "RAG 回答 Run" : "导入与索引 Run";
 
   if (runQuery.isError) {
     return (
@@ -59,7 +60,7 @@ export default function RunDetailPage() {
           <span className="mono">{runId.slice(0, 8)}</span>
         </p>
         <h1>
-          导入 Run <span className="mono muted">{runId.slice(0, 8)}</span>
+          {runTitle} <span className="mono muted">{runId.slice(0, 8)}</span>
         </h1>
         {run && (
           <div className="run-meta">

@@ -43,5 +43,13 @@ export const KNOWN_EVENT_TYPES = [
   "parse_completed",
   "normalize_completed",
   "result_committed",
+  "indexing_started",
+  "chunking_completed",
+  "embedding_completed",
+  "retrieval_started",
+  "retrieval_completed",
+  "model_generation_started",
+  "model_generation_completed",
+  "citation_validation_completed",
   ...TERMINAL_EVENT_TYPES,
 ] as const;

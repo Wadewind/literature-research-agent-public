@@ -13,6 +13,8 @@ export const TERMINAL_EVENT_TYPES = [
   "run_failed",
   "run_cancelled",
   "result_committed",
+  "indexing_completed",
+  "answer_committed",
 ] as const;
 
 /** 可请求取消的状态：终态与已在取消流程中的状态不可重复取消。 */

@@ -1,4 +1,4 @@
-/** 与后端 API 响应对齐的 TypeScript 类型（切片 10 最小集）。 */
+/** 与后端 API 响应对齐的 TypeScript 类型。 */
 
 export interface Project {
   project_id: string;
@@ -7,6 +7,7 @@ export interface Project {
   description: string;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 }
 
 export interface Run {
@@ -48,6 +49,7 @@ export interface PaperListItem {
   created_at: string;
   version: VersionSummary;
   project_ids: string[];
+  archived_at: string | null;
 }
 
 export interface UploadResult {
@@ -57,6 +59,7 @@ export interface UploadResult {
   status: string;
   reused: boolean;
   already_added: boolean;
+  paper_archived: boolean;
 }
 
 export interface ProjectPaperResult {
@@ -102,4 +105,73 @@ export interface DocElement {
   content_hash: string;
   warnings: string[];
   locations: SourceLocation[];
+}
+
+export interface IndexStatus {
+  revision_id: string;
+  chunk_set: {
+    chunk_set_id: string;
+    status: string;
+    chunk_count: number;
+    embedded_count: number;
+    profile_hash: string;
+  } | null;
+  indexing_run_id: string | null;
+}
+
+export interface ScopePaper {
+  paper_id: string;
+  version_id: string;
+}
+
+export interface Conversation {
+  conversation_id: string;
+  project_id: string;
+  owner_id: string;
+  title: string | null;
+  scope_mode: "project" | "selected_papers";
+  active_run_id: string | null;
+  created_at: string;
+  scope_papers: ScopePaper[];
+}
+
+export interface CitationSummary {
+  evidence_id: string;
+  paper_id: string;
+  version_id: string;
+  section_path: string | null;
+  page_start: number | null;
+  page_end: number | null;
+  excerpt: string;
+}
+
+export interface Claim {
+  text: string;
+  citations: CitationSummary[];
+}
+
+export interface ConversationMessage {
+  message_id: string;
+  conversation_id: string;
+  sequence: number;
+  role: "user" | "assistant";
+  content: string;
+  run_id: string | null;
+  claim_set_id: string | null;
+  created_at: string;
+  claims: Claim[] | null;
+}
+
+export interface PostMessageResult {
+  user_message_id: string;
+  run_id: string;
+  status: string;
+}
+
+export interface EvidenceDetail extends CitationSummary {
+  run_id: string;
+  project_id: string;
+  parse_revision_id: string;
+  chunk_id: string;
+  created_at: string;
 }
