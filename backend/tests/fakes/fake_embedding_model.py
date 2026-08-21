@@ -1,21 +1,14 @@
 """EmbeddingModel 的确定性假实现。
 
-向量由文本 SHA-256 哈希派生，维度可配，相同输入必然得到相同向量，
-供不访问真实 Provider 的测试与本地开发使用。
+复用生产侧 ``bag_of_words_vector``（bag-of-words 哈希向量），与
+``AGENT_EMBEDDING_BACKEND=fake`` 行为一致：词汇重叠的文本余弦相似度
+更高，相同输入必然得到相同向量；只表达词汇重叠，不模拟语义泛化。
+维度可配（生产装配固定 1024，与 chunks.embedding 列一致）。
 """
-
-import hashlib
 
 from literature_agent.application.ports.embedding_model import EmbeddingModel
 from literature_agent.domain.model_types import EmbeddingResult, ModelUsage
-
-
-def _hash_vector(text: str, dimensions: int) -> list[float]:
-    """由文本哈希生成确定性的伪向量（值域 [-1, 1]）。"""
-    digest = hashlib.sha256(text.encode("utf-8")).digest()
-    return [
-        round(digest[i % len(digest)] / 255 * 2 - 1, 6) for i in range(dimensions)
-    ]
+from literature_agent.infrastructure.models.fake_models import bag_of_words_vector
 
 
 class FakeEmbeddingModel(EmbeddingModel):
@@ -40,7 +33,7 @@ class FakeEmbeddingModel(EmbeddingModel):
         self.calls.append(list(texts))
         if self._error is not None:
             raise self._error
-        vectors = [_hash_vector(text, self._dimensions) for text in texts]
+        vectors = [bag_of_words_vector(text, self._dimensions) for text in texts]
         prompt_tokens = sum(max(1, len(text) // 4) for text in texts)
         return EmbeddingResult(
             vectors=vectors,

@@ -262,7 +262,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 3. **Model Gateway**（已完成 2026-08-20，契约见下文「切片 3」）：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
 4. **ChunkSet + Worker 分发**（已完成 2026-08-20，契约见下文「切片 4」）：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
 5. **Indexing Run**（已完成 2026-08-21，契约见下文「切片 5」）：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
-6. **Hybrid Retrieval**：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
+6. **Hybrid Retrieval**（已完成 2026-08-21，契约见下文「切片 6」）：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
 7. **Evidence/Citation**：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
 8. **RAG Conversation**：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
 9. **API 与最小 Web UI**：Chat 三入口、Run 进度（前端 `KNOWN_EVENT_TYPES` 扩充）、引用详情和 PDF 页码跳转；
@@ -523,6 +523,64 @@ IndexingExecutor 流程调整为：事务 A 准备（复用/创建/重置 ChunkS
 - fake backend 的 ChunkProfile 与真实 Provider 的 profile 不同哈希，切换 backend 会产生新 ChunkSet 并重新切分+Embedding（预期行为）；
 - 取消后 ChunkSet 保持 `running`，由下一次触发（重跑）补齐，不提供独立「续跑」入口；
 - `search_vector` 使用 `english` 配置，中文语料分词不在本阶段范围。
+
+### 切片 6：Hybrid Retrieval（契约定稿）
+
+已于 2026-08-21 实现完成。本切片不新增 API 与表结构，交付 Project-scoped 混合检索能力；run_id 接线在切片 8。
+
+#### 结构
+
+```text
+Retriever（application/retriever.py）
+  ├─ ModelGateway.embed([query])        # 查询向量，记录 model_invocations（run_id 可空）
+  ├─ 一只读短事务内两路 SQL（ChunkRepository）：
+  │    ├─ search_semantic：embedding <=> :query_vector 升序 Top-K
+  │    └─ search_fulltext：search_vector @@ plainto_tsquery('english', :q) 按 ts_rank 降序 Top-K
+  └─ domain/retrieval.py 纯函数：rrf_merge(k=60) → apply_per_paper_limit → apply_token_budget
+```
+
+- Domain 纯函数：`ScoredChunk`（单路有序候选）→ `RankedCandidate`（含 semantic_rank/fts_rank/rrf_score）；`rrf_score = Σ 1/(60 + rank)`，平局按 semantic rank → fts rank → chunk_id 稳定决胜；`apply_per_paper_limit` 保持原序每篇截断；`apply_token_budget` 按 chunk token_count 贪心累计（超限候选跳过、后续小候选仍可入选，预算 0 返回空）。
+- Repository：`SqlalchemyChunkRepository` 新增 `search_semantic`/`search_fulltext`，返回 `RetrievedChunk(chunk, paper_id, version_id)`；两路共用 `_scoped_select` 强过滤链。
+- Application `Retriever.retrieve(...)` 返回 `RetrievalResult` 列表：chunk（id/text/token_count/section_path/page_start/page_end）、paper_id、version_id、semantic_rank/fts_rank（未命中 None）、rrf_score、最终 rank（截断后从 1 重编号）。空查询（含纯空白）直接 `ValueError`，不调用模型也不访问数据库。
+
+#### 强过滤链（SQL 内完成，两路一致）
+
+```text
+projects.owner_id = :owner_id AND projects.project_id = :project_id
+  → project_papers（paper 收录且 selected_version_id 指向该 Version）
+  → paper_versions.owner_id = :owner_id（双重校验）
+  → document_parse_revisions（经 version_id）
+  → chunk_sets.status = 'ready'
+  → chunks
+```
+
+`paper_ids` 非 None 时（selected_papers 范围）作为同一 SQL 的 `IN` 条件；空子集等价于无候选。语义路额外排除 `embedding IS NULL`。不允许先取全量再应用层过滤（§10 不变量）。ChunkSet 属于 ParseRevision 而非 current 指针：版本重新解析后旧 Revision 的 ready ChunkSet 仍可检索，直到新 ChunkSet ready（有意取舍，保证可用性）。
+
+#### Fake Embedding 升级（bag-of-words 哈希向量）
+
+纯 SHA-256 哈希向量语义相似度无意义，检索实验无法做。`infrastructure/models/fake_models.py` 升级为确定性 bag-of-words 哈希（hashing trick）：英文小写分词（`[a-z0-9]+`）、去简化停用词与单字符、词经 SHA-256 映射到 1024 维桶累加词频、L2 归一化；`tests/fakes/fake_embedding_model.py` 复用同一 `bag_of_words_vector` 实现，profile 三元组不变（`("fake", "fake-embedding", 1024)`），已有 ChunkSet 不用重建。**已知限制：只表达词汇重叠，不模拟语义泛化**，用于验证管线与强过滤，不代表真实检索质量。
+
+#### 参数与检索实验实跑结果
+
+Settings 新增（扁平 `AGENT_` 前缀）：`AGENT_RETRIEVAL_TOP_K` / `AGENT_RETRIEVAL_PER_PAPER_LIMIT` / `AGENT_RETRIEVAL_TOKEN_BUDGET`。
+
+校准实验 `backend/tests/evaluation/run_retrieval_eval.py`（手动运行，非自动测试）：Testcontainers pgvector 库 → 4 篇评测 PDF 经 pypdf 解析（编号标题识别为 section_heading）→ ChunkBuilder（512/64）→ 生产侧 Fake Embedding 落库（4 篇共 62 elements → 33 chunks）→ 对 manifest 中 8 道 answered 题跑 Retriever，计算期望 paper 且页码覆盖的 Chunk 是否进入最终候选：
+
+| 轮次 | 参数 | 结果 |
+|---|---|---|
+| 首跑 | top_k=20 / per_paper=5 / budget=3000 | 题目级 Recall 7/8，条目级 10/11；q08 未命中 |
+| 诊断 | budget=100000 仍 MISS | 排除预算原因：目标 chunk 在该论文内合并序第 6，被 per_paper_limit=5 截掉 |
+| 校准后 | top_k=20 / **per_paper=8** / budget=3000 | **8/8、条目级 11/11，连续三次实跑稳定** |
+
+最终默认值：`retrieval_top_k=20`、`retrieval_per_paper_limit=8`、`retrieval_token_budget=3000`。评测语料小（每篇 ≤10 chunks），per_paper_limit 的绝对值待真实 Provider 评测再评估；chunk 参数 512/64 本实验未暴露问题，保持不动。
+
+#### 已知限制
+
+- Fake Embedding 只表达词汇重叠：同义词/改写不提升相似度，Recall 结论只对管线正确性有效；
+- `plainto_tsquery` 对查询词全部取 AND：自然语言长问题 FTS 常零命中（q08 实测 fts=0，走纯语义路径），首版不引入 OR 语义或查询改写；
+- 语义路同距离（含零向量 NULL 距离）按 chunk_id 决胜，chunk_id 是随机 UUID，故并列候选的具体成员跨运行不稳定（Recall 结论在校准后参数下有足够余量，三次实跑一致）；
+- embedding 列无向量索引（精确检索），数据量增长后性能待 Phase 4 评估；
+- 评测语料仅 4 篇 33 chunks，只覆盖管线正确性；真实 Provider 的检索质量评测属切片 10。
 
 ## 测试方式
 

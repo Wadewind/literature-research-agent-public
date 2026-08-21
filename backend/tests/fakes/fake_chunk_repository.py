@@ -1,17 +1,27 @@
 """Chunk Repository 的内存假实现。"""
 
 from dataclasses import replace
+from typing import Any
 
 from literature_agent.application.ports.chunk_repository import ChunkRepository
 from literature_agent.domain.chunk import Chunk, ChunkElementLink
+from literature_agent.domain.retrieval import RetrievedChunk
 
 
 class FakeChunkRepository(ChunkRepository):
-    """不依赖数据库的 Chunk Repository 假实现。"""
+    """不依赖数据库的 Chunk Repository 假实现。
+
+    检索方法返回预设结果（``semantic_results``/``fts_results``），不模拟
+    SQL 强过滤——过滤正确性由集成测试覆盖；调用参数记录在
+    ``search_calls`` 供断言。
+    """
 
     def __init__(self) -> None:
         self._chunks: dict[str, Chunk] = {}
         self._links: list[ChunkElementLink] = []
+        self.semantic_results: list[RetrievedChunk] = []
+        self.fts_results: list[RetrievedChunk] = []
+        self.search_calls: list[dict[str, Any]] = []
 
     async def add_many(self, chunks: list[Chunk]) -> None:
         """将 Chunk 批量存入内存。"""
@@ -60,3 +70,46 @@ class FakeChunkRepository(ChunkRepository):
             for c in self._chunks.values()
             if c.chunk_set_id == chunk_set_id and c.embedding is not None
         )
+
+    async def search_semantic(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        query_vector: list[float],
+        limit: int,
+        paper_ids: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """返回预设的语义检索结果（截取前 limit 条）并记录调用参数。"""
+        self.search_calls.append(
+            {
+                "path": "semantic",
+                "owner_id": owner_id,
+                "project_id": project_id,
+                "limit": limit,
+                "paper_ids": paper_ids,
+            }
+        )
+        return list(self.semantic_results)[:limit]
+
+    async def search_fulltext(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        query: str,
+        limit: int,
+        paper_ids: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """返回预设的全文检索结果（截取前 limit 条）并记录调用参数。"""
+        self.search_calls.append(
+            {
+                "path": "fulltext",
+                "owner_id": owner_id,
+                "project_id": project_id,
+                "query": query,
+                "limit": limit,
+                "paper_ids": paper_ids,
+            }
+        )
+        return list(self.fts_results)[:limit]

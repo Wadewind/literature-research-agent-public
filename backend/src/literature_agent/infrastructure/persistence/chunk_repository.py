@@ -1,13 +1,19 @@
 """Chunk Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.chunk_repository import ChunkRepository
-from literature_agent.domain.chunk import Chunk, ChunkElementLink
+from literature_agent.domain.chunk import Chunk, ChunkElementLink, ChunkSetStatus
+from literature_agent.domain.retrieval import RetrievedChunk
 from literature_agent.infrastructure.persistence.models import (
     ChunkElementLinkORM,
     ChunkORM,
+    ChunkSetORM,
+    DocumentParseRevisionORM,
+    PaperVersionORM,
+    ProjectORM,
+    ProjectPaperORM,
 )
 
 
@@ -144,3 +150,93 @@ class SqlalchemyChunkRepository(ChunkRepository):
             ),
         )
         return result.scalar_one()
+
+    async def search_semantic(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        query_vector: list[float],
+        limit: int,
+        paper_ids: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """Project 强过滤范围内按 cosine 距离升序的向量检索 Top-K。"""
+        statement = (
+            self._scoped_select(owner_id=owner_id, project_id=project_id, paper_ids=paper_ids)
+            .where(ChunkORM.embedding.is_not(None))
+            # 同距离时按 chunk_id 稳定排序，保证结果确定性
+            .order_by(ChunkORM.embedding.cosine_distance(query_vector), ChunkORM.chunk_id)
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return [
+            RetrievedChunk(chunk=_chunk_to_domain(row), paper_id=paper_id, version_id=version_id)
+            for row, paper_id, version_id in result.all()
+        ]
+
+    async def search_fulltext(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        query: str,
+        limit: int,
+        paper_ids: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """Project 强过滤范围内的全文检索 Top-K（english 配置，ts_rank 降序）。"""
+        ts_query = func.plainto_tsquery("english", query)
+        statement = (
+            self._scoped_select(owner_id=owner_id, project_id=project_id, paper_ids=paper_ids)
+            .where(ChunkORM.search_vector.bool_op("@@")(ts_query))
+            .order_by(func.ts_rank(ChunkORM.search_vector, ts_query).desc(), ChunkORM.chunk_id)
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return [
+            RetrievedChunk(chunk=_chunk_to_domain(row), paper_id=paper_id, version_id=version_id)
+            for row, paper_id, version_id in result.all()
+        ]
+
+    @staticmethod
+    def _scoped_select(
+        *,
+        owner_id: str,
+        project_id: str,
+        paper_ids: list[str] | None,
+    ):
+        """构造带强过滤链的 Chunk 查询（不含排序与 limit）。
+
+        过滤链全部在 SQL 内完成：projects.owner_id/project_id →
+        ProjectPaper（paper 收录且 selected_version_id 指向该 Version）→
+        paper_versions.owner_id（双重校验）→ ParseRevision → ready
+        ChunkSet → chunks；``paper_ids`` 非 None 时限制到 Paper 子集。
+        """
+        statement = (
+            select(ChunkORM, ProjectPaperORM.paper_id, PaperVersionORM.version_id)
+            .join(ChunkSetORM, ChunkORM.chunk_set_id == ChunkSetORM.chunk_set_id)
+            .join(
+                DocumentParseRevisionORM,
+                ChunkSetORM.parse_revision_id == DocumentParseRevisionORM.revision_id,
+            )
+            .join(
+                PaperVersionORM,
+                DocumentParseRevisionORM.version_id == PaperVersionORM.version_id,
+            )
+            .join(
+                ProjectPaperORM,
+                and_(
+                    ProjectPaperORM.paper_id == PaperVersionORM.paper_id,
+                    ProjectPaperORM.selected_version_id == PaperVersionORM.version_id,
+                ),
+            )
+            .join(ProjectORM, ProjectPaperORM.project_id == ProjectORM.project_id)
+            .where(
+                ProjectORM.project_id == project_id,
+                ProjectORM.owner_id == owner_id,
+                PaperVersionORM.owner_id == owner_id,
+                ChunkSetORM.status == ChunkSetStatus.READY.value,
+            )
+        )
+        if paper_ids is not None:
+            statement = statement.where(ProjectPaperORM.paper_id.in_(paper_ids))
+        return statement

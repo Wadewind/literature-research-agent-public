@@ -34,6 +34,14 @@ _DEFAULT_CHUNK_OVERLAP_TOKENS = 64
 # 本地开发与测试默认不触网；批次大小控制单次 Embedding 调用的文本数
 _DEFAULT_EMBEDDING_BACKEND = "fake"
 _DEFAULT_EMBEDDING_BATCH_SIZE = 32
+# Hybrid Retrieval 默认值（切片 6，2026-08-21 检索实验校准）：各路 Top-K、
+# 每篇论文进入最终结果的上限、最终结果的总 Token 预算。
+# 每篇上限 5 会在 fake 向量距离并列较多时截掉目标 chunk（评测 q08 实测），
+# 校准为 8 后 8/8 题 Recall 达标；语料小（每篇 ≤10 chunks），该值待真实
+# Provider 评测再评估。
+_DEFAULT_RETRIEVAL_TOP_K = 20
+_DEFAULT_RETRIEVAL_PER_PAPER_LIMIT = 8
+_DEFAULT_RETRIEVAL_TOKEN_BUDGET = 3000
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +86,9 @@ class Settings:
     chunk_overlap_tokens: int = field(default=_DEFAULT_CHUNK_OVERLAP_TOKENS)
     embedding_backend: str = field(default=_DEFAULT_EMBEDDING_BACKEND)
     embedding_batch_size: int = field(default=_DEFAULT_EMBEDDING_BATCH_SIZE)
+    retrieval_top_k: int = field(default=_DEFAULT_RETRIEVAL_TOP_K)
+    retrieval_per_paper_limit: int = field(default=_DEFAULT_RETRIEVAL_PER_PAPER_LIMIT)
+    retrieval_token_budget: int = field(default=_DEFAULT_RETRIEVAL_TOKEN_BUDGET)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -144,6 +155,20 @@ class Settings:
         embedding_batch_size = (
             int(raw_embedding_batch) if raw_embedding_batch else _DEFAULT_EMBEDDING_BATCH_SIZE
         )
+        raw_retrieval_top_k = os.getenv("AGENT_RETRIEVAL_TOP_K")
+        retrieval_top_k = (
+            int(raw_retrieval_top_k) if raw_retrieval_top_k else _DEFAULT_RETRIEVAL_TOP_K
+        )
+        raw_per_paper_limit = os.getenv("AGENT_RETRIEVAL_PER_PAPER_LIMIT")
+        retrieval_per_paper_limit = (
+            int(raw_per_paper_limit)
+            if raw_per_paper_limit
+            else _DEFAULT_RETRIEVAL_PER_PAPER_LIMIT
+        )
+        raw_token_budget = os.getenv("AGENT_RETRIEVAL_TOKEN_BUDGET")
+        retrieval_token_budget = (
+            int(raw_token_budget) if raw_token_budget else _DEFAULT_RETRIEVAL_TOKEN_BUDGET
+        )
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -176,4 +201,7 @@ class Settings:
                 "AGENT_EMBEDDING_BACKEND", _DEFAULT_EMBEDDING_BACKEND
             ),
             embedding_batch_size=embedding_batch_size,
+            retrieval_top_k=retrieval_top_k,
+            retrieval_per_paper_limit=retrieval_per_paper_limit,
+            retrieval_token_budget=retrieval_token_budget,
         )

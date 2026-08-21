@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from literature_agent.domain.chunk import Chunk, ChunkElementLink
+from literature_agent.domain.retrieval import RetrievedChunk
 
 
 class ChunkRepository(Protocol):
@@ -38,4 +39,39 @@ class ChunkRepository(Protocol):
 
     async def count_embedded(self, chunk_set_id: str) -> int:
         """统计 ChunkSet 下已生成向量（embedding 非 null）的 Chunk 数量。"""
+        ...
+
+    async def search_semantic(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        query_vector: list[float],
+        limit: int,
+        paper_ids: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """Project 范围内按 cosine 距离升序的向量检索 Top-K。
+
+        强过滤链必须在 SQL 内完成：owner（projects 与 paper_versions
+        双重校验）→ project → ProjectPaper → selected_version_id →
+        ParseRevision → ready ChunkSet → chunks；``paper_ids`` 非 None
+        时进一步限制到该 Paper 子集（selected_papers 范围）。
+        embedding 为 null 的 Chunk 不参与。不允许先取全量再应用层过滤。
+        """
+        ...
+
+    async def search_fulltext(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        query: str,
+        limit: int,
+        paper_ids: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """Project 范围内的 PostgreSQL 全文检索 Top-K（english 配置）。
+
+        使用 ``search_vector @@ plainto_tsquery('english', query)`` 命中
+        并按 ``ts_rank`` 降序；强过滤链与 ``search_semantic`` 相同。
+        """
         ...

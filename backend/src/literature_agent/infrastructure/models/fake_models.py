@@ -1,14 +1,24 @@
 """生产侧确定性 Fake 模型实现（``AGENT_EMBEDDING_BACKEND=fake`` 等场景）。
 
 与 ``FakeDocumentParser`` 同一定位：供本地开发、闭环演示与不触网的
-端到端测试使用，不访问真实 Provider。向量由文本 SHA-256 哈希派生，
-相同输入必然得到相同向量。
+端到端测试使用，不访问真实 Provider。
 
-注意与 ``tests/fakes/`` 下的测试 Fake 分离：这里是 Worker/本地运行
-装配的一部分，维度必须与 chunks.embedding 列（迁移固定 1024）一致。
+Embedding 向量采用确定性 bag-of-words 哈希（hashing trick，切片 6 由
+纯哈希向量升级而来）：英文小写分词、去简化停用词、词经 SHA-256 映射
+到固定维度桶累加词频、L2 归一化。词汇重叠多的文本余弦相似度更高，
+使检索测试与评测在不触网的前提下具有确定性且有意义。
+
+已知限制：该实现只表达**词汇重叠**，不模拟语义泛化（同义词、改写
+不会提高相似度）；它用于验证检索管线与强过滤，不代表真实检索质量。
+
+``tests/fakes/`` 下的测试 Fake 复用这里的 ``bag_of_words_vector``，
+保证生产与测试假实现行为一致。维度必须与 chunks.embedding 列
+（迁移固定 1024）一致。
 """
 
 import hashlib
+import math
+import re
 
 from literature_agent.application.ports.chat_model import ChatModel
 from literature_agent.application.ports.embedding_model import EmbeddingModel
@@ -24,13 +34,35 @@ EMBEDDING_COLUMN_DIMENSIONS = 1024
 
 _DEFAULT_CHAT_RESPONSE = '{"answer_status": "insufficient_evidence", "claims": []}'
 
+_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
-def _hash_vector(text: str, dimensions: int) -> list[float]:
-    """由文本哈希生成确定性的伪向量（值域 [-1, 1]）。"""
-    digest = hashlib.sha256(text.encode("utf-8")).digest()
-    return [
-        round(digest[i % len(digest)] / 255 * 2 - 1, 6) for i in range(dimensions)
-    ]
+# 简化英文停用词表：只去掉最常见功能词，让向量表达内容词重叠；
+# 不追求完整停用词表（这是测试/开发假实现）
+_STOPWORDS = frozenset({
+    "a", "an", "the", "of", "and", "or", "in", "on", "for", "to", "is", "are",
+    "was", "were", "be", "been", "by", "with", "as", "at", "from", "that",
+    "this", "these", "those", "it", "its", "we", "our", "their", "which",
+    "what", "how", "does", "do", "did", "many", "much", "into", "over",
+})
+
+
+def bag_of_words_vector(text: str, dimensions: int) -> list[float]:
+    """生成确定性 bag-of-words 哈希向量（hashing trick）。
+
+    小写分词（只保留字母数字词、去停用词与单字符），每个词经
+    SHA-256 映射到 ``dimensions`` 个桶累加词频，最后 L2 归一化。
+    相同输入必然得到相同向量；无有效词（空文本/纯停用词）返回零向量。
+    """
+    counts = [0.0] * dimensions
+    for token in _TOKEN_PATTERN.findall(text.lower()):
+        if token in _STOPWORDS or len(token) < 2:
+            continue
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        counts[int.from_bytes(digest[:8], "big") % dimensions] += 1.0
+    norm = math.sqrt(sum(value * value for value in counts))
+    if norm == 0.0:
+        return counts
+    return [round(value / norm, 6) for value in counts]
 
 
 class FakeEmbeddingModel(EmbeddingModel):
@@ -49,7 +81,7 @@ class FakeEmbeddingModel(EmbeddingModel):
 
     async def embed(self, texts: list[str]) -> EmbeddingResult:
         """返回确定性向量；空列表直接返回空结果，不发起请求。"""
-        vectors = [_hash_vector(text, self._dimensions) for text in texts]
+        vectors = [bag_of_words_vector(text, self._dimensions) for text in texts]
         prompt_tokens = sum(max(1, len(text) // 4) for text in texts)
         return EmbeddingResult(
             vectors=vectors,
