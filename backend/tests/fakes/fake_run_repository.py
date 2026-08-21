@@ -1,7 +1,7 @@
 """Run Repository 的内存假实现。"""
 
 from literature_agent.application.ports.run_repository import RunRepository
-from literature_agent.domain.run import ACTIVE_RUN_STATUSES, Run, RunStatus
+from literature_agent.domain.run import ACTIVE_RUN_STATUSES, Run, RunStatus, RunType
 
 
 class FakeRunRepository(RunRepository):
@@ -57,3 +57,15 @@ class FakeRunRepository(RunRepository):
             run.project_id == project_id and run.status in ACTIVE_RUN_STATUSES
             for run in self._runs.values()
         )
+
+    async def get_latest_indexing_run_id(self, parse_revision_id: str) -> str | None:
+        """返回指定 Parse Revision 最近一次 indexing Run 的 ID。"""
+        matches = [
+            run
+            for run in self._runs.values()
+            if run.run_type == RunType.INDEXING.value
+            and run.input_payload.get("parse_revision_id") == parse_revision_id
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda run: run.created_at).run_id

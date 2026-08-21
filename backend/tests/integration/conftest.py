@@ -1,6 +1,7 @@
 """集成测试共享 fixtures。"""
 
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.community.postgres import PostgresContainer
 
@@ -13,13 +14,15 @@ from literature_agent.infrastructure.persistence.project_repository import (
 
 @pytest_asyncio.fixture
 async def db_engine():
-    """启动 Testcontainers PostgreSQL 并创建 schema。"""
-    with PostgresContainer("postgres:18") as postgres:
+    """启动 Testcontainers PostgreSQL（pgvector 镜像）并创建 schema。"""
+    with PostgresContainer("pgvector/pgvector:pg18") as postgres:
         url = postgres.get_connection_url().replace(
             "postgresql+psycopg2://", "postgresql+psycopg://"
         )
         engine = create_async_engine(url, echo=False)
         async with engine.begin() as conn:
+            # vector 扩展必须先于含 vector 列的建表（与迁移顺序一致）
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await conn.run_sync(Base.metadata.create_all)
         yield engine
         await engine.dispose()

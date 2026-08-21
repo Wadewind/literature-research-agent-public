@@ -1,5 +1,7 @@
 """Chunk Repository 的内存假实现。"""
 
+from dataclasses import replace
+
 from literature_agent.application.ports.chunk_repository import ChunkRepository
 from literature_agent.domain.chunk import Chunk, ChunkElementLink
 
@@ -35,3 +37,26 @@ class FakeChunkRepository(ChunkRepository):
     async def count_by_chunk_set(self, chunk_set_id: str) -> int:
         """统计 ChunkSet 下的 Chunk 数量。"""
         return sum(1 for c in self._chunks.values() if c.chunk_set_id == chunk_set_id)
+
+    async def list_pending_embedding(self, chunk_set_id: str, limit: int) -> list[Chunk]:
+        """返回尚未生成向量的 Chunk，按 sequence 升序。"""
+        result = [
+            c
+            for c in self._chunks.values()
+            if c.chunk_set_id == chunk_set_id and c.embedding is None
+        ]
+        result.sort(key=lambda c: c.sequence)
+        return result[:limit]
+
+    async def save_embeddings(self, embeddings: dict[str, list[float]]) -> None:
+        """按 chunk_id 写回向量。"""
+        for chunk_id, vector in embeddings.items():
+            self._chunks[chunk_id] = replace(self._chunks[chunk_id], embedding=vector)
+
+    async def count_embedded(self, chunk_set_id: str) -> int:
+        """统计已生成向量的 Chunk 数量。"""
+        return sum(
+            1
+            for c in self._chunks.values()
+            if c.chunk_set_id == chunk_set_id and c.embedding is not None
+        )

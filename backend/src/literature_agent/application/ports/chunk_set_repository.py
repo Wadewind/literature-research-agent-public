@@ -24,6 +24,10 @@ class ChunkSetRepository(Protocol):
         """按 Parse Revision 和 profile 哈希查询（每个组合至多一条）。"""
         ...
 
+    async def get_latest_by_revision(self, parse_revision_id: str) -> ChunkSet | None:
+        """按 Parse Revision 查询最新创建的 ChunkSet；不存在返回 None。"""
+        ...
+
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新（就绪/失败/重置收尾）。"""
         ...

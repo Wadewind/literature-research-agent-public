@@ -3,9 +3,11 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.schema import Computed
 
 
 class Base(DeclarativeBase):
@@ -455,7 +457,7 @@ class ChunkSetORM(Base):
 
 
 class ChunkORM(Base):
-    """Chunk 的持久化映射（search_vector/embedding 列在切片 5 迁移再加）。"""
+    """Chunk 的持久化映射（含切片 5 的 embedding/search_vector 检索列）。"""
 
     __tablename__ = "chunks"
 
@@ -476,9 +478,18 @@ class ChunkORM(Base):
     page_start: Mapped[int | None] = mapped_column(nullable=True)
     page_end: Mapped[int | None] = mapped_column(nullable=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 维度在迁移中固定为 1024；改维度需要新迁移（有意取舍，见阶段 Spec）
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
+    # 全文检索生成列：由数据库从 text 派生，应用层只读
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', text)", persisted=True),
+        nullable=True,
+    )
 
     __table_args__ = (
         UniqueConstraint("chunk_set_id", "sequence", name="uq_chunks_chunk_set_sequence"),
+        Index("ix_chunks_search_vector", "search_vector", postgresql_using="gin"),
     )
 
 

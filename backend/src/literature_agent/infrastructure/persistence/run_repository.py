@@ -7,7 +7,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.run_repository import RunRepository
-from literature_agent.domain.run import ACTIVE_RUN_STATUSES, Run, RunStatus
+from literature_agent.domain.run import ACTIVE_RUN_STATUSES, Run, RunStatus, RunType
 from literature_agent.infrastructure.persistence.models import RunORM
 
 
@@ -112,3 +112,16 @@ class SqlalchemyRunRepository(RunRepository):
             .limit(1),
         )
         return result.first() is not None
+
+    async def get_latest_indexing_run_id(self, parse_revision_id: str) -> str | None:
+        """查询指定 Parse Revision 最近一次 indexing Run 的 ID。"""
+        result = await self._session.execute(
+            select(RunORM.run_id)
+            .where(
+                RunORM.run_type == RunType.INDEXING.value,
+                RunORM.input_payload["parse_revision_id"].astext == parse_revision_id,
+            )
+            .order_by(RunORM.created_at.desc())
+            .limit(1),
+        )
+        return result.scalar_one_or_none()

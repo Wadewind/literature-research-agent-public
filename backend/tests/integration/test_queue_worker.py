@@ -15,18 +15,26 @@ from arq.worker import Worker
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from testcontainers.community.redis import RedisContainer
 
+from literature_agent.application.document_query_service import DocumentQueryService
 from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
+from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
+from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.paper import create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.project import create_project
+from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import RunStatus, RunType, create_run
+from literature_agent.infrastructure.models.fake_models import (
+    FakeChatModel,
+    FakeEmbeddingModel,
+)
 from literature_agent.infrastructure.parsing.fake_parser import (
     PARSER_NAME,
     PARSER_VERSION,
@@ -47,6 +55,9 @@ from literature_agent.infrastructure.persistence.element_repository import (
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
 )
+from literature_agent.infrastructure.persistence.model_invocation_repository import (
+    SqlalchemyModelInvocationRepository,
+)
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
 )
@@ -58,6 +69,9 @@ from literature_agent.infrastructure.persistence.paper_version_repository import
 )
 from literature_agent.infrastructure.persistence.parse_revision_repository import (
     SqlalchemyParseRevisionRepository,
+)
+from literature_agent.infrastructure.persistence.project_paper_repository import (
+    SqlalchemyProjectPaperRepository,
 )
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
@@ -99,6 +113,11 @@ async def queued_run(db_engine) -> str:
             content_type="application/pdf",
         )
         await SqlalchemyPaperVersionRepository(session).add(version)
+        await session.flush()
+        # 收录关系到 Project（index-status 授权链需要）
+        await SqlalchemyProjectPaperRepository(session).add(
+            create_project_paper(project.project_id, paper.paper_id, version.version_id)
+        )
         run = create_run(
             project_id=project.project_id,
             owner_id="user-1",
@@ -156,10 +175,17 @@ def _make_dispatcher(session_factory) -> RunDispatcher:
         attempt_repo_factory=SqlalchemyAttemptRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
         profile=ChunkProfile(
-            embedding_provider="test",
-            embedding_model="m",
+            embedding_provider="fake",
+            embedding_model="fake-embedding",
             embedding_dimensions=1024,
         ),
+        model_gateway=ModelGateway(
+            embedding_model=FakeEmbeddingModel(),
+            chat_model=FakeChatModel(),
+            session_factory=session_factory,
+            invocation_repo_factory=SqlalchemyModelInvocationRepository,
+        ),
+        embedding_batch_size=2,
     )
     return RunDispatcher(
         session_factory=session_factory,
@@ -360,6 +386,7 @@ async def test_ingestion_then_indexing_completes_end_to_end(
             "run_started",
             "indexing_started",
             "chunking_completed",
+            "embedding_completed",
             "indexing_completed",
         ]
         # ChunkSet ready、Chunk 与 Element 映射可查
@@ -368,7 +395,10 @@ async def test_ingestion_then_indexing_completes_end_to_end(
         chunk_repo = SqlalchemyChunkRepository(session)
         from sqlalchemy import select
 
-        from literature_agent.infrastructure.persistence.models import ChunkSetORM
+        from literature_agent.infrastructure.persistence.models import (
+            ChunkORM,
+            ChunkSetORM,
+        )
 
         result = await session.execute(
             select(ChunkSetORM).where(ChunkSetORM.parse_revision_id == revision_id)
@@ -380,5 +410,51 @@ async def test_ingestion_then_indexing_completes_end_to_end(
         links = await chunk_repo.list_links([c.chunk_id for c in chunks])
         assert links
         assert any("准确率" in c.text for c in chunks)
+        # 切片 5：全部 Chunk 已写回 1024 维向量，search_vector 生成列已派生
+        assert all(
+            c.embedding is not None and len(c.embedding) == 1024 for c in chunks
+        )
+        orm_rows = (
+            (
+                await session.execute(
+                    select(ChunkORM).where(ChunkORM.chunk_set_id == row.chunk_set_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert all(r.search_vector is not None for r in orm_rows)
+        # 调用记录持久化且携带 indexing run_id
+        invocations = await SqlalchemyModelInvocationRepository(session).list_by_run(
+            indexing_run_id
+        )
+        assert invocations
+        assert all(i.capability.value == "embedding" for i in invocations)
+
+        # index-status：授权链走通，chunk_set 计数与 indexing_run_id 正确
+        query_service = DocumentQueryService(
+            session_factory=session_factory,
+            project_repo_factory=SqlalchemyProjectRepository,
+            paper_repo_factory=SqlalchemyPaperRepository,
+            paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+            project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+            parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+            element_repo_factory=SqlalchemyElementRepository,
+            chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+            chunk_repo_factory=SqlalchemyChunkRepository,
+            run_repo_factory=SqlalchemyRunRepository,
+        )
+        index_status = await query_service.get_index_status(
+            ActorContext(owner_id="user-1"),
+            indexing_run.project_id,
+            indexing_run.input_payload["version_id"],
+        )
+        assert index_status.revision_id == revision_id
+        assert index_status.chunk_set is not None
+        assert index_status.chunk_set.chunk_set_id == row.chunk_set_id
+        assert index_status.chunk_set.status == "ready"
+        assert index_status.chunk_set.chunk_count == len(chunks)
+        assert index_status.chunk_set.embedded_count == len(chunks)
+        assert index_status.indexing_run_id == indexing_run_id
 
     await queue.aclose()

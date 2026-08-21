@@ -24,12 +24,15 @@ from literature_agent.domain.parse_revision import create_parse_revision
 from literature_agent.domain.project import create_project
 from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.main import create_app
+from tests.fakes.fake_chunk_repository import FakeChunkRepository
+from tests.fakes.fake_chunk_set_repository import FakeChunkSetRepository
 from tests.fakes.fake_element_repository import FakeElementRepository
 from tests.fakes.fake_paper_repository import FakePaperRepository
 from tests.fakes.fake_paper_version_repository import FakePaperVersionRepository
 from tests.fakes.fake_parse_revision_repository import FakeParseRevisionRepository
 from tests.fakes.fake_project_paper_repository import FakeProjectPaperRepository
 from tests.fakes.fake_project_repository import FakeProjectRepository, fake_session
+from tests.fakes.fake_run_repository import FakeRunRepository
 
 _PROFILE = ParseProfile("fake", "1.0", {})
 
@@ -61,6 +64,9 @@ async def client():
     revision_repo = FakeParseRevisionRepository()
     element_repo = FakeElementRepository()
     relation_repo = FakeProjectPaperRepository()
+    chunk_set_repo = FakeChunkSetRepository()
+    chunk_repo = FakeChunkRepository()
+    run_repo = FakeRunRepository()
 
     project = create_project(owner_id="user-1", name="项目A", description="")
     other_project = create_project(owner_id="user-2", name="项目B", description="")
@@ -148,6 +154,9 @@ async def client():
         project_paper_repo_factory=lambda _s: relation_repo,
         parse_revision_repo_factory=lambda _s: revision_repo,
         element_repo_factory=lambda _s: element_repo,
+        chunk_set_repo_factory=lambda _s: chunk_set_repo,
+        chunk_repo_factory=lambda _s: chunk_repo,
+        run_repo_factory=lambda _s: run_repo,
     )
 
     app = create_app()

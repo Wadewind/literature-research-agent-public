@@ -12,7 +12,8 @@ import asyncio
 import logging
 import os
 import socket
-from contextlib import suppress
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, suppress
 from typing import Any
 from urllib.parse import urlparse
 
@@ -21,8 +22,11 @@ from arq.worker import run_worker
 
 from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
+from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
+from literature_agent.application.ports.chat_model import ChatModel
 from literature_agent.application.ports.document_parser import DocumentParser
+from literature_agent.application.ports.embedding_model import EmbeddingModel
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.application.run_reconcile_service import RunReconcileService
@@ -30,6 +34,15 @@ from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
 from literature_agent.infrastructure.config import Settings
+from literature_agent.infrastructure.models.fake_models import (
+    EMBEDDING_COLUMN_DIMENSIONS,
+    FakeChatModel,
+    FakeEmbeddingModel,
+)
+from literature_agent.infrastructure.models.openai_compatible import (
+    OpenAiCompatibleChat,
+    OpenAiCompatibleEmbedding,
+)
 from literature_agent.infrastructure.parsing.fake_parser import (
     FakeDocumentParser,
 )
@@ -53,6 +66,9 @@ from literature_agent.infrastructure.persistence.element_repository import (
 )
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
+)
+from literature_agent.infrastructure.persistence.model_invocation_repository import (
+    SqlalchemyModelInvocationRepository,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
@@ -115,6 +131,65 @@ def _build_chunk_profile(settings: Settings) -> ChunkProfile:
         embedding_model=settings.embedding_model,
         embedding_dimensions=settings.embedding_dimensions,
     )
+
+
+def _build_model_stack(
+    settings: Settings,
+    session_factory: Callable[[], AbstractAsyncContextManager[Any]],
+) -> tuple[ModelGateway, ChunkProfile, list[Any]]:
+    """按 ``embedding_backend`` 装配模型栈与活动 ChunkProfile（切片 5）。
+
+    ``fake``（默认）：确定性 Fake 模型，本地开发与测试默认不触网；
+    profile 的 embedding 三元组固定为 fake 标识
+    （provider="fake", model="fake-embedding", dimensions=1024），
+    避免 fake 产出的 ChunkSet 与真实 profile 混淆。
+    ``openai_compatible``：OpenAI 兼容 Adapter；profile 三元组来自
+    ``AGENT_EMBEDDING_*``，缺 API Key 时首次调用抛 ModelAuthError。
+
+    返回 ``(gateway, profile, closables)``：closables 为需要随 Worker
+    关闭释放的 Adapter（Fake 无资源，不在其中）。
+    """
+    if settings.embedding_backend == "fake":
+        embedding_model: EmbeddingModel = FakeEmbeddingModel()
+        chat_model: ChatModel = FakeChatModel()
+        profile = ChunkProfile(
+            max_tokens=settings.chunk_max_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
+            embedding_provider=FakeEmbeddingModel.provider,
+            embedding_model=FakeEmbeddingModel.model,
+            embedding_dimensions=EMBEDDING_COLUMN_DIMENSIONS,
+        )
+        closables: list[Any] = []
+    elif settings.embedding_backend == "openai_compatible":
+        embedding_model = OpenAiCompatibleEmbedding(
+            provider=urlparse(settings.embedding_base_url).netloc
+            or settings.embedding_base_url,
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+            model=settings.embedding_model,
+            timeout_seconds=settings.model_timeout_seconds,
+            max_retries=settings.model_max_retries,
+            dimensions=settings.embedding_dimensions,
+        )
+        chat_model = OpenAiCompatibleChat(
+            provider=urlparse(settings.chat_base_url).netloc or settings.chat_base_url,
+            base_url=settings.chat_base_url,
+            api_key=settings.chat_api_key,
+            model=settings.chat_model,
+            timeout_seconds=settings.model_timeout_seconds,
+            max_retries=settings.model_max_retries,
+        )
+        profile = _build_chunk_profile(settings)
+        closables = [embedding_model, chat_model]
+    else:
+        raise ValueError(f"未知 embedding_backend: {settings.embedding_backend}")
+    gateway = ModelGateway(
+        embedding_model=embedding_model,
+        chat_model=chat_model,
+        session_factory=session_factory,
+        invocation_repo_factory=SqlalchemyModelInvocationRepository,
+    )
+    return gateway, profile, closables
 
 
 async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
@@ -196,6 +271,10 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         max_run_attempts=settings.max_run_attempts,
         event_notifier=event_notifier,
     )
+    model_gateway, chunk_profile, model_adapters = _build_model_stack(
+        settings, session_factory
+    )
+    ctx["model_adapters"] = model_adapters
     indexing_executor = IndexingExecutor(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -206,7 +285,9 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         chunk_repo_factory=SqlalchemyChunkRepository,
         attempt_repo_factory=SqlalchemyAttemptRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
-        profile=_build_chunk_profile(settings),
+        profile=chunk_profile,
+        model_gateway=model_gateway,
+        embedding_batch_size=settings.embedding_batch_size,
         max_run_attempts=settings.max_run_attempts,
         event_notifier=event_notifier,
     )
@@ -255,6 +336,9 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+    # 模型 Adapter 的 HTTP 客户端随进程退出前显式关闭
+    for adapter in ctx.get("model_adapters", []):
+        await adapter.aclose()
     notifier: ValkeyEventNotifier | None = ctx.get("event_notifier")
     if notifier is not None:
         await notifier.aclose()

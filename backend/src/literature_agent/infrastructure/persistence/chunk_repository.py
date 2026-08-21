@@ -1,6 +1,6 @@
 """Chunk Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.chunk_repository import ChunkRepository
@@ -23,6 +23,12 @@ def _chunk_to_domain(orm: ChunkORM) -> Chunk:
         page_start=orm.page_start,
         page_end=orm.page_end,
         content_hash=orm.content_hash,
+        # pgvector 驱动可能返回 numpy 数组，统一转为纯 float 列表
+        embedding=(
+            [float(value) for value in orm.embedding]
+            if orm.embedding is not None
+            else None
+        ),
     )
 
 
@@ -102,5 +108,39 @@ class SqlalchemyChunkRepository(ChunkRepository):
             select(func.count())
             .select_from(ChunkORM)
             .where(ChunkORM.chunk_set_id == chunk_set_id),
+        )
+        return result.scalar_one()
+
+    async def list_pending_embedding(self, chunk_set_id: str, limit: int) -> list[Chunk]:
+        """查询尚未生成向量的 Chunk，按 sequence 升序。"""
+        result = await self._session.execute(
+            select(ChunkORM)
+            .where(
+                ChunkORM.chunk_set_id == chunk_set_id,
+                ChunkORM.embedding.is_(None),
+            )
+            .order_by(ChunkORM.sequence)
+            .limit(limit),
+        )
+        return [_chunk_to_domain(row) for row in result.scalars().all()]
+
+    async def save_embeddings(self, embeddings: dict[str, list[float]]) -> None:
+        """批量写回向量（键为 chunk_id）。"""
+        for chunk_id, vector in embeddings.items():
+            await self._session.execute(
+                update(ChunkORM)
+                .where(ChunkORM.chunk_id == chunk_id)
+                .values(embedding=vector),
+            )
+
+    async def count_embedded(self, chunk_set_id: str) -> int:
+        """统计已生成向量的 Chunk 数量。"""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(ChunkORM)
+            .where(
+                ChunkORM.chunk_set_id == chunk_set_id,
+                ChunkORM.embedding.is_not(None),
+            ),
         )
         return result.scalar_one()

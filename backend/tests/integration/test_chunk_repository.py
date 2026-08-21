@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from literature_agent.domain.chunk import (
@@ -32,6 +33,7 @@ from literature_agent.infrastructure.persistence.chunk_set_repository import (
 from literature_agent.infrastructure.persistence.element_repository import (
     SqlalchemyElementRepository,
 )
+from literature_agent.infrastructure.persistence.models import ChunkORM
 from literature_agent.infrastructure.persistence.paper_repository import (
     SqlalchemyPaperRepository,
 )
@@ -227,3 +229,97 @@ async def test_chunk_element_links_roundtrip_and_pk(
     with pytest.raises(IntegrityError):
         await session.commit()
     await session.rollback()
+
+
+def _vector(seed: float, *, index: int = 0) -> list[float]:
+    """构造 1024 维测试向量：仅 index 维为 seed，其余为 0。"""
+    vector = [0.0] * 1024
+    vector[index] = seed
+    return vector
+
+
+async def test_embedding_roundtrip_and_pending(session, chunk_set_id: str) -> None:
+    """向量写回与读回；pending 查询只返回 embedding 为 null 的 Chunk。"""
+    repo = SqlalchemyChunkRepository(session)
+    chunks = [_chunk(chunk_set_id, 1), _chunk(chunk_set_id, 2), _chunk(chunk_set_id, 3)]
+    await repo.add_many(chunks)
+    await session.commit()
+
+    assert await repo.count_embedded(chunk_set_id) == 0
+    pending = await repo.list_pending_embedding(chunk_set_id, limit=10)
+    assert [c.sequence for c in pending] == [1, 2, 3]
+    # 批次大小生效
+    assert len(await repo.list_pending_embedding(chunk_set_id, limit=2)) == 2
+
+    vector = _vector(0.5, index=7)
+    await repo.save_embeddings({chunks[0].chunk_id: vector})
+    await session.commit()
+
+    loaded = await repo.list_by_chunk_set(chunk_set_id)
+    assert loaded[0].embedding is not None
+    assert loaded[0].embedding[7] == pytest.approx(0.5)
+    assert len(loaded[0].embedding) == 1024
+    assert loaded[1].embedding is None
+    assert await repo.count_embedded(chunk_set_id) == 1
+    pending = await repo.list_pending_embedding(chunk_set_id, limit=10)
+    assert [c.sequence for c in pending] == [2, 3]
+
+
+async def test_cosine_distance_top_k_ordering(session, chunk_set_id: str) -> None:
+    """pgvector cosine 距离精确检索：按 <=> 排序得到正确 Top-K。"""
+    repo = SqlalchemyChunkRepository(session)
+    chunks = [_chunk(chunk_set_id, i + 1) for i in range(3)]
+    await repo.add_many(chunks)
+    await session.commit()
+    # 查询向量 q 只含第 0 维：chunk1 完全同向（距离 0），chunk2 部分相关，chunk3 正交
+    await repo.save_embeddings(
+        {
+            chunks[0].chunk_id: _vector(1.0, index=0),
+            chunks[1].chunk_id: [0.5, 0.5] + [0.0] * 1022,
+            chunks[2].chunk_id: _vector(1.0, index=1),
+        }
+    )
+    await session.commit()
+
+    result = await session.execute(
+        select(ChunkORM)
+        .where(ChunkORM.chunk_set_id == chunk_set_id)
+        .order_by(ChunkORM.embedding.cosine_distance(_vector(1.0, index=0)))
+        .limit(2)
+    )
+    ranked = result.scalars().all()
+    assert [row.sequence for row in ranked] == [1, 2]
+
+
+async def test_search_vector_generated_and_matches(session, chunk_set_id: str) -> None:
+    """tsvector 生成列由 text 派生；plainto_tsquery 命中/不命中符合预期。"""
+    repo = SqlalchemyChunkRepository(session)
+    await repo.add_many(
+        [
+            _chunk(chunk_set_id, 1, text="Graph neural networks are powerful models"),
+            _chunk(chunk_set_id, 2, text="Reinforcement learning for robot control"),
+        ]
+    )
+    await session.commit()
+
+    # 命中：english 配置支持词干化（networks → network）
+    matched = await session.execute(
+        select(ChunkORM).where(
+            ChunkORM.chunk_set_id == chunk_set_id,
+            ChunkORM.search_vector.bool_op("@@")(
+                func.plainto_tsquery("english", "network")
+            ),
+        )
+    )
+    assert [row.sequence for row in matched.scalars().all()] == [1]
+
+    # 不命中
+    unmatched = await session.execute(
+        select(ChunkORM).where(
+            ChunkORM.chunk_set_id == chunk_set_id,
+            ChunkORM.search_vector.bool_op("@@")(
+                func.plainto_tsquery("english", "quantum")
+            ),
+        )
+    )
+    assert unmatched.scalars().all() == []

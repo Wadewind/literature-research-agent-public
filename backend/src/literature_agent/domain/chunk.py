@@ -96,6 +96,7 @@ class Chunk:
         section_path: 章节路径；不属于任何章节时为 None。
         page_start/page_end: 来源页码范围；无任何来源定位时为 None。
         content_hash: 文本的 SHA-256 哈希。
+        embedding: 检索向量；尚未生成时为 None（Embedding 阶段补齐）。
     """
 
     chunk_id: str
@@ -107,6 +108,7 @@ class Chunk:
     page_start: int | None = None
     page_end: int | None = None
     content_hash: str = ""
+    embedding: list[float] | None = None
 
 
 @dataclass(frozen=True, slots=True)

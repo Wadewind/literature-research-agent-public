@@ -27,3 +27,15 @@ class ChunkRepository(Protocol):
     async def count_by_chunk_set(self, chunk_set_id: str) -> int:
         """统计 ChunkSet 下的 Chunk 数量。"""
         ...
+
+    async def list_pending_embedding(self, chunk_set_id: str, limit: int) -> list[Chunk]:
+        """查询尚未生成向量的 Chunk（embedding 为 null），按 ``sequence`` 升序。"""
+        ...
+
+    async def save_embeddings(self, embeddings: dict[str, list[float]]) -> None:
+        """批量写回向量（键为 chunk_id），每批在一个短事务中提交。"""
+        ...
+
+    async def count_embedded(self, chunk_set_id: str) -> int:
+        """统计 ChunkSet 下已生成向量（embedding 非 null）的 Chunk 数量。"""
+        ...

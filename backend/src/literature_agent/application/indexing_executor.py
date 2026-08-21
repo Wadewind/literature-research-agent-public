@@ -1,9 +1,15 @@
-"""Indexing 执行器：把一次索引 Run 推进到终态（切片 4 只做到 chunking）。
+"""Indexing 执行器：把一次索引 Run 推进到终态（chunking + embedding）。
 
 流程：复用检查 → 读取 Element（短事务）→ ChunkBuilder 构建（事务外）
-→ 原子提交 Chunk/映射/ChunkSet 就绪与 Run 终态。结构与
-``IngestionExecutor`` 同构：每个短事务只做一件事，事务外不做数据库
-读写，取消检查分布在事务入口。Embedding 在切片 5 接入。
+→ 提交 Chunk/映射（ChunkSet 保持 running，发 chunking_completed）
+→ 分批 Embedding（事务外调用模型，每批一个短事务写回向量）
+→ 最终事务提交 ChunkSet 就绪与 Run 终态。结构与
+``IngestionExecutor`` 同构：每个短事务只做一件事，模型调用与 Chunk
+构建发生在数据库事务外，取消检查分布在批次入口。
+
+重跑语义（Effectively Once）：failed/running 遗留 ChunkSet 重置复用
+同一行；chunks 已存在（上次已提交）则跳过 chunking，只补 embedding
+为 null 的批次；``(chunk_set_id, sequence)`` 唯一约束兜底重复提交。
 """
 
 import logging
@@ -15,6 +21,7 @@ from uuid import uuid4
 
 from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.failure_policy import apply_run_failure
+from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.application.ports.attempt_repository import AttemptRepository
 from literature_agent.application.ports.chunk_repository import ChunkRepository
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
@@ -67,12 +74,14 @@ class IndexingExecutor[TSession: Session]:
     """索引执行器，由 RunExecutionService 在认领 Run 后调用。
 
     不变量:
-        - Chunk 构建（ChunkBuilder）发生在数据库事务外；
-        - Chunk、Element 映射、ChunkSet 就绪、Run 终态和收尾事件在
-          同一事务原子提交，不暴露半成品；
+        - Chunk 构建（ChunkBuilder）与模型调用发生在数据库事务外；
+        - Chunk/映射在同一事务提交后 ChunkSet 仍为 running，直到全部
+          向量写回后才在最终事务与 Run 终态一起标记 ready；
+        - Embedding 分批执行，每批一个短事务写回，批次间检查取消；
+          取消后已写入的向量保留，重跑只补 null 批次；
         - 相同 (parse_revision_id, profile_hash) 已有 ready ChunkSet
-          时复用，不重复切分；
-        - 提交前检查取消，取消后不提交新结果。
+          时复用，不重复切分也不调用模型；
+        - 每次模型调用经 ModelGateway 记录（含 run_id）。
     """
 
     def __init__(
@@ -87,6 +96,8 @@ class IndexingExecutor[TSession: Session]:
         attempt_repo_factory: Callable[[TSession], AttemptRepository],
         outbox_repo_factory: Callable[[TSession], OutboxRepository],
         profile: ChunkProfile,
+        model_gateway: ModelGateway[TSession],
+        embedding_batch_size: int = 32,
         max_run_attempts: int = 3,
         event_notifier: EventNotifier | None = None,
     ) -> None:
@@ -103,6 +114,8 @@ class IndexingExecutor[TSession: Session]:
             attempt_repo_factory: 根据 session 创建 AttemptRepository 的工厂。
             outbox_repo_factory: 根据 session 创建 OutboxRepository 的工厂。
             profile: Chunk 切分配置画像（含当前活动 Embedding 参数）。
+            model_gateway: 模型调用入口（统一计时与调用记录）。
+            embedding_batch_size: 单次 Embedding 调用的文本数（批次大小）。
             max_run_attempts: 最大执行尝试次数（含首次），临时错误超出后 FAILED。
             event_notifier: 事件通知器，默认 Noop。
         """
@@ -116,6 +129,8 @@ class IndexingExecutor[TSession: Session]:
         self._attempt_repo_factory = attempt_repo_factory
         self._outbox_repo_factory = outbox_repo_factory
         self._profile = profile
+        self._model_gateway = model_gateway
+        self._embedding_batch_size = embedding_batch_size
         self._max_run_attempts = max_run_attempts
         self._event_notifier = event_notifier or NoopEventNotifier()
 
@@ -140,19 +155,30 @@ class IndexingExecutor[TSession: Session]:
             return
         chunk_set, revision = prepared
 
-        # 短事务：读取 Element 与来源定位
-        elements, locations = await self._load_elements(revision.revision_id)
+        # chunking 阶段：重跑时 chunks 已提交则跳过，只补向量
+        if await self._count_chunks(chunk_set.chunk_set_id) == 0:
+            # 短事务：读取 Element 与来源定位
+            elements, locations = await self._load_elements(revision.revision_id)
 
-        # 事务外：构建 Chunk 草稿（纯函数，确定性）
-        try:
-            drafts = build_chunks(elements, locations, self._profile)
-        except Exception as exc:
-            logger.warning("Chunk 构建失败: run_id=%s", run.run_id, exc_info=True)
-            await self._mark_failed(run, chunk_set, exc, correlation_id)
-            return
+            # 事务外：构建 Chunk 草稿（纯函数，确定性）
+            try:
+                drafts = build_chunks(elements, locations, self._profile)
+            except Exception as exc:
+                logger.warning("Chunk 构建失败: run_id=%s", run.run_id, exc_info=True)
+                await self._mark_failed(run, chunk_set, exc, correlation_id)
+                return
 
-        # 事务 C：原子提交 Chunk/映射、ChunkSet 就绪与 Run 终态
-        await self._commit_success(run, chunk_set, drafts, correlation_id)
+            # 事务 C：提交 Chunk/映射（ChunkSet 保持 running）
+            if not await self._commit_chunks(run, chunk_set, drafts, correlation_id):
+                return  # 提交前命中取消
+
+        # Embedding 阶段：分批补 embedding 为 null 的 Chunk
+        prompt_tokens_total = await self._embed_pending(run, chunk_set, correlation_id)
+        if prompt_tokens_total is None:
+            return  # 已取消或失败（内部已推进终态）
+
+        # 最终事务：ChunkSet ready + Run SUCCEEDED + 收尾事件
+        await self._commit_ready(run, chunk_set, prompt_tokens_total, correlation_id)
 
     async def _prepare(
         self,
@@ -256,15 +282,23 @@ class IndexingExecutor[TSession: Session]:
             )
         return elements, locations
 
-    async def _commit_success(
+    async def _count_chunks(self, chunk_set_id: str) -> int:
+        """短事务：统计 ChunkSet 已有 Chunk 数（判断重跑是否跳过 chunking）。"""
+        async with self._session_factory() as session:
+            return await self._chunk_repo_factory(session).count_by_chunk_set(chunk_set_id)
+
+    async def _commit_chunks(
         self,
         run: Run,
         chunk_set: ChunkSet,
         drafts: list[ChunkDraft],
         correlation_id: str,
-    ) -> None:
-        """事务 C：原子提交 Chunk/映射、ChunkSet 就绪、Run 终态与收尾事件。"""
-        now = datetime.now(UTC)
+    ) -> bool:
+        """事务 C：原子提交 Chunk/映射并记录 chunking_completed。
+
+        ChunkSet 保持 running，待全部向量写回后才在最终事务标记 ready。
+        返回 False 表示提交前命中取消（已推进 CANCELLED）。
+        """
         async with self._session_factory() as session:
             run_repo = self._run_repo_factory(session)
             run_row = await run_repo.get_by_id_for_update(run.run_id, run.owner_id)
@@ -273,7 +307,7 @@ class IndexingExecutor[TSession: Session]:
             if await self._finalize_if_cancelled(session, run_row, correlation_id):
                 await session.commit()
                 await notify_run_event(self._event_notifier, run.run_id)
-                return
+                return False
 
             # 持久化 ID 在提交时分配，ChunkBuilder 保持确定性纯函数
             chunks = [
@@ -305,7 +339,6 @@ class IndexingExecutor[TSession: Session]:
             # 跨 Repository 的插入顺序：先落 Chunk 再落引用它的 links
             await session.flush()
             await chunk_repo.add_links(links)
-            await self._chunk_set_repo_factory(session).save(chunk_set.mark_ready(now))
 
             await self._emit_progress(
                 session,
@@ -315,6 +348,99 @@ class IndexingExecutor[TSession: Session]:
                     "chunk_set_id": chunk_set.chunk_set_id,
                     "chunk_count": len(chunks),
                     "profile_hash": self._profile.profile_hash,
+                },
+                correlation_id,
+            )
+            await session.commit()
+        await notify_run_event(self._event_notifier, run.run_id)
+        return True
+
+    async def _embed_pending(
+        self,
+        run: Run,
+        chunk_set: ChunkSet,
+        correlation_id: str,
+    ) -> int | None:
+        """分批为 embedding 为 null 的 Chunk 生成并写回向量。
+
+        每批：短事务（持锁检查取消 + 读取待处理批次）→ 事务外经
+        ModelGateway 调用模型 → 短事务写回向量。取消时保留已写入向量，
+        重跑只补 null 批次；空 ChunkSet 不调用模型。
+
+        返回本次运行的 prompt token 总量；取消或失败时返回 None
+        （终态已在内部推进）。
+        """
+        prompt_tokens_total = 0
+        while True:
+            async with self._session_factory() as session:
+                run_repo = self._run_repo_factory(session)
+                run_row = await run_repo.get_by_id_for_update(run.run_id, run.owner_id)
+                if run_row is None:
+                    raise RunConcurrentModificationError(run.run_id)
+                if await self._finalize_if_cancelled(session, run_row, correlation_id):
+                    await session.commit()
+                    await notify_run_event(self._event_notifier, run.run_id)
+                    return None
+                pending = await self._chunk_repo_factory(
+                    session
+                ).list_pending_embedding(
+                    chunk_set.chunk_set_id, self._embedding_batch_size
+                )
+            if not pending:
+                return prompt_tokens_total
+
+            # 模型调用不发生在数据库事务内；每次调用记录含 run_id
+            try:
+                result = await self._model_gateway.embed(
+                    [chunk.text for chunk in pending], run_id=run.run_id
+                )
+            except Exception as exc:
+                logger.warning("Embedding 调用失败: run_id=%s", run.run_id, exc_info=True)
+                await self._mark_failed(run, chunk_set, exc, correlation_id)
+                return None
+
+            async with self._session_factory() as session:
+                await self._chunk_repo_factory(session).save_embeddings(
+                    {
+                        chunk.chunk_id: vector
+                        for chunk, vector in zip(pending, result.vectors, strict=True)
+                    }
+                )
+                await session.commit()
+            prompt_tokens_total += result.usage.prompt_tokens or 0
+
+    async def _commit_ready(
+        self,
+        run: Run,
+        chunk_set: ChunkSet,
+        prompt_tokens_total: int,
+        correlation_id: str,
+    ) -> None:
+        """最终事务：ChunkSet 就绪、Run 终态与收尾事件原子提交。"""
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            run_repo = self._run_repo_factory(session)
+            run_row = await run_repo.get_by_id_for_update(run.run_id, run.owner_id)
+            if run_row is None:
+                raise RunConcurrentModificationError(run.run_id)
+            if await self._finalize_if_cancelled(session, run_row, correlation_id):
+                await session.commit()
+                await notify_run_event(self._event_notifier, run.run_id)
+                return
+
+            chunk_repo = self._chunk_repo_factory(session)
+            chunk_count = await chunk_repo.count_by_chunk_set(chunk_set.chunk_set_id)
+            embedded_count = await chunk_repo.count_embedded(chunk_set.chunk_set_id)
+            await self._chunk_set_repo_factory(session).save(chunk_set.mark_ready(now))
+
+            await self._emit_progress(
+                session,
+                run_row,
+                "embedding_completed",
+                {
+                    "chunk_set_id": chunk_set.chunk_set_id,
+                    "embedded_count": embedded_count,
+                    "prompt_tokens": prompt_tokens_total,
                 },
                 correlation_id,
             )
@@ -328,7 +454,7 @@ class IndexingExecutor[TSession: Session]:
                 "indexing_completed",
                 {
                     "chunk_set_id": chunk_set.chunk_set_id,
-                    "chunk_count": len(chunks),
+                    "chunk_count": chunk_count,
                     "reused": False,
                 },
                 correlation_id,
@@ -343,7 +469,7 @@ class IndexingExecutor[TSession: Session]:
         exc: Exception,
         correlation_id: str,
     ) -> None:
-        """构建失败：ChunkSet 标记 FAILED，Run 按错误分类 FAILED 或 RETRY_WAIT。"""
+        """构建或 Embedding 失败：ChunkSet 标记 FAILED，Run 按错误分类 FAILED 或 RETRY_WAIT。"""
         now = datetime.now(UTC)
         error = {
             "type": type(exc).__name__,

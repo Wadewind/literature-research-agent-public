@@ -75,6 +75,17 @@ class SqlalchemyChunkSetRepository(ChunkSetRepository):
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
 
+    async def get_latest_by_revision(self, parse_revision_id: str) -> ChunkSet | None:
+        """按 Parse Revision 查询最新创建的 ChunkSet。"""
+        result = await self._session.execute(
+            select(ChunkSetORM)
+            .where(ChunkSetORM.parse_revision_id == parse_revision_id)
+            .order_by(ChunkSetORM.created_at.desc())
+            .limit(1),
+        )
+        orm = result.scalar_one_or_none()
+        return _to_domain(orm) if orm else None
+
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新。"""
         result = await self._session.execute(

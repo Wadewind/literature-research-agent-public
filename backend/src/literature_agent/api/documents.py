@@ -18,6 +18,12 @@ from literature_agent.domain.exceptions import (
     PaperVersionNotFoundError,
     ProjectNotFoundError,
 )
+from literature_agent.infrastructure.persistence.chunk_repository import (
+    SqlalchemyChunkRepository,
+)
+from literature_agent.infrastructure.persistence.chunk_set_repository import (
+    SqlalchemyChunkSetRepository,
+)
 from literature_agent.infrastructure.persistence.element_repository import (
     SqlalchemyElementRepository,
 )
@@ -35,6 +41,9 @@ from literature_agent.infrastructure.persistence.project_paper_repository import
 )
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
+)
+from literature_agent.infrastructure.persistence.run_repository import (
+    SqlalchemyRunRepository,
 )
 
 router = APIRouter(prefix="/api/v1/projects", tags=["documents"])
@@ -86,6 +95,24 @@ class ElementResponse(BaseModel):
     locations: list[SourceLocationResponse]
 
 
+class IndexStatusChunkSetResponse(BaseModel):
+    """当前 Revision 最新 ChunkSet 的索引状态。"""
+
+    chunk_set_id: str
+    status: str
+    chunk_count: int
+    embedded_count: int
+    profile_hash: str
+
+
+class IndexStatusResponse(BaseModel):
+    """文档当前 Revision 的索引状态。"""
+
+    revision_id: str
+    chunk_set: IndexStatusChunkSetResponse | None
+    indexing_run_id: str | None
+
+
 async def get_document_query_service(request: Request) -> DocumentQueryService:
     """从应用状态构建 DocumentQueryService。"""
     app_state = request.app.state.app_state
@@ -97,6 +124,9 @@ async def get_document_query_service(request: Request) -> DocumentQueryService:
         project_paper_repo_factory=SqlalchemyProjectPaperRepository,
         parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
         element_repo_factory=SqlalchemyElementRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        chunk_repo_factory=SqlalchemyChunkRepository,
+        run_repo_factory=SqlalchemyRunRepository,
     )
 
 
@@ -214,3 +244,36 @@ async def list_elements(
     except (ProjectNotFoundError, PaperVersionNotFoundError, DocumentNotReadyError) as exc:
         _handle_query_errors(exc)
     return [_element_to_response(view) for view in views]
+
+
+@router.get(
+    "/{project_id}/paper-versions/{version_id}/index-status",
+    response_model=IndexStatusResponse,
+)
+async def get_index_status(
+    project_id: str,
+    version_id: str,
+    actor: ActorDep,
+    service: DocumentQueryServiceDep,
+) -> IndexStatusResponse:
+    """获取文档当前 Revision 的索引状态（最新 ChunkSet 与 indexing Run）。"""
+    try:
+        index_status = await service.get_index_status(actor, project_id, version_id)
+    except (ProjectNotFoundError, PaperVersionNotFoundError, DocumentNotReadyError) as exc:
+        _handle_query_errors(exc)
+    chunk_set = index_status.chunk_set
+    return IndexStatusResponse(
+        revision_id=index_status.revision_id,
+        chunk_set=(
+            IndexStatusChunkSetResponse(
+                chunk_set_id=chunk_set.chunk_set_id,
+                status=chunk_set.status,
+                chunk_count=chunk_set.chunk_count,
+                embedded_count=chunk_set.embedded_count,
+                profile_hash=chunk_set.profile_hash,
+            )
+            if chunk_set is not None
+            else None
+        ),
+        indexing_run_id=index_status.indexing_run_id,
+    )

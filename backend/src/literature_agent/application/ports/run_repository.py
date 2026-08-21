@@ -46,3 +46,10 @@ class RunRepository(Protocol):
         非终态状态见 ``domain.run.ACTIVE_RUN_STATUSES``。
         """
         ...
+
+    async def get_latest_indexing_run_id(self, parse_revision_id: str) -> str | None:
+        """查询指定 Parse Revision 最近一次 indexing Run 的 ID；不存在返回 None。
+
+        按 ``input_payload.parse_revision_id`` 匹配，按创建时间倒序取第一条。
+        """
+        ...

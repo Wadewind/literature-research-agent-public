@@ -5,6 +5,8 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from literature_agent.application.ports.chunk_repository import ChunkRepository
+from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
 from literature_agent.application.ports.element_repository import ElementRepository
 from literature_agent.application.ports.paper_repository import PaperRepository
 from literature_agent.application.ports.paper_version_repository import (
@@ -17,6 +19,7 @@ from literature_agent.application.ports.project_paper_repository import (
     ProjectPaperRepository,
 )
 from literature_agent.application.ports.project_repository import ProjectRepository
+from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.document_element import (
@@ -63,6 +66,26 @@ class ElementView:
     locations: list[ElementSourceLocation]
 
 
+@dataclass(frozen=True, slots=True)
+class ChunkSetStatusView:
+    """当前 Revision 最新 ChunkSet 的索引状态。"""
+
+    chunk_set_id: str
+    status: str
+    chunk_count: int
+    embedded_count: int
+    profile_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class IndexStatus:
+    """文档当前 Revision 的索引状态（index-status API 的返回体）。"""
+
+    revision_id: str
+    chunk_set: ChunkSetStatusView | None
+    indexing_run_id: str | None
+
+
 class DocumentQueryService[TSession: Session]:
     """按授权上下文查询文档结构与 Element 内容。"""
 
@@ -75,6 +98,9 @@ class DocumentQueryService[TSession: Session]:
         project_paper_repo_factory: Callable[[TSession], ProjectPaperRepository],
         parse_revision_repo_factory: Callable[[TSession], ParseRevisionRepository],
         element_repo_factory: Callable[[TSession], ElementRepository],
+        chunk_set_repo_factory: Callable[[TSession], ChunkSetRepository],
+        chunk_repo_factory: Callable[[TSession], ChunkRepository],
+        run_repo_factory: Callable[[TSession], RunRepository],
     ) -> None:
         """初始化 DocumentQueryService。
 
@@ -85,6 +111,9 @@ class DocumentQueryService[TSession: Session]:
             paper_version_repo_factory: 根据 session 创建 PaperVersionRepository 的工厂。
             parse_revision_repo_factory: 根据 session 创建 ParseRevisionRepository 的工厂。
             element_repo_factory: 根据 session 创建 ElementRepository 的工厂。
+            chunk_set_repo_factory: 根据 session 创建 ChunkSetRepository 的工厂。
+            chunk_repo_factory: 根据 session 创建 ChunkRepository 的工厂。
+            run_repo_factory: 根据 session 创建 RunRepository 的工厂。
         """
         self._session_factory = session_factory
         self._project_repo_factory = project_repo_factory
@@ -93,6 +122,9 @@ class DocumentQueryService[TSession: Session]:
         self._project_paper_repo_factory = project_paper_repo_factory
         self._parse_revision_repo_factory = parse_revision_repo_factory
         self._element_repo_factory = element_repo_factory
+        self._chunk_set_repo_factory = chunk_set_repo_factory
+        self._chunk_repo_factory = chunk_repo_factory
+        self._run_repo_factory = run_repo_factory
 
     async def get_document(
         self,
@@ -163,6 +195,50 @@ class DocumentQueryService[TSession: Session]:
                 ElementView(element=e, locations=by_element.get(e.element_id, []))
                 for e in elements
             ]
+
+    async def get_index_status(
+        self,
+        actor: ActorContext,
+        project_id: str,
+        version_id: str,
+    ) -> IndexStatus:
+        """返回当前 Revision 的索引状态（最新 ChunkSet 与最近一次 indexing Run）。
+
+        授权链与 ``get_document`` 一致；无 ChunkSet 时 ``chunk_set`` 为 None
+        （例如 indexing Run 尚未创建产物或刚启动）。
+        """
+        async with self._session_factory() as session:
+            revision = await self._load_current_revision(
+                session, actor, project_id, version_id
+            )
+            chunk_set = await self._chunk_set_repo_factory(
+                session
+            ).get_latest_by_revision(revision.revision_id)
+            indexing_run_id = await self._run_repo_factory(
+                session
+            ).get_latest_indexing_run_id(revision.revision_id)
+            if chunk_set is None:
+                return IndexStatus(
+                    revision_id=revision.revision_id,
+                    chunk_set=None,
+                    indexing_run_id=indexing_run_id,
+                )
+            chunk_repo = self._chunk_repo_factory(session)
+            return IndexStatus(
+                revision_id=revision.revision_id,
+                chunk_set=ChunkSetStatusView(
+                    chunk_set_id=chunk_set.chunk_set_id,
+                    status=chunk_set.status.value,
+                    chunk_count=await chunk_repo.count_by_chunk_set(
+                        chunk_set.chunk_set_id
+                    ),
+                    embedded_count=await chunk_repo.count_embedded(
+                        chunk_set.chunk_set_id
+                    ),
+                    profile_hash=chunk_set.profile_hash,
+                ),
+                indexing_run_id=indexing_run_id,
+            )
 
     async def _load_current_revision(
         self,

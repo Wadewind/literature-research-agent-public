@@ -261,7 +261,7 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 2. **阶段契约与评测 Fixture**（已完成 2026-08-20，契约见下文「切片 2」）：定最小错误码（`project_not_indexed`、`conversation_busy`、`invalid_scope` 等）；评测语料使用合成 PDF，由子智能体在本切片构建，保证期望 Evidence 的页码/章节完全确定；
 3. **Model Gateway**（已完成 2026-08-20，契约见下文「切片 3」）：`EmbeddingModel`/`ChatModel` Port、Fake Provider、OpenAI-compatible Adapter（基于已有 httpx2，不引入 SDK）、错误分类、`model_invocations` 表（不存完整 Prompt）；`pgvector` 与 `tiktoken` 依赖各自独立 `chore:` 提交；
 4. **ChunkSet + Worker 分发**（已完成 2026-08-20，契约见下文「切片 4」）：结构感知 Chunk Builder（章节前缀、表格/题注完整、Element 映射）、profile 哈希、迁移；同切片落地 `RunType` 枚举与 Worker 按 `run_type` 显式分发的组合 Executor（indexing 执行器先只跑到 chunking，不带向量）；
-5. **Indexing Run**：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
+5. **Indexing Run**（已完成 2026-08-21，契约见下文「切片 5」）：pgvector 镜像与迁移（compose/testcontainers 换 `pgvector/pgvector:pg18`，本地开发库可重建）、批量 Embedding、复用、重试和取消、`index-status` API；
 6. **Hybrid Retrieval**：FTS（english）、向量检索、RRF、Project 强过滤和上下文预算；
 7. **Evidence/Citation**：Evidence、Claim、Citation 和确定性 Citation Validator（段落级 Claim 严格绑定）；
 8. **RAG Conversation**：Conversation、Message、版本范围快照、后台回答 Run 和最终原子提交、无证据路径；
@@ -462,6 +462,67 @@ Adapter 层对临时错误最多重试 `AGENT_MODEL_MAX_RETRIES` 次（默认 2�
 - Domain：`test_chunk_profile.py`（5 例：默认值、哈希确定性、chunk/embedding 参数均参与哈希、非法参数）；`test_chunk_builder.py`（10 例：分组、整 Element 重叠、超限独立 Chunk、表格题注同 Chunk、章节前缀与开关、章节边界、页眉页脚/空文本排除、页码范围、空文档、content_hash）；
 - Application：`test_indexing_executor.py`（9 例：全链路事件序列、ready 复用、failed 行重置重跑、空文档、revision 缺失/未成功永久 FAILED、构建失败 RETRY_WAIT、取消竞争、run_type 防御）；`test_run_dispatcher.py`（3 例：分发到注册执行器、未知类型 FAILED、未接线枚举类型 FAILED）；`test_ingestion_executor.py` 新增 3 例（成功后同事务产生 indexing Run + run_created + Outbox、复用路径同样触发、run_type 防御）；
 - Integration：`test_chunk_repository.py`（4 例：ChunkSet 往返与唯一约束、状态保存、Chunk 往返与 sequence 唯一、links 复合主键与有序查询）；`test_queue_worker.py` 新增端到端（Outbox → ARQ → ingestion SUCCEEDED → 自动创建 indexing Run → 第二轮派发执行 → ChunkSet ready、Chunk/links 可查，Fake Parser）。
+
+### 切片 5：Indexing Run（契约定稿）
+
+已于 2026-08-21 实现完成。Indexing Run 在切片 4 的 chunking 之后接入批量 Embedding 与 pgvector/tsvector 检索列，并提供 `index-status` 查询 API。
+
+#### 镜像与迁移
+
+- `deploy/compose/compose.yml`、`deploy/compose/e2e.yml` 与 `tests/integration/conftest.py` 的 PostgreSQL 镜像统一换为 `pgvector/pgvector:pg18`；conftest 在 `create_all` 前执行 `CREATE EXTENSION IF NOT EXISTS vector`（与迁移顺序一致）。本地开发库数据卷需重建（`down -v` 后 `up`）；
+- 迁移 `f2a7b3c9d4e1`（`down_revision = e9c4d2f8a1b7`，upgrade/downgrade 已在一次性容器中实跑通过）：`CREATE EXTENSION IF NOT EXISTS vector`；`chunks` 增加 `embedding`（`vector(1024)` 可空列，pgvector SQLAlchemy 类型 `Vector(1024)`）与 `search_vector`（`tsvector` 生成列，`GENERATED ALWAYS AS (to_tsvector('english', text)) STORED`，SQLAlchemy `Computed`，GIN 索引 `ix_chunks_search_vector`）；
+- **维度固定取舍**：`embedding` 列维度在迁移时固定为 1024（与 `AGENT_EMBEDDING_DIMENSIONS` 默认值一致），改维度需要新迁移，这是有意取舍；向量列不建索引（首版精确检索，不建 HNSW，切片 6 检索实验后再评估）。
+
+#### Embedding 阶段事务与重跑语义
+
+IndexingExecutor 流程调整为：事务 A 准备（复用/创建/重置 ChunkSet + `indexing_started`）→ 短事务读 Element → 事务外 ChunkBuilder → 事务 C 提交 chunks/links（**ChunkSet 保持 `running`**，发 `chunking_completed`）→ Embedding 阶段 → 最终事务提交 ready 与 Run 终态：
+
+- Embedding 阶段循环：短事务（持 Run 行锁检查取消 + 读 embedding 为 null 的一批，批次大小 `AGENT_EMBEDDING_BATCH_SIZE` 默认 32）→ 事务外经 ModelGateway 调 EmbeddingModel（每次调用记录 `model_invocations`，传 `run_id`）→ 短事务写回该批向量；
+- 批次间取消：`CANCEL_REQUESTED` → Run `CANCELLED`，已写向量保留，ChunkSet 保持 `running`，无收尾事件；
+- 最终事务：ChunkSet `ready` + Run `SUCCEEDED` + `embedding_completed`（`embedded_count`、`prompt_tokens` 摘要）+ `indexing_completed`；
+- **重跑语义（Effectively Once）**：failed/running 遗留 ChunkSet 重置复用同一行；chunks 已存在（上次事务 C 已提交）则跳过 chunking，只补 embedding 为 null 的批次；`(chunk_set_id, sequence)` 唯一约束兜底重复提交，重复 Job 不产生重复 chunks；
+- 错误分类沿用切片 3：临时错误（429/5xx/超时）→ ChunkSet `failed` + Run `RETRY_WAIT` + Outbox 重置；永久错误（auth/invalid_request/response）→ Run `FAILED`；
+- 空 ChunkSet（零 chunks）直接 ready，不调用模型。
+
+#### Embedding backend 开关与 fake profile 映射
+
+- 新增 Settings：`AGENT_EMBEDDING_BACKEND`（`fake` / `openai_compatible`，**默认 `fake`**——本地开发与测试默认不触网，仿 `AGENT_PARSER_BACKEND` 模式）与 `AGENT_EMBEDDING_BATCH_SIZE`（默认 32）；
+- `fake`：生产侧 `infrastructure/models/fake_models.py` 的确定性 `FakeEmbeddingModel`（文本 SHA-256 派生向量，维度固定 1024 与列一致），ChunkProfile 的 embedding 三元组固定为 `provider="fake", model="fake-embedding", dimensions=1024`，避免 fake 产出的 ChunkSet 与真实 profile 混淆；
+- `openai_compatible`：切片 3 的 `OpenAiCompatibleEmbedding`（provider 取 `AGENT_EMBEDDING_BASE_URL` 主机名），profile 三元组来自 `AGENT_EMBEDDING_*`，缺 API Key 时首次调用抛 `ModelAuthError`；
+- Worker 装配 `_build_model_stack` 统一产出 `ModelGateway + ChunkProfile + 可关闭 Adapter`，`ModelGateway` 的 invocation 记录持久化走 `SqlalchemyModelInvocationRepository`。
+
+#### index-status API
+
+`GET /api/v1/projects/{project_id}/paper-versions/{version_id}/index-status`（在 `documents.py`，授权链与 document/elements 一致：owner → Project → ProjectPaper → selected Version，越权/不存在 404；无当前 Revision → 404 `document_not_ready`）：
+
+```text
+200 {
+  "revision_id": "...",
+  "chunk_set": {"chunk_set_id", "status", "chunk_count", "embedded_count", "profile_hash"} | null,
+  "indexing_run_id": "..." | null
+}
+```
+
+`chunk_set` 取当前 Revision 最新创建的 ChunkSet（`ChunkSetRepository.get_latest_by_revision`），无 ChunkSet 为 null；`indexing_run_id` 取该 Revision 最近一次 indexing Run（`RunRepository.get_latest_indexing_run_id`，按 `input_payload.parse_revision_id` 匹配）。
+
+#### 事件
+
+完整索引事件序列：`indexing_started` → `chunking_completed`（chunk_set_id、chunk_count、profile_hash）→ `embedding_completed`（chunk_set_id、embedded_count、prompt_tokens）→ `indexing_completed`（chunk_set_id、chunk_count、reused）。复用路径仍只有 `indexing_completed(reused=true)`。重跑跳过 chunking 时无 `chunking_completed`。
+
+#### 测试要点
+
+- Application（`test_indexing_executor.py`，14 例）：全链路事件序列（含 `embedding_completed`）与 1024 维向量写回、多批（batch=2 时 5 chunks 分 3 批）、批次间取消保留已写向量、模型临时错误 RETRY_WAIT（chunks 保留、invocation 记录 failed 含 run_id）、永久错误 FAILED、部分失败后重跑只补 null 且不重复 chunks、空 ChunkSet 不调模型、ready 复用不调模型；
+- Integration：`test_chunk_repository.py` 新增 3 例（向量往返与 pending/count_embedded、cosine 距离 `<=>` Top-K 排序、tsvector 生成列 `@@ plainto_tsquery` 命中/不命中与词干化）；迁移 upgrade/downgrade 在一次性容器实跑通过；
+- Worker 端到端（`test_queue_worker.py`）：ingestion → indexing 两轮派发后 chunks 带 1024 维 embedding 与非空 search_vector、ChunkSet ready、`model_invocations` 含 indexing run_id、`get_index_status` 授权链走通且计数正确（Fake Parser + 生产侧 Fake Embedding）；
+- API（`test_index_status.py`，7 例）：ready/running/failed/无 ChunkSet（null）/未知版本 404/越权 404/无当前 Revision 404 `document_not_ready`。
+
+#### 已知限制
+
+- 向量维度固定 1024（迁移级取舍），更换维度需新迁移并重建索引；
+- embedding 列无向量索引，精确检索随语料增长的性能在切片 6 检索实验中评估；
+- fake backend 的 ChunkProfile 与真实 Provider 的 profile 不同哈希，切换 backend 会产生新 ChunkSet 并重新切分+Embedding（预期行为）；
+- 取消后 ChunkSet 保持 `running`，由下一次触发（重跑）补齐，不提供独立「续跑」入口；
+- `search_vector` 使用 `english` 配置，中文语料分词不在本阶段范围。
 
 ## 测试方式
 

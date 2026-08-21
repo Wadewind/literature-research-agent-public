@@ -33,6 +33,15 @@ class FakeChunkSetRepository(ChunkSetRepository):
                 return chunk_set
         return None
 
+    async def get_latest_by_revision(self, parse_revision_id: str) -> ChunkSet | None:
+        """按 Revision 返回最新创建的 ChunkSet。"""
+        matches = [
+            c for c in self._chunk_sets.values() if c.parse_revision_id == parse_revision_id
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda c: c.created_at)
+
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新。"""
         self._chunk_sets[chunk_set.chunk_set_id] = chunk_set
