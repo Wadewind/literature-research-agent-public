@@ -37,7 +37,7 @@ WORKFLOW_VERSION = "review.v1"
 MODEL_PROFILE_VERSION = "review-default.v1"
 PROMPT_VERSIONS = {
     "search_strategy": "search_strategy.v1",
-    "evidence_extract": "evidence_extract.v1",
+    "evidence_extract": "review-evidence-extraction.v1",
     "outline_generate": "outline_generate.v1",
     "section_draft": "section_draft.v1",
     "consistency_check": "consistency_check.v1",

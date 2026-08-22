@@ -44,6 +44,10 @@ class ReviewRepository(Protocol):
         """按 ``(run_id, idempotency_key)`` 原子创建或返回既有 Step。"""
         ...
 
+    async def advance_step(self, step: RunStep, expected_status: str) -> bool:
+        """仅在当前状态匹配时推进 Step，拒绝并发回退终态。"""
+        ...
+
     async def list_steps_scoped(self, run_id: str, project_id: str, owner_id: str) -> list[RunStep]:
         """按执行顺序列出有权访问的 RunStep。"""
         ...
@@ -84,6 +88,10 @@ class ReviewRepository(Protocol):
 
     async def add_output(self, output: ReviewOutput) -> ReviewOutput:
         """追加一个版本化 ReviewOutput；不提供覆盖更新。"""
+        ...
+
+    async def get_or_add_output(self, output: ReviewOutput) -> ReviewOutput:
+        """按 ``(review_run_id, idempotency_key)`` 原子创建或返回 Output。"""
         ...
 
     async def list_outputs_scoped(

@@ -19,6 +19,24 @@ class FakeEvidenceRepository(EvidenceRepository):
         for item in evidence:
             self._evidence[item.evidence_id] = item
 
+    async def get_or_add_many(self, evidence: list[Evidence]) -> list[Evidence]:
+        """按 Run 与 Chunk 复用既有 Evidence。"""
+        result: list[Evidence] = []
+        for item in evidence:
+            existing = next(
+                (
+                    current
+                    for current in self._evidence.values()
+                    if current.run_id == item.run_id and current.chunk_id == item.chunk_id
+                ),
+                None,
+            )
+            if existing is None:
+                self._evidence[item.evidence_id] = item
+                existing = item
+            result.append(existing)
+        return result
+
     async def list_by_run(self, run_id: str) -> list[Evidence]:
         """按 Run 返回 Evidence，按创建时间升序。"""
         result = [e for e in self._evidence.values() if e.run_id == run_id]

@@ -3,6 +3,8 @@
 from literature_agent.domain.exceptions import (
     CheckpointDataError,
     CheckpointUnavailableError,
+    EvidenceMatrixInvalidError,
+    EvidenceMatrixScopeError,
     FileValidationError,
     InvalidPdfInputError,
     ParserResourceError,
@@ -18,6 +20,8 @@ def test_permanent_input_errors() -> None:
     assert is_permanent_error(InvalidPdfInputError("损坏"))
     assert is_permanent_error(FileValidationError("类型不支持"))
     assert is_permanent_error(CheckpointDataError("checkpoint 无效"))
+    assert is_permanent_error(EvidenceMatrixScopeError("范围非法"))
+    assert is_permanent_error(EvidenceMatrixInvalidError())
 
 
 def test_temporary_errors() -> None:

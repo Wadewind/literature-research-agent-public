@@ -168,6 +168,46 @@ class RunStep:
     completed_at: datetime | None
     created_at: datetime
 
+    def start(self) -> "RunStep":
+        """开始 Step；重复加载 running Step 时保持幂等。"""
+        if self.status is ReviewStepStatus.RUNNING:
+            return self
+        if self.status is not ReviewStepStatus.PENDING:
+            raise ValueError("只有 pending Step 可以开始")
+        return replace(
+            self,
+            status=ReviewStepStatus.RUNNING,
+            started_at=datetime.now(UTC),
+        )
+
+    def succeed(self, output_refs: dict) -> "RunStep":
+        """以小型业务引用完成 running Step。"""
+        _validate_json_object(output_refs, "Step 输出引用", _MAX_CONFIG_BYTES)
+        if self.status is ReviewStepStatus.SUCCEEDED and self.output_refs == output_refs:
+            return self
+        if self.status is not ReviewStepStatus.RUNNING:
+            raise ValueError("只有 running Step 可以成功")
+        return replace(
+            self,
+            status=ReviewStepStatus.SUCCEEDED,
+            output_refs=dict(output_refs),
+            error_code=None,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fail(self, error_code: str) -> "RunStep":
+        """以稳定错误码结束 pending/running Step。"""
+        if not error_code or len(error_code) > 100:
+            raise ValueError("Step error_code 不能为空且不得超过 100 字符")
+        if self.status not in {ReviewStepStatus.PENDING, ReviewStepStatus.RUNNING}:
+            raise ValueError("只有 pending/running Step 可以失败")
+        return replace(
+            self,
+            status=ReviewStepStatus.FAILED,
+            error_code=error_code,
+            completed_at=datetime.now(UTC),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewSource:

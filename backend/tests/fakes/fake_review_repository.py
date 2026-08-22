@@ -69,6 +69,14 @@ class FakeReviewRepository(ReviewRepository):
             return existing
         return await self.add_step(step)
 
+    async def advance_step(self, step: RunStep, expected_status: str) -> bool:
+        """仅在当前状态匹配时推进 Step。"""
+        for index, current in enumerate(self.steps):
+            if current.step_id == step.step_id and current.status.value == expected_status:
+                self.steps[index] = step
+                return True
+        return False
+
     async def list_steps_scoped(
         self, run_id: str, project_id: str, owner_id: str
     ) -> list[RunStep]:
@@ -131,6 +139,19 @@ class FakeReviewRepository(ReviewRepository):
     async def add_output(self, output: ReviewOutput) -> ReviewOutput:
         self.outputs.append(output)
         return output
+
+    async def get_or_add_output(self, output: ReviewOutput) -> ReviewOutput:
+        """按 Review Run 与幂等键复用既有 Output。"""
+        existing = next(
+            (
+                item
+                for item in self.outputs
+                if item.review_run_id == output.review_run_id
+                and item.idempotency_key == output.idempotency_key
+            ),
+            None,
+        )
+        return existing if existing is not None else await self.add_output(output)
 
     async def list_outputs_scoped(
         self, run_id: str, project_id: str, owner_id: str

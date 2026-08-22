@@ -244,6 +244,25 @@ def test_review_output_is_versioned_and_payload_is_bounded() -> None:
         )
 
 
+def test_run_step_terminal_state_cannot_be_reopened() -> None:
+    """Step 只允许 pending→running→succeeded，终态不能被旧节点回退。"""
+    step = create_run_step(
+        run_id="run-1",
+        step_key=ReviewStepKey.BUILD_EVIDENCE_MATRIX,
+        sequence=6,
+        idempotency_key="matrix:v1",
+    )
+    running = step.start()
+    succeeded = running.succeed({"evidence_matrix_output_id": "output-1"})
+
+    assert succeeded.status is ReviewStepStatus.SUCCEEDED
+    assert succeeded.succeed({"evidence_matrix_output_id": "output-1"}) == succeeded
+    with pytest.raises(ValueError, match="pending"):
+        succeeded.start()
+    with pytest.raises(ValueError, match="pending/running"):
+        succeeded.fail("late_failure")
+
+
 def test_artifact_rejects_inline_content_and_invalid_hash() -> None:
     """Artifact 只保存 Storage 引用；哈希和大小必须合法。"""
     with pytest.raises(ValueError, match="哈希"):

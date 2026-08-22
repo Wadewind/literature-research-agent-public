@@ -25,8 +25,9 @@ Worker 崩溃
 ```
 
 本切片的 `ReviewGraphFactory` 只提供可注入单个切片节点的 `review.v1` 演进骨架，用于验证真实
-checkpoint 和节点重放。Evidence、Outline、Interrupt 尚未实现，因此没有把 Review Executor 注册到
-生产 `RunDispatcher`：否则 Review Run 会无输出地虚假成功，或被半成品执行器永久卡住。
+checkpoint 和节点重放。切片 6 已实现 Evidence Matrix 应用服务，但 Search Strategy 图节点与
+Outline/Interrupt 尚未实现，因此仍未把 Review Executor 注册到生产 `RunDispatcher`：否则 Matrix
+之后直接到 `END`，Review Run 会在没有大纲和 Artifact 时虚假成功。
 
 ## 状态、数据与生命周期
 
@@ -98,7 +99,8 @@ Outbox。
 
 ## 已知限制
 
-- 固定图仍是 Runtime 契约骨架，尚未接线生产 Review Executor；切片 6 实现真实 Evidence 节点后再注册；
+- 固定图仍是 Runtime 契约骨架，尚未接线生产 Review Executor；应在切片 7 形成 Search Strategy、
+  Evidence Matrix 和 Outline interrupt 的完整执行边界后注册；
 - 本切片不实现 `interrupt()`/HumanInput，属于切片 7；
 - Checkpoint 尚无按删除 Project/Run 的清理和保留策略；
 - Attempt 分类依赖业务 Event 完整性；无法确定原因时安全保留记录，后续可增加告警；

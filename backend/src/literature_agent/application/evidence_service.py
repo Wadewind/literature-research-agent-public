@@ -127,8 +127,28 @@ class EvidenceService[TSession: Session]:
                     page_end=result.chunk.page_end,
                     excerpt=excerpt,
                 )
-            await evidence_repo.add_many(list(fresh.values()))
+            persisted_fresh = await evidence_repo.get_or_add_many(list(fresh.values()))
+            proposed_by_chunk = {item.chunk_id: item for item in fresh.values()}
+            for item in persisted_fresh:
+                proposed = proposed_by_chunk[item.chunk_id]
+                if (
+                    item.run_id != proposed.run_id
+                    or item.project_id != proposed.project_id
+                    or item.paper_id != proposed.paper_id
+                    or item.version_id != proposed.version_id
+                    or item.parse_revision_id != proposed.parse_revision_id
+                    or item.chunk_id != proposed.chunk_id
+                    or item.section_path != proposed.section_path
+                    or item.page_start != proposed.page_start
+                    or item.page_end != proposed.page_end
+                    or item.excerpt != proposed.excerpt
+                ):
+                    raise EvidenceScopeError(
+                        f"Run {run.run_id} 的既有 Evidence 与当前 Chunk 语义冲突"
+                    )
             await session.commit()
+
+        fresh = {item.chunk_id: item for item in persisted_fresh}
 
         logger.info(
             "Evidence 固化完成: run_id=%s 候选=%d 新增=%d 复用=%d",

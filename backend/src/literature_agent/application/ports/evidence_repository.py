@@ -16,6 +16,10 @@ class EvidenceRepository(Protocol):
         """
         ...
 
+    async def get_or_add_many(self, evidence: list[Evidence]) -> list[Evidence]:
+        """按 ``(run_id, chunk_id)`` 原子创建或返回既有 Evidence。"""
+        ...
+
     async def list_by_run(self, run_id: str) -> list[Evidence]:
         """按 Run 查询固化的 Evidence（跨 Run 隔离），按创建顺序返回。"""
         ...

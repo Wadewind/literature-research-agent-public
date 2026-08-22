@@ -6,6 +6,8 @@
 
 from literature_agent.domain.exceptions import (
     CheckpointDataError,
+    EvidenceMatrixInvalidError,
+    EvidenceMatrixScopeError,
     EvidenceScopeError,
     FileValidationError,
     IndexingInputError,
@@ -26,6 +28,8 @@ _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     FileValidationError,
     IndexingInputError,
     EvidenceScopeError,
+    EvidenceMatrixInvalidError,
+    EvidenceMatrixScopeError,
     RagAnswerInputError,
     ModelOutputInvalidError,
     ModelAuthError,

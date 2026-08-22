@@ -476,6 +476,13 @@ Valkey 通知可以丢失，PostgreSQL Event 不可以丢失。
 
 首版图结构由代码定义并版本化，不提供用户自定义 Canvas。
 
+Phase 3 的 Evidence Matrix 节点固定从当前 Review Run 的 `search-strategy.v1` Output 加载 3–6 个
+维度。短论文按序提供不超过 12,000 estimated tokens 的全部 Chunk；长论文对每个维度使用 Phase 2
+Retriever 的精确 `(paper_id, version_id)` 范围取 top 5，再合并、去重、排序并限制为 16,000
+tokens；每篇先使用一次 `review-evidence-extraction.v1` 正常模型调用，输出非法时最多追加一次修复
+调用。Chunk 在进入 Prompt 前先固化为
+属于当前 Review Run 的 Evidence，模型结果只能引用这些持久 ID。
+
 ### 7.12 Research Agent Runtime Integration（后续扩展）
 
 本模块不自行实现通用 Agent Loop，而是在 Core Research Backend 完成后通过 `ResearchAgentRuntime` Port 接入 ADR 已选定的 Deep Agents。
@@ -780,7 +787,14 @@ Paper
   → Citation Validation
 ```
 
-不要直接把所有 Chunk 拼成上下文后要求模型一次性生成完整综述。Phase 3 对短论文按序提供全部 Chunk；长论文按分析维度检索后合并、去重并限额，每篇论文一次调用提取全部维度。章节写作只读取当前章节对应的 Matrix 行及其 Evidence。
+不要直接把所有 Chunk 拼成上下文后要求模型一次性生成完整综述。Phase 3 对短论文按序提供全部 Chunk；长论文按分析维度检索后合并、去重并限额，每篇论文一次正常调用提取全部维度，仅在输出非法时最多追加一次修复。章节写作只读取当前章节对应的 Matrix 行及其 Evidence。
+
+Matrix 结果必须经过确定性 Validator：严格 Schema、完整维度、状态组合，以及 Evidence 的
+owner/Project/Review Run/Paper/PaperVersion 闭包；证据不足是合法输出。首次非法只允许在相同受控
+上下文中修复一次。Evidence 与单篇/聚合 ReviewOutput 通过唯一约束和稳定幂等键实现 effectively
+once；单篇修复后仍非法也会先持久化稳定失败 Output，后续论文临时失败导致聚合未提交时，重放不会
+再次调用已永久失败论文。聚合 Output、总 Step 成功与 completed Event 同事务提交。Checkpoint 之后
+发生崩溃时，节点重放先复核并返回既有聚合 Output，不重做模型副作用。
 
 ### 11.3 评测维度
 

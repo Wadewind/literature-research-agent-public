@@ -1,7 +1,10 @@
 """Review Workflow 聚合的 PostgreSQL Repository。"""
 
-from sqlalchemy import select
+from typing import cast
+
+from sqlalchemy import select, update
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.review_repository import ReviewRepository
@@ -260,6 +263,28 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return _step_to_domain(result.scalar_one())
 
+    async def advance_step(self, step: RunStep, expected_status: str) -> bool:
+        """用状态条件更新保证终态不会被旧执行者覆盖。"""
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(RunStepORM)
+                .where(
+                    RunStepORM.step_id == step.step_id,
+                    RunStepORM.run_id == step.run_id,
+                    RunStepORM.status == expected_status,
+                )
+                .values(
+                    status=step.status.value,
+                    output_refs=step.output_refs,
+                    error_code=step.error_code,
+                    started_at=step.started_at,
+                    completed_at=step.completed_at,
+                )
+            )
+        )
+        return bool(result.rowcount == 1)
+
     async def list_steps_scoped(self, run_id: str, project_id: str, owner_id: str) -> list[RunStep]:
         result = await self._session.execute(
             select(RunStepORM)
@@ -384,6 +409,44 @@ class SqlalchemyReviewRepository(ReviewRepository):
             )
         )
         return output
+
+    async def get_or_add_output(self, output: ReviewOutput) -> ReviewOutput:
+        """用 PostgreSQL 唯一键保证节点重放不追加重复 Output。"""
+        values = {
+            "output_id": output.output_id,
+            "review_run_id": output.review_run_id,
+            "output_type": output.output_type.value,
+            "output_key": output.output_key,
+            "version": output.version,
+            "schema_version": output.schema_version,
+            "payload": output.payload,
+            "idempotency_key": output.idempotency_key,
+            "created_at": output.created_at,
+        }
+        await self._session.execute(
+            postgresql.insert(ReviewOutputORM)
+            .values(**values)
+            .on_conflict_do_nothing()
+        )
+        result = await self._session.execute(
+            select(ReviewOutputORM).where(
+                ReviewOutputORM.review_run_id == output.review_run_id,
+                ReviewOutputORM.idempotency_key == output.idempotency_key,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            # 另一唯一键先命中时仍返回冲突行，让应用层比较稳定语义并报告幂等冲突。
+            result = await self._session.execute(
+                select(ReviewOutputORM).where(
+                    ReviewOutputORM.review_run_id == output.review_run_id,
+                    ReviewOutputORM.output_type == output.output_type.value,
+                    ReviewOutputORM.output_key == output.output_key,
+                    ReviewOutputORM.version == output.version,
+                )
+            )
+            row = result.scalar_one()
+        return _output_to_domain(row)
 
     async def list_outputs_scoped(
         self, run_id: str, project_id: str, owner_id: str

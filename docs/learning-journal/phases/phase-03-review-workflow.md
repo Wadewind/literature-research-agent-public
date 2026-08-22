@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1–4 已确认，切片 5 已完成并等待确认）
+- 当前状态：开发中（切片 1–5 已确认，切片 6 已完成并等待确认）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -271,7 +271,7 @@ Checkpoint 的 `thread_id` 必须稳定映射到 Review Run，Resume 必须带�
 第一版版本格式固定为：
 
 - Workflow：`review.v1`；
-- Prompt：`search_strategy.v1`、`evidence_extract.v1`、`outline_generate.v1`、`section_draft.v1`、`consistency_check.v1`；
+- Prompt：`search_strategy.v1`、`review-evidence-extraction.v1`、`outline_generate.v1`、`section_draft.v1`、`consistency_check.v1`；
 - Model Profile：`review-default.v1`。
 
 Run 创建时保存 Workflow、Prompt、Model Profile 版本及生效配置快照。名称采用稳定的 `name.vN`，参数调整若影响可复现语义则升级版本；纯部署配置不写进名称，但仍进入快照。
@@ -398,7 +398,7 @@ Evidence Matrix 是从各论文中提取的结构化中间产物，用于把“�
 1. 若单篇论文所有 Chunk 的估算总量不超过 12,000 tokens，则按文档顺序提供全部 Chunk；
 2. 超过阈值时，对每个分析维度使用 Phase 2 Retriever 取 top 5；
 3. 将各维度结果合并、去重并按论文顺序排列，总上下文上限 16,000 tokens；
-4. 每篇论文只调用一次模型，同时提取全部维度。
+4. 每篇论文先做一次正常模型调用，同时提取全部维度；仅在输出非法时追加一次修复调用。
 
 阈值、top K 和上限属于 Profile 中的可校准参数，不是第一版用户选项。这样既复用 Phase 2 的检索能力，也避免对“整篇论文 × 每个维度”重复调用带来的成本。
 
@@ -409,6 +409,12 @@ Evidence Matrix 是从各论文中提取的结构化中间产物，用于把“�
 - 当前 Paper/PaperVersion 的可信元数据；
 - 受控 Chunk/Evidence 列表，每项带稳定 ID、页码、章节和文本；
 - 输出 Schema、只能引用当前输入证据及证据不足处理规则。
+
+分析维度不接受节点调用方临时传入，而是从当前 Review Run 范围内、Schema 固定为
+`search-strategy.v1` 的 `SEARCH_STRATEGY` Output 加载；第一版固定为 3–6 个维度。进入 Prompt
+前，所选 Chunk 会先固化为属于当前 Review Run 的 Evidence，Prompt 与 Matrix 都使用该持久
+`evidence_id`，不使用只存在于上下文中的临时编号。READY 来源不得重复指向同一 Paper，因为最小
+Matrix 行不携带 `source_id`/`version_id`，重复 Paper 无法被后续章节唯一解释。
 
 ### 11.3 Matrix Validator 与失败处理
 
@@ -422,7 +428,13 @@ Evidence Matrix 是从各论文中提取的结构化中间产物，用于把“�
 - `insufficient_evidence` 不得伪造 finding 或 Evidence；
 - 重复行和超限文本。
 
-首次失败后，将结构化错误和原输出交给模型修复一次；仍失败则该论文 Step 以 `evidence_matrix_invalid` 结束。部分论文失败时可在满足最小就绪策略后继续，并在 Run Summary 中披露；全部无法形成有效 Matrix 时 Workflow 失败。
+第一版每个 `finding`/`limitations` 最多 500 字符、每行最多 10 个不重复 Evidence；聚合 Output
+额外限制为 240 KiB，给 `ReviewOutput` 的 256 KiB 领域上限留出余量。
+
+首次失败后，将结构化错误和原输出交给模型修复一次；仍失败则以稳定 per-paper Output 持久化
+`evidence_matrix_invalid`。若后续论文遇到临时模型或数据库错误、导致聚合 Output 尚未提交，节点重放
+必须识别该失败 Output 并跳过已经永久失败的论文。部分论文失败时可在满足最小就绪策略后继续，并在
+Run Summary 中披露；全部无法形成有效 Matrix 时 Workflow 失败。
 
 Validator 只保证结构、归属和引用闭包，不宣称自动判断 finding 是否被证据在语义上完全蕴含。
 
@@ -547,7 +559,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 3. [x] 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
 4. [x] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
 5. [x] 接入 LangGraph checkpoint，验证 crash recovery；
-6. [ ] 实现 Evidence Matrix 固定提取策略与 Validator；
+6. [x] 实现 Evidence Matrix 固定提取策略与 Validator；
 7. [ ] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
 8. [ ] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
 9. [ ] 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
@@ -724,6 +736,49 @@ PostgreSQL/Valkey/Testcontainers integration `98 passed`；`ruff check src tests
 实现和取舍详见
 [LangGraph Checkpoint 与崩溃恢复](../modules/langgraph-checkpoint-and-crash-recovery.md)。
 
+### 18.6 切片 6 完成记录（2026-08-22）
+
+- 新增 `ReviewEvidenceMatrixService` 和确定性 Matrix Validator。服务只接受 `RUNNING` Review Run，
+  从当前 owner/Project/Run 范围内、Schema 为 `search-strategy.v1` 的 Search Strategy Output 加载
+  3–6 个稳定维度，并校验 READY Source、PaperVersion、成功 ParseRevision、READY ChunkSet 和 Chunk
+  的完整归属；重复 Paper Source 被拒绝；
+- 短论文按 Chunk 文档顺序提供不超过 12,000 estimated tokens 的全文；长论文为每个维度调用 Phase 2
+  `Retriever.retrieve_for_scope()` top 5，以精确 `(paper_id, version_id)` SQL 范围检索，应用层再次
+  复核返回版本和 ChunkSet，再合并去重、按文档顺序排列并限制为 16,000 tokens；每篇论文先做一次
+  全维度正常提取调用，仅在输出非法时最多追加一次修复调用；
+- 选中 Chunk 在模型调用前以当前 Review Run 的 Evidence 固化。PostgreSQL 使用
+  `(run_id, chunk_id)` 唯一键和 `ON CONFLICT DO NOTHING` 收敛并发；回读行必须与预期
+  Run/Project/Paper/Version/ParseRevision/Chunk/定位和摘录一致。Matrix 因而只引用可持久回查的
+  `evidence_id`，不引用 Prompt 临时 ID；
+- Prompt 固定为 `review-evidence-extraction.v1`，只传研究问题、全部维度、白名单 Paper/Version
+  元数据和受控 Evidence/Chunk context。此前创建服务中的旧名 `evidence_extract.v1` 已按 ADR 修正；
+  这只改变修正后新建 Review Run 的请求指纹，不迁移既有快照；
+- Validator 校验严格 Schema、完整维度集、Paper 与 Evidence 的 Run/Project/Paper/Version 闭包、
+  重复行/引用、字段类型、状态语义和大小边界。`insufficient_evidence` 是合法结果；首次无效后在
+  原始受控上下文中追加结构化错误，仅修复一次，仍失败以稳定 per-paper Output 持久化
+  `evidence_matrix_invalid`；即使后续论文临时失败且聚合尚未提交，重放也会跳过该永久失败论文并保留
+  `paper_failures`。部分论文失败继续并写入聚合摘要，全部失败则以永久错误结束总 Step；
+- 单篇成功、单篇永久失败和聚合 `ReviewOutput` 均使用稳定幂等键，回读既有行时复核完整稳定语义；
+  聚合提交前的重放按单篇 Output 跳过成功或永久失败论文，最终聚合 Output 提交后的重放则先验证闭包
+  并直接返回。总
+  `BUILD_EVIDENCE_MATRIX` Step 只允许条件式 `PENDING → RUNNING → SUCCEEDED|FAILED`，聚合 Output、
+  Step 成功和 `evidence_matrix_completed` Event 在同一事务提交，终态 Step 不会被旧执行者回退；
+- 当前固定 Step 枚举只有一个总 `BUILD_EVIDENCE_MATRIX`，因此未伪造“每篇论文 Step”；单篇失败以
+  聚合 Output 的 `paper_failures` 保存稳定错误码。生产 Review Executor 仍未注册：Search Strategy
+  节点和切片 7 的 Outline/interrupt 尚未形成完整图，此时把 Matrix 节点接到 `END` 会让 Run
+  无大纲与 Artifact 地虚假成功；
+- 未新增数据库结构或 Alembic migration；普通测试使用 Fake Model/Retriever，不调用真实 Provider
+  或 arXiv。
+
+验证结果：切片 6 领域与应用定向测试 `49 passed`，定向 PostgreSQL 幂等集成测试 `3 passed`；
+Backend 完整非集成测试 `508 passed, 4 skipped`，完整 PostgreSQL/Valkey integration
+`105 passed`；`ruff check src tests`、`pyright` 与 `git diff --check` 均通过。完整集成首次运行暴露
+`review_outputs` 两条唯一约束的并发竞争，修复为任一唯一冲突均回读既有行并交由应用层比较稳定语义，
+随后定向与完整集成复跑通过。普通测试未调用真实模型或 arXiv；本切片没有数据库结构变化。
+
+实现和取舍详见
+[Review Evidence Matrix](../modules/review-evidence-matrix.md)。
+
 ## 19. 重点测试
 
 - Run 和 Attempt 的合法/非法等待状态转换；
@@ -759,7 +814,7 @@ PostgreSQL/Valkey/Testcontainers integration `98 passed`；`ruff check src tests
 
 - arXiv 单来源自动导入，不做论文人工筛选；
 - 只在大纲阶段引入 HITL；
-- Evidence Matrix 每篇论文一次调用提取全部维度；
+- Evidence Matrix 每篇论文一次正常调用提取全部维度，非法时最多一次修复；
 - 长论文使用按维度检索后的合并证据上下文；
 - Section 只读取对应维度 Matrix 行和引用 Evidence；
 - 一条 Run 一条可重置 Outbox，不保存完整投递历史；
@@ -784,7 +839,7 @@ PostgreSQL/Valkey/Testcontainers integration `98 passed`；`ruff check src tests
 - 已完成：`docs/learning-journal/modules/arxiv-search-project-import.md`（已从预计列表移出）；
 - 已完成：`docs/learning-journal/modules/review-dependency-reconciliation.md`；
 - 已完成：`docs/learning-journal/modules/langgraph-checkpoint-and-crash-recovery.md`；
+- 已完成：`docs/learning-journal/modules/review-evidence-matrix.md`；
 - 后续预计：
   - `docs/learning-journal/modules/human-outline-review.md`
-  - `docs/learning-journal/modules/review-evidence-matrix.md`
   - `docs/learning-journal/modules/review-artifact-generation.md`

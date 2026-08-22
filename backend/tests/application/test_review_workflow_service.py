@@ -66,6 +66,7 @@ async def test_create_review_run_is_atomic_business_bundle() -> None:
     assert run is not None and run.run_type == RunType.REVIEW.value
     assert run.status is RunStatus.QUEUED and run.event_sequence == 2
     assert review is not None and review.research_question == "LangGraph 如何可靠恢复？"
+    assert review.prompt_versions["evidence_extract"] == "review-evidence-extraction.v1"
     assert event_rows[0].event_type == "review_run_created"
     assert event_rows[0].payload == {
         "status": "queued",

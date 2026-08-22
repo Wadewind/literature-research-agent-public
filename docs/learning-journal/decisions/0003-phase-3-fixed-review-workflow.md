@@ -39,7 +39,7 @@ Interrupt 节点在 `interrupt()` 前不执行模型、数据库写入或其他�
 
 ## 决策四：Evidence-first 的固定提取与章节上下文
 
-第一版固定使用 `review-evidence-extraction.v1`：短论文提供按序全文 Chunk；长论文按每个分析维度调用 Phase 2 Retriever，再合并、去重和限额；每篇论文使用一次模型调用提取全部维度。
+第一版固定使用 `review-evidence-extraction.v1`：短论文提供按序全文 Chunk；长论文按每个分析维度调用 Phase 2 Retriever，再合并、去重和限额；每篇论文使用一次正常模型调用提取全部维度，输出非法时最多追加一次修复调用。
 
 Evidence Matrix 行保存 Paper、维度、finding、limitations、状态和真实 Evidence ID。确定性 Validator 校验 Schema、范围、归属和引用闭包，失败时允许一次结构化修复；“证据不足”是合法结果。
 

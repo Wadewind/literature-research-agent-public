@@ -232,3 +232,19 @@ class AnswerOutputParseError(Exception):
     def __init__(self, message: str) -> None:
         self.message = message
         super().__init__(message)
+
+
+class EvidenceMatrixScopeError(Exception):
+    """Review Evidence 上下文不再满足持久化的来源与版本范围。"""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+class EvidenceMatrixInvalidError(Exception):
+    """全部论文均在一次结构修复后仍无法形成有效 Matrix。"""
+
+    def __init__(self, message: str = "evidence_matrix_invalid") -> None:
+        self.message = message
+        super().__init__(message)

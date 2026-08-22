@@ -1,6 +1,7 @@
 """Evidence Repository 的 PostgreSQL 适配器。"""
 
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.evidence_repository import EvidenceRepository
@@ -58,6 +59,47 @@ class SqlalchemyEvidenceRepository(EvidenceRepository):
     async def add_many(self, evidence: list[Evidence]) -> None:
         """批量固化 Evidence。"""
         self._session.add_all([_to_orm(e) for e in evidence])
+
+    async def get_or_add_many(self, evidence: list[Evidence]) -> list[Evidence]:
+        """用唯一键收敛并发节点重放，按输入 Chunk 顺序回读。"""
+        if not evidence:
+            return []
+        run_ids = {item.run_id for item in evidence}
+        if len(run_ids) != 1:
+            raise ValueError("Evidence 批量幂等写入只能属于同一 Run")
+        await self._session.execute(
+            postgresql.insert(EvidenceORM)
+            .values(
+                [
+                    {
+                        "evidence_id": item.evidence_id,
+                        "run_id": item.run_id,
+                        "project_id": item.project_id,
+                        "paper_id": item.paper_id,
+                        "version_id": item.version_id,
+                        "parse_revision_id": item.parse_revision_id,
+                        "chunk_id": item.chunk_id,
+                        "section_path": item.section_path,
+                        "page_start": item.page_start,
+                        "page_end": item.page_end,
+                        "excerpt": item.excerpt,
+                        "created_at": item.created_at,
+                    }
+                    for item in evidence
+                ]
+            )
+            .on_conflict_do_nothing(
+                index_elements=[EvidenceORM.run_id, EvidenceORM.chunk_id]
+            )
+        )
+        result = await self._session.execute(
+            select(EvidenceORM).where(
+                EvidenceORM.run_id == evidence[0].run_id,
+                EvidenceORM.chunk_id.in_([item.chunk_id for item in evidence]),
+            )
+        )
+        by_chunk = {row.chunk_id: _to_domain(row) for row in result.scalars().all()}
+        return [by_chunk[item.chunk_id] for item in evidence]
 
     async def list_by_run(self, run_id: str) -> list[Evidence]:
         """按 Run 查询 Evidence，按创建时间升序返回。"""
