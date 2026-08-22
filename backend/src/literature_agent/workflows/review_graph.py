@@ -39,6 +39,8 @@ class ReviewGraphState(TypedDict):
     outline_boundary_reached: NotRequired[bool]
     claim_set_id: NotRequired[str]
     consistency_output_id: NotRequired[str]
+    final_output_id: NotRequired[str]
+    final_artifact_id: NotRequired[str]
     section_boundary_reached: NotRequired[bool]
 
 
@@ -127,6 +129,8 @@ class ReviewGraphFactory:
         section_draft_node: ReviewGraphNode | None = None,
         section_validate_node: ReviewGraphNode | None = None,
         consistency_node: ReviewGraphNode | None = None,
+        export_node: ReviewGraphNode | None = None,
+        finalize_node: ReviewGraphNode | None = None,
     ) -> None:
         self._slice_node = slice_node
         self._outline_entry_node = outline_entry_node
@@ -134,6 +138,8 @@ class ReviewGraphFactory:
         self._section_draft_node = section_draft_node
         self._section_validate_node = section_validate_node
         self._consistency_node = consistency_node
+        self._export_node = export_node
+        self._finalize_node = finalize_node
         if slice_node is None and (outline_entry_node is None or outline_decision_node is None):
             raise ValueError("必须提供 slice_node 或完整 Outline 节点")
         if slice_node is not None and (
@@ -147,6 +153,10 @@ class ReviewGraphFactory:
             raise ValueError("章节图必须同时提供 draft/validate/consistency 节点")
         if slice_node is not None and any(item is not None for item in configured):
             raise ValueError("切片骨架与章节图不能同时配置")
+        if (export_node is None) != (finalize_node is None):
+            raise ValueError("导出图必须同时提供 export/finalize 节点")
+        if export_node is not None and not all(item is not None for item in configured):
+            raise ValueError("导出图依赖完整章节图")
 
     def compile(self, checkpointer: BaseCheckpointSaver):
         """使用调用方持有生命周期的持久 Checkpointer 编译图。"""
@@ -174,7 +184,11 @@ class ReviewGraphFactory:
             graph.add_node("draft_sections", RunnableLambda(section_draft_node))
             graph.add_node("validate_sections", RunnableLambda(section_validate_node))
             graph.add_node("consistency_check", RunnableLambda(consistency_node))
-            graph.add_node("section_boundary", RunnableLambda(_section_boundary))
+            if self._export_node is not None and self._finalize_node is not None:
+                graph.add_node("export_review", RunnableLambda(self._export_node))
+                graph.add_node("finalize", RunnableLambda(self._finalize_node))
+            else:
+                graph.add_node("section_boundary", RunnableLambda(_section_boundary))
             approved_target = "draft_sections"
         else:
             approved_target = "outline_boundary"
@@ -190,8 +204,13 @@ class ReviewGraphFactory:
         if section_draft_node is not None:
             graph.add_edge("draft_sections", "validate_sections")
             graph.add_edge("validate_sections", "consistency_check")
-            graph.add_edge("consistency_check", "section_boundary")
-            graph.add_edge("section_boundary", END)
+            if self._export_node is not None:
+                graph.add_edge("consistency_check", "export_review")
+                graph.add_edge("export_review", "finalize")
+                graph.add_edge("finalize", END)
+            else:
+                graph.add_edge("consistency_check", "section_boundary")
+                graph.add_edge("section_boundary", END)
         else:
             graph.add_edge("outline_boundary", END)
         return graph.compile(checkpointer=checkpointer)
@@ -201,7 +220,19 @@ class ReviewWorkflowRuntime:
     """隔离 LangGraph 类型和错误分类的 Review Runtime 边界。"""
 
     def __init__(self, graph_factory: ReviewGraphFactory, checkpointer: BaseCheckpointSaver):
+        self._checkpointer = checkpointer
         self._graph = graph_factory.compile(checkpointer)
+
+    async def has_checkpoint(self, review_run_id: str) -> bool:
+        """只在明确不存在 checkpoint 时允许执行器创建首个图输入。"""
+        try:
+            return (
+                await self._checkpointer.aget_tuple(review_graph_config(review_run_id)) is not None
+            )
+        except PsycopgError as exc:
+            raise CheckpointUnavailableError("Checkpoint 数据库暂时不可用") from exc
+        except Exception as exc:
+            raise CheckpointDataError("Checkpoint 无法安全读取") from exc
 
     async def start(self, state: ReviewGraphState) -> ReviewGraphState:
         """仅用于首次执行；完整初始 State 不能作为恢复输入重复提交。"""

@@ -7,9 +7,15 @@ from literature_agent.domain.exceptions import (
     EvidenceMatrixScopeError,
     FileValidationError,
     InvalidPdfInputError,
+    NoReviewablePapersError,
     ParserResourceError,
+    ReviewCitationInvalidError,
+    ReviewExportInvalidError,
     ReviewOutlineInvalidError,
     ReviewOutlineScopeError,
+    ReviewSearchStrategyInvalidError,
+    ReviewSectionInvalidError,
+    ReviewSectionScopeError,
 )
 from literature_agent.domain.retry_policy import (
     compute_retry_backoff,
@@ -26,6 +32,12 @@ def test_permanent_input_errors() -> None:
     assert is_permanent_error(EvidenceMatrixInvalidError())
     assert is_permanent_error(ReviewOutlineScopeError("范围非法"))
     assert is_permanent_error(ReviewOutlineInvalidError("大纲非法"))
+    assert is_permanent_error(NoReviewablePapersError())
+    assert is_permanent_error(ReviewSearchStrategyInvalidError("策略非法"))
+    assert is_permanent_error(ReviewSectionScopeError("章节范围非法"))
+    assert is_permanent_error(ReviewSectionInvalidError("章节输出非法"))
+    assert is_permanent_error(ReviewCitationInvalidError("引用非法"))
+    assert is_permanent_error(ReviewExportInvalidError("导出闭包非法"))
 
 
 def test_temporary_errors() -> None:

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1–8 已完成）
+- 当前状态：开发中（切片 1–9 已完成，等待切片 10 阶段收尾审计）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -91,10 +91,11 @@
 ### 4.2 新增模块
 
 - `ReviewWorkflowService`：创建、查询、取消和恢复 Review Run；
+- `ReviewSearchStrategyService`：生成、强校验并幂等持久化固定检索策略；
 - `ArxivSearchAdapter`：执行受限 arXiv 查询并返回标准化元数据；
 - `ArxivProjectImportService`：幂等下载并创建或复用项目论文及子 Run；
 - `ReviewDependencyReconciler`：检查论文是否形成可用 ChunkSet，并重新调度父 Run；
-- `ReviewGraphFactory`：构建固定 LangGraph；
+- `ReviewExecutor` 与 `ReviewGraphFactory`：编排图外依赖等待，并构建/恢复固定 LangGraph；
 - `EvidenceMatrixBuilder` 与确定性 Validator；
 - `ReviewOutlineService` 与 Human Input 校验；
 - `SectionDraftService`、全文一致性检查和 Artifact 导出。
@@ -129,6 +130,14 @@ validate_request
 - 节点产物先持久化为业务记录或 Artifact，Graph State 只保存其 ID、版本和小型摘要；
 - `review_outline` 节点在调用 `interrupt()` 之前不得执行模型、数据库写入或其他不可重复副作用。LangGraph resume 会从该节点重新执行；
 - checkpoint 用于图内恢复，不替代 Run、Event、权限、Artifact 和引用事实。
+
+生产实现把外部检索、下载、子 Run 创建和依赖等待放在 `ReviewExecutor` 的图外业务编排层；只有
+Outline HITL 到章节、引用、一致性、导出和终态收敛进入持久 LangGraph。这避免把释放 Worker 的
+`WAITING_DEPENDENCY` 伪装成 LangGraph Interrupt，也保持 Outline 是唯一 HITL。每次恢复会先重放
+Search Strategy、arXiv 导入和 Matrix 应用服务，但这些服务先复核持久 Step/Output/Source，因此不会
+重复调用模型、arXiv 或创建业务副作用。执行器只在明确查询到 Thread 尚无 checkpoint 时调用
+`start(initial_state)`；已有 checkpoint 一律 `resume`，损坏或非法 checkpoint 稳定失败，不能被当作
+首次执行覆盖。
 
 ## 6. Run、Attempt、Outbox 与等待恢复
 
@@ -262,6 +271,10 @@ Graph State 只保存小型、可序列化字段，例如：
   "outline_output_id": "...",
   "approved_outline_output_id": "...",
   "section_output_ids": ["..."],
+  "claim_set_id": "...",
+  "consistency_output_id": "...",
+  "final_output_id": "...",
+  "final_artifact_id": "...",
   "feedback_round": 0
 }
 ```
@@ -304,7 +317,8 @@ Run 创建时保存 Workflow、Prompt、Model Profile 版本及生效配置快�
 
 ### 9.7 `artifacts`
 
-保存最终 Markdown、内容哈希、大小、存储位置、创建时间、生成配置与来源 Output 版本。
+保存最终 Markdown、检索策略、来源清单、Matrix、完整 References 映射和 Run Summary 的内容哈希、
+大小、存储位置、创建时间、生成配置与来源 Output 版本。正文只写入 Storage，数据库不保存文件内容。
 
 ### 9.8 切片 2 已落地的约束
 
@@ -502,10 +516,14 @@ GET    /projects/{project_id}/reviews/{run_id}/evidence-matrix
 GET    /projects/{project_id}/reviews/{run_id}/outline
 POST   /projects/{project_id}/reviews/{run_id}/outline-input
 GET    /projects/{project_id}/reviews/{run_id}/artifacts
+GET    /projects/{project_id}/reviews/{run_id}/artifacts/{artifact_id}/content
 GET    /projects/{project_id}/reviews/{run_id}/events
 ```
 
 创建接口支持 Idempotency-Key。`outline-input` 必须校验用户、Project、Run、当前未解决 Request 和 payload 版本；重复提交同一幂等键返回原结果，不得重复 resume。
+实际 Route 统一带 `/api/v1` 前缀。Review 的 Event 游标读取使用上述 Project-scoped `events`；实时 SSE
+复用通用且同样执行 owner 隔离的 `GET /api/v1/runs/{run_id}/events/stream`，通过
+`Last-Event-ID` 从 PostgreSQL Event 序号之后重放。
 
 ## 15. Event 草案
 
@@ -567,7 +585,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 6. [x] 实现 Evidence Matrix 固定提取策略与 Validator；
 7. [x] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
 8. [x] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
-9. [ ] 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
+9. [x] 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
 10. [ ] 根据实际代码更新模块学习笔记与阶段完成状态。
 
 每个切片遵循：契约/失败测试 → 最小实现 → 集成测试 → 文档更新。
@@ -882,6 +900,54 @@ Graph 全文件回归为 `11 passed`。Ruff 与 Pyright 通过。
 实现和取舍详见
 [综述章节写作、引用校验与一致性报告](../modules/review-section-citation-consistency.md)。
 
+### 18.9 切片 9 完成记录（2026-08-23）
+
+- 补齐切片 3–8 遗留的生产入口：新增最小固定 `ReviewSearchStrategyService`，严格复用 Run 冻结的
+  `search_strategy.v1`、`search-strategy.v1` 和 `review-default.v1`。模型输出有 64 KiB 前置大小
+  限制、extra-forbid Schema、arXiv 查询 allowlist、3–6 个唯一维度及字段长度校验；不引入 repair。
+  外部模型调用在事务外，返回后持锁复核 RUNNING owner/Project Review；Step、Output、Event 使用稳定
+  幂等键，重放复用持久 Output，不再次调用模型；
+- 新增生产 `ReviewExecutor` 并注册 `RunType.REVIEW` Worker。检索、下载、子 Run 和依赖等待继续在图外
+  应用服务执行，`WAITING_DEPENDENCY` 正常结束 Attempt；零结果或全部永久失败稳定抛出
+  `no_reviewable_papers`。至少一篇 READY 后进入 Matrix 与固定 LangGraph；Outline 仍是唯一 Interrupt。
+  Runtime 先明确检查 checkpoint 是否存在，只有不存在时 `start`，已有或损坏状态不能被 broad catch
+  当作首次执行；
+- `review.v1` 固定图现已连接 approve/edit → Section → Citation → Consistency → Export → Finalize。
+  Graph State 只新增 ClaimSet、Consistency Output、Final Output 和最终 Artifact ID；节点每次以业务库
+  重新复核范围。Finalize 在同一短事务内完成 Step、Run `RUNNING → SUCCEEDED` 和 `run_succeeded`
+  Event，外层 `RunExecutionService` 只按终态关闭 Attempt，不重复写终态 Event；
+- 导出器从已验证 Section/ClaimSet/Citation/Evidence/READY Source 构造 Markdown。正文中每个 Claim
+  使用 `[1][2]`，论文编号按全文首次引用顺序稳定分配；完整映射保存 Paper/PaperVersion/Source、arXiv
+  版本、Evidence、Claim 和页码/章节定位的 Bibliography Artifact。Final Output 只保存引用数量和
+  Artifact manifest，不把可能增长的完整映射复制回 256 KiB ReviewOutput。固定生成 Markdown、
+  Search Strategy、Source Manifest、
+  Evidence Matrix、Bibliography 和 Run Summary 六类 Artifact；Summary 披露 Workflow/Prompt/Profile/
+  配置、统计、来源失败及已知限制。导出时从已有 `model_invocations` 审计事实聚合
+  模型调用与 token，并与来源计数一起固化到 Final Output、Run Summary 和
+  `review_runs.statistics_summary`，不另建重复计数体系；
+- Artifact 内容先用 SHA-256 稳定 Storage Key 写入事务外 Storage，再在持锁短事务中以类型级幂等键
+  收敛元数据、Final Output、Stage 和 `review_artifact_created` Event。写文件后取消只留下可复用缓存，
+  不提交 Artifact/Event/Stage；数据库提交前崩溃重放会覆盖同字节缓存并收敛为一套 Artifact/Event；
+  下载时重新校验大小和哈希；
+- 新增 `/api/v1/projects/{project_id}/reviews` 创建、详情、取消、sources、evidence-matrix、outline、
+  outline-input、artifacts、Artifact content 和 events API。Route 只调用应用服务；所有读取统一验证
+  owner+Project+Run 三元范围。创建和 HumanInput 强制 `Idempotency-Key`；Artifact 下载返回内容哈希
+  `ETag`；实时通知与断线恢复复用通用 owner-scoped SSE/`Last-Event-ID`；
+- Fake Chat Model 增加固定 Review Schema 响应；普通测试不访问真实 arXiv 或付费 Provider。本切片未
+  新增数据库结构或 migration，复用切片 2 的 Artifact/Output/Step 唯一约束，并新增 Artifact
+  PostgreSQL 并发 get-or-add 与 final pointer 范围测试。根审查另将策略 Schema、章节范围/输出、
+  Citation 和导出闭包错误纳入集中永久错误分类，避免对确定性非法结果做无意义重试。
+
+验证结果：导出/策略/执行器/完整图定向测试 `26 passed`，Review Finalize/Attempt 收尾定向测试
+`1 passed`，Review API 与通用 SSE 定向测试 `10 passed`，新增 PostgreSQL Artifact 并发与范围集成
+测试 `1 passed`；Backend 完整非集成回归 `596 passed, 4 skipped`，完整
+PostgreSQL/Valkey/Testcontainers 集成回归 `112 passed`；
+`ruff check src tests` 与 `pyright` 通过。本切片只更新为“切片 1–9 已完成”，不会提前执行切片 10
+的阶段最终完成审计。
+
+实现和取舍详见
+[综述 Artifact 生成与生产执行闭环](../modules/review-artifact-generation.md)。
+
 ## 19. 重点测试
 
 - Run 和 Attempt 的合法/非法等待状态转换；
@@ -943,6 +1009,6 @@ Graph 全文件回归为 `11 passed`。Ruff 与 Pyright 通过。
 - 已完成：`docs/learning-journal/modules/review-dependency-reconciliation.md`；
 - 已完成：`docs/learning-journal/modules/langgraph-checkpoint-and-crash-recovery.md`；
 - 已完成：`docs/learning-journal/modules/review-evidence-matrix.md`；
-- 后续预计：
-  - `docs/learning-journal/modules/human-outline-review.md`
-  - `docs/learning-journal/modules/review-artifact-generation.md`
+- 已完成：`docs/learning-journal/modules/human-outline-review.md`；
+- 已完成：`docs/learning-journal/modules/review-section-citation-consistency.md`；
+- 已完成：`docs/learning-journal/modules/review-artifact-generation.md`。

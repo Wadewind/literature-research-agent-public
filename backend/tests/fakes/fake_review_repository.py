@@ -72,6 +72,23 @@ class FakeReviewRepository(ReviewRepository):
         self.review_runs[review_run.run_id] = review_run
         return True
 
+    async def advance_review_final(
+        self,
+        review_run: ReviewRun,
+        *,
+        expected_stage: str,
+        expected_final_artifact_id: str | None,
+    ) -> bool:
+        current = self.review_runs.get(review_run.run_id)
+        if (
+            current is None
+            or current.current_stage.value != expected_stage
+            or current.final_artifact_id != expected_final_artifact_id
+        ):
+            return False
+        self.review_runs[review_run.run_id] = review_run
+        return True
+
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         # 父 Run 的真实状态由 Service 持锁后二次校验；Fake 只提供候选。
         return list(self.review_runs)[:limit]
@@ -316,9 +333,66 @@ class FakeReviewRepository(ReviewRepository):
             None,
         )
 
+    async def get_latest_resolved_human_input_scoped(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> tuple[HumanInputRequest, HumanInput] | None:
+        if not self._visible(run_id, project_id, owner_id):
+            return None
+        resolved = sorted(
+            (
+                item
+                for item in self.requests
+                if item.review_run_id == run_id
+                and item.status is HumanInputRequestStatus.RESOLVED
+                and item.resolved_input_id is not None
+            ),
+            key=lambda item: item.request_version,
+            reverse=True,
+        )
+        if not resolved:
+            return None
+        request = resolved[0]
+        human_input = next(
+            item for item in self.inputs if item.human_input_id == request.resolved_input_id
+        )
+        return request, human_input
+
     async def add_artifact(self, artifact: Artifact) -> Artifact:
         self.artifacts.append(artifact)
         return artifact
+
+    async def get_or_add_artifact(self, artifact: Artifact) -> Artifact:
+        existing = next(
+            (
+                item
+                for item in self.artifacts
+                if item.review_run_id == artifact.review_run_id
+                and item.idempotency_key == artifact.idempotency_key
+            ),
+            None,
+        )
+        return existing if existing is not None else await self.add_artifact(artifact)
+
+    async def get_artifact_scoped(
+        self,
+        artifact_id: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> Artifact | None:
+        if not self._visible(run_id, project_id, owner_id):
+            return None
+        return next(
+            (
+                item
+                for item in self.artifacts
+                if item.artifact_id == artifact_id
+                and item.review_run_id == run_id
+                and item.project_id == project_id
+                and item.owner_id == owner_id
+            ),
+            None,
+        )
 
     async def list_artifacts_scoped(
         self, run_id: str, project_id: str, owner_id: str

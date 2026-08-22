@@ -102,6 +102,25 @@ async def test_missing_resume_checkpoint_is_permanent_data_error() -> None:
         await runtime.resume("missing-run")
 
 
+async def test_checkpoint_existence_distinguishes_first_start_from_corrupt_data() -> None:
+    async def node(_state: ReviewGraphState) -> dict:
+        return {}
+
+    saver = InMemorySaver()
+    runtime = ReviewWorkflowRuntime(ReviewGraphFactory(node), saver)
+    assert not await runtime.has_checkpoint("new-run")
+    await runtime.start(_state("new-run"))
+    assert await runtime.has_checkpoint("new-run")
+
+    class CorruptSaver(InMemorySaver):
+        async def aget_tuple(self, config):
+            raise ValueError("invalid checkpoint payload")
+
+    corrupt = ReviewWorkflowRuntime(ReviewGraphFactory(node), CorruptSaver())
+    with pytest.raises(CheckpointDataError, match="无法安全读取"):
+        await corrupt.has_checkpoint("corrupt-run")
+
+
 async def test_postgres_checkpoint_failure_is_classified_as_temporary() -> None:
     class BrokenSaver(InMemorySaver):
         async def aget_tuple(self, config):
@@ -267,7 +286,87 @@ def test_approved_outline_connects_sections_to_safe_export_boundary() -> None:
     assert "validate_sections --> consistency_check" in mermaid
     assert "consistency_check --> section_boundary" in mermaid
     assert "section_boundary --> __end__" in mermaid
-    assert (
-        "apply_outline_decision -. &nbsp;approved&nbsp; .-> outline_boundary"
-        not in mermaid
+    assert "apply_outline_decision -. &nbsp;approved&nbsp; .-> outline_boundary" not in mermaid
+
+
+def test_complete_review_graph_connects_consistency_to_export_and_finalize() -> None:
+    async def node(_state):
+        return {}
+
+    graph = ReviewGraphFactory(
+        outline_entry_node=node,
+        outline_decision_node=node,
+        section_draft_node=node,
+        section_validate_node=node,
+        consistency_node=node,
+        export_node=node,
+        finalize_node=node,
+    ).compile(InMemorySaver())
+    mermaid = graph.get_graph().draw_mermaid()
+
+    assert "consistency_check --> export_review" in mermaid
+    assert "export_review --> finalize" in mermaid
+    assert "finalize --> __end__" in mermaid
+    assert "section_boundary" not in mermaid
+
+
+async def test_approved_outline_executes_export_and_finalize_with_only_ids_in_state() -> None:
+    saver = InMemorySaver()
+    calls: list[str] = []
+
+    async def entry(_state):
+        calls.append("outline")
+        return {"outline_output_id": "outline-1", "human_input_request_id": "request-1"}
+
+    async def decision(_state):
+        calls.append("decision")
+        return {"outline_action": "approve", "approved_outline_output_id": "outline-1"}
+
+    async def draft(_state):
+        calls.append("draft")
+        return {"section_output_ids": ["section-1"]}
+
+    async def validate(_state):
+        calls.append("validate")
+        return {"claim_set_id": "claims-1"}
+
+    async def consistency(_state):
+        calls.append("consistency")
+        return {"consistency_output_id": "consistency-1"}
+
+    async def export(_state):
+        calls.append("export")
+        return {"final_output_id": "final-1", "final_artifact_id": "artifact-1"}
+
+    async def finalize(_state):
+        calls.append("finalize")
+        return {"final_output_id": "final-1", "final_artifact_id": "artifact-1"}
+
+    runtime = ReviewWorkflowRuntime(
+        ReviewGraphFactory(
+            outline_entry_node=entry,
+            outline_decision_node=decision,
+            section_draft_node=draft,
+            section_validate_node=validate,
+            consistency_node=consistency,
+            export_node=export,
+            finalize_node=finalize,
+        ),
+        saver,
     )
+    await runtime.start(_state("review-complete"))
+    result = await runtime.resume_human_input(
+        "review-complete", request_id="request-1", human_input_id="input-1"
+    )
+
+    assert result["final_output_id"] == "final-1"
+    assert result["final_artifact_id"] == "artifact-1"
+    assert calls == [
+        "outline",
+        "decision",
+        "draft",
+        "validate",
+        "consistency",
+        "export",
+        "finalize",
+    ]

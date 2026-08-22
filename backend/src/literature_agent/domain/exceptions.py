@@ -72,6 +72,13 @@ class CheckpointDataError(RuntimeError):
     """Checkpoint 状态无效或不能安全反序列化，重复执行无法自愈。"""
 
 
+class NoReviewablePapersError(Exception):
+    """Review 搜索无结果或所有来源均永久失败，继续等待无法自愈。"""
+
+    def __init__(self) -> None:
+        super().__init__("no_reviewable_papers")
+
+
 class PaperVersionNotFoundError(Exception):
     """Paper Version 不存在或不属于当前 actor 可见范围。"""
 
@@ -122,6 +129,8 @@ class DocumentNotReadyError(Exception):
 
 class ParserError(Exception):
     """解析失败的基类，按子类决定降级与重试策略。"""
+
+
 class InvalidPdfInputError(ParserError):
     """输入类错误：文件损坏、加密或结构异常。
 
@@ -258,6 +267,10 @@ class ReviewOutlineInvalidError(Exception):
     """模型生成的大纲不满足 ``outline.v1`` 确定性契约。"""
 
 
+class ReviewSearchStrategyInvalidError(ValueError):
+    """检索策略模型输出不满足固定契约。"""
+
+
 class HumanInputConflictError(Exception):
     """人工输入已解决、已过期，或幂等键被不同语义复用。"""
 
@@ -272,3 +285,7 @@ class ReviewSectionInvalidError(Exception):
 
 class ReviewCitationInvalidError(Exception):
     """综述 ClaimSet 未通过确定性 Citation Validator。"""
+
+
+class ReviewExportInvalidError(ValueError):
+    """最终导出的 Output、Claim、Citation 或 Artifact 闭包非法。"""

@@ -58,6 +58,10 @@ class HttpxArxivGateway(ArxivGateway):
             raise ValueError("arxiv_max_attempts_invalid")
         self._max_attempts = max_attempts
 
+    async def aclose(self) -> None:
+        """关闭底层 HTTP 客户端。"""
+        await self._client.aclose()
+
     async def search(self, query: ArxivSearchQuery) -> list[ArxivPaper]:
         feed_content = None
         params = {

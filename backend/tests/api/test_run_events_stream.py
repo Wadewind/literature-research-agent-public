@@ -12,7 +12,7 @@ from literature_agent.api.runs import get_run_service
 from literature_agent.application.run_service import RunService
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.event import create_event
-from literature_agent.domain.run import Run, RunStatus, create_run
+from literature_agent.domain.run import Run, RunStatus, RunType, create_run
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_project_repository import fake_session
 from tests.fakes.fake_run_repository import FakeRunRepository
@@ -42,9 +42,7 @@ async def client(monkeypatch):
     """提供注入 Fake 依赖的 TestClient；轮询间隔调小以加速收敛。"""
     from literature_agent.main import create_app
 
-    monkeypatch.setattr(
-        "literature_agent.api.runs._SSE_POLL_INTERVAL_SECONDS", 0.05
-    )
+    monkeypatch.setattr("literature_agent.api.runs._SSE_POLL_INTERVAL_SECONDS", 0.05)
     # 心跳间隔保持默认 15s：测试在 1s 内完成，不会混入心跳注释帧
 
     fake_run_repo = FakeRunRepository()
@@ -72,9 +70,12 @@ def _seed_run(
     fake_event_repo: FakeEventRepository,
     status: RunStatus,
     event_count: int,
+    *,
+    owner_id: str = "user-1",
+    run_type: RunType = RunType.INGESTION,
 ) -> Run:
     """准备指定状态与事件数量的 Run。"""
-    run = create_run(project_id="p1", owner_id="user-1", run_type="ingestion")
+    run = create_run(project_id="p1", owner_id=owner_id, run_type=run_type)
     run = Run(
         run_id=run.run_id,
         project_id=run.project_id,
@@ -130,7 +131,13 @@ def test_sse_replays_history_and_closes_on_terminal(client) -> None:
 def test_sse_resumes_from_last_event_id(client) -> None:
     """Last-Event-ID 断线续传：只重放其后的事件，不重不漏。"""
     test_client, fake_run_repo, fake_event_repo = client
-    run = _seed_run(fake_run_repo, fake_event_repo, RunStatus.SUCCEEDED, 4)
+    run = _seed_run(
+        fake_run_repo,
+        fake_event_repo,
+        RunStatus.SUCCEEDED,
+        4,
+        run_type=RunType.REVIEW,
+    )
 
     with test_client.stream(
         "GET",
@@ -154,9 +161,7 @@ def test_sse_poll_converges_without_notification(client) -> None:
     def _append_later() -> None:
         # 模拟 Worker 陆续提交：新事件 + 终态（真实系统两者同事务）
         time.sleep(0.2)
-        fake_event_repo._events.append(
-            create_event(run.run_id, 2, "event_2", "system", "corr-1")
-        )
+        fake_event_repo._events.append(create_event(run.run_id, 2, "event_2", "system", "corr-1"))
         time.sleep(0.2)
         fake_event_repo._events.append(
             create_event(run.run_id, 3, "run_completed", "system", "corr-1")
@@ -179,6 +184,23 @@ def test_sse_run_not_found(client) -> None:
     test_client, _, _ = client
 
     response = test_client.get("/api/v1/runs/no-such-run/events/stream")
+
+    assert response.status_code == 404
+
+
+def test_review_sse_hides_other_owner_run(client) -> None:
+    """通用 SSE 对 Review 同样先执行 owner 隔离，再决定是否建立流。"""
+    test_client, fake_run_repo, fake_event_repo = client
+    run = _seed_run(
+        fake_run_repo,
+        fake_event_repo,
+        RunStatus.SUCCEEDED,
+        1,
+        owner_id="user-2",
+        run_type=RunType.REVIEW,
+    )
+
+    response = test_client.get(f"/api/v1/runs/{run.run_id}/events/stream")
 
     assert response.status_code == 404
 

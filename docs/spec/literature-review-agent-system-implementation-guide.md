@@ -476,6 +476,15 @@ Valkey 通知可以丢失，PostgreSQL Event 不可以丢失。
 
 首版图结构由代码定义并版本化，不提供用户自定义 Canvas。
 
+生产 `ReviewExecutor` 将 Search Strategy、arXiv 检索/下载、子 Run 创建和
+`WAITING_DEPENDENCY` 保留在 LangGraph 外的业务编排层；这是释放 Worker 并由数据库 Reconciler
+恢复父 Run 所需的边界，不是第二种 Interrupt。持久 `review.v1` 图从唯一 HITL Outline 开始，固定
+连接章节写作、引用校验、一致性、Artifact 导出和 Finalize。图外服务重放时先读取稳定 Step/Output/
+Source，不能重复调用模型/arXiv 或重复创建业务副作用。
+
+检索策略由固定 `search_strategy.v1` 模型调用生成，输出必须满足 `search-strategy.v1` 严格 Schema、
+64 KiB 大小限制、arXiv 字段 allowlist 和 3–6 个唯一维度。它不使用 repair；非法输出稳定失败。
+
 Phase 3 的 Evidence Matrix 节点固定从当前 Review Run 的 `search-strategy.v1` Output 加载 3–6 个
 维度。短论文按序提供不超过 12,000 estimated tokens 的全部 Chunk；长论文对每个维度使用 Phase 2
 Retriever 的精确 `(paper_id, version_id)` 范围取 top 5，再合并、去重、排序并限制为 16,000
@@ -657,6 +666,8 @@ LangGraph Checkpoint 保存：
 LangGraph 根图的空 checkpoint namespace 保留给其子图内部命名。首次执行提交完整小型 State；崩溃恢复对同一 Thread 调用
 `ainvoke(None)`，不能再次提交完整输入开启新一轮执行。PostgreSQL checkpoint schema 由 Alembic
 管理，Runtime 不在 Worker 启动时隐式建表；反序列化禁止 pickle 和任意模块 allowlist。
+执行器必须先明确查询 Thread 是否存在 checkpoint：只有“不存在”才能 `start(initial_state)`；读取
+失败、损坏或非法 State 不能被 broad exception 当作首次执行覆盖。
 
 PDF、图片、全文、表格、大型工具输出和最终文档必须存储在业务数据库或 Artifact Storage 中，Graph State 只保存引用。
 
@@ -820,6 +831,17 @@ Claim 和 Citation 使用数据库唯一约束上的原子 get-or-add，并在�
 触发自动重写；调用失败、范围错误或 Schema 非法都会阻断当前执行，只有合法报告可以继续，其中
 Schema 失败稳定结束 Step，模型调用和范围错误交给既有 Worker 错误分类/重试。第一版因此不把
 一致性模型当作事实正确性的通用 LLM Judge。
+
+最终导出从已验证 Section/ClaimSet/Citation/Evidence/READY ReviewSource 构建。Markdown 使用按全文
+首次引用顺序分配的 `[1]` 编号，同一论文复用编号；完整引用映射保存 Paper/PaperVersion、Source、
+arXiv version、Claim、Evidence 和 PDF 定位。固定生成 Markdown、Search Strategy、Source Manifest、
+Evidence Matrix、Bibliography 映射、Run Summary 六类 Artifact。文件正文只进入 Storage，数据库只
+保存元数据、SHA-256、大小、MIME、来源 Output 和稳定幂等键。
+
+Artifact Storage 写入在事务外，key 由 owner/Run/content hash 稳定组成；提交前持锁复核 RUNNING
+owner/Project Review。取消后不得新增 Artifact/Event/Stage；文件写入后数据库提交前崩溃只留下可
+复用缓存，重放覆盖相同字节并收敛为一组业务记录。Review 的 Project-scoped Event API 负责历史游标
+读取，实时断线恢复复用通用 owner-scoped Run SSE 与 `Last-Event-ID`。
 
 ### 11.3 评测维度
 

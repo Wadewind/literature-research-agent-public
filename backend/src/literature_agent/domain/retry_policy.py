@@ -13,9 +13,15 @@ from literature_agent.domain.exceptions import (
     IndexingInputError,
     InvalidPdfInputError,
     ModelOutputInvalidError,
+    NoReviewablePapersError,
     RagAnswerInputError,
+    ReviewCitationInvalidError,
+    ReviewExportInvalidError,
     ReviewOutlineInvalidError,
     ReviewOutlineScopeError,
+    ReviewSearchStrategyInvalidError,
+    ReviewSectionInvalidError,
+    ReviewSectionScopeError,
 )
 from literature_agent.domain.model_errors import (
     ModelAuthError,
@@ -40,6 +46,12 @@ _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     ModelInvalidRequestError,
     ModelResponseError,
     CheckpointDataError,
+    NoReviewablePapersError,
+    ReviewSearchStrategyInvalidError,
+    ReviewSectionScopeError,
+    ReviewSectionInvalidError,
+    ReviewCitationInvalidError,
+    ReviewExportInvalidError,
 )
 
 # 临时错误类型示例：超时与资源类，其余未知异常也按临时处理

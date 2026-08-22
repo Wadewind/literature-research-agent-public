@@ -18,11 +18,12 @@ Evidence Matrix 已把多篇论文压缩为可追溯中间事实，但仍不能�
   → Citation Validator + Matrix Paper/Version/Revision 闭包
   → ClaimSet/Claim/Citation + Step/Event 同事务
   → consistency_check.v1 → consistency-report.v1
-  → issues 非阻断 → EXPORT_REVIEW 安全边界
+  → issues 非阻断 → EXPORT_REVIEW → Artifact/Finalize
 ```
 
-模块不渲染数字引用、不写 Markdown Artifact、不提供 Review API，也不注册生产 Review Executor。这些
-属于切片 9；当前图在一致性检查后停在安全边界，不能把尚无 Artifact 的 Run 标记成功。
+本模块自身不渲染数字引用、不写 Markdown Artifact、不提供 Review API。切片 9 已把它接入
+Export/Finalize 与生产 Review Executor；具体导出边界见
+[综述 Artifact 生成与生产执行闭环](review-artifact-generation.md)。
 
 ## `section.v1` 与模型上下文
 
@@ -125,7 +126,7 @@ PostgreSQL/Testcontainers 集成测试为 `111 passed`；`ruff check src tests` 
 
 ## 已知限制
 
-- Section Claim 是结构化段落素材；切片 9 才按首次引用顺序渲染 Markdown `[1]` 和 References；
+- Section Claim 是结构化段落素材；切片 9 的导出器已按首次引用顺序渲染 Markdown `[1]` 和 References；
 - Citation Validator 证明结构和范围闭包，不自动证明 Evidence 在语义上充分支持 Claim；
 - 一致性 issue 不自动修复，用户需在最终 Artifact/评测中审阅；
 - 默认章节 4,000、一致性 2,000 token 输出预算及 50 Claim/术语上限仍需真实小样本校准；

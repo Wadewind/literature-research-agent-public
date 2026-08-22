@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from arq.connections import RedisSettings
 from arq.worker import run_worker
 
+from literature_agent.application.arxiv_import_service import ArxivProjectImportService
 from literature_agent.application.evidence_service import EvidenceService
 from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
@@ -32,7 +33,17 @@ from literature_agent.application.rag_answer_executor import RagAnswerExecutor
 from literature_agent.application.retriever import Retriever
 from literature_agent.application.review_dependency_service import (
     ReviewDependencyReconciler,
+    ReviewDependencyWaitService,
 )
+from literature_agent.application.review_evidence_matrix_service import ReviewEvidenceMatrixService
+from literature_agent.application.review_executor import ReviewExecutor
+from literature_agent.application.review_export_service import ReviewExportService
+from literature_agent.application.review_outline_service import (
+    ReviewOutlineDecisionService,
+    ReviewOutlineService,
+)
+from literature_agent.application.review_search_strategy_service import ReviewSearchStrategyService
+from literature_agent.application.review_section_service import ReviewSectionService
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.application.run_reconcile_service import RunReconcileService
@@ -40,6 +51,7 @@ from literature_agent.application.waiting_run_resume_service import WaitingRunRe
 from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
+from literature_agent.infrastructure.arxiv import HttpxArxivGateway
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.models.fake_models import (
     EMBEDDING_COLUMN_DIMENSIONS,
@@ -104,6 +116,9 @@ from literature_agent.infrastructure.persistence.parse_revision_repository impor
 from literature_agent.infrastructure.persistence.project_paper_repository import (
     SqlalchemyProjectPaperRepository,
 )
+from literature_agent.infrastructure.persistence.project_repository import (
+    SqlalchemyProjectRepository,
+)
 from literature_agent.infrastructure.persistence.review_repository import (
     SqlalchemyReviewRepository,
 )
@@ -115,6 +130,7 @@ from literature_agent.infrastructure.queue.valkey_event_notifier import (
     ValkeyEventNotifier,
 )
 from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
+from literature_agent.infrastructure.workflow.postgres_checkpoint import PostgresCheckpointStore
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +394,105 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         max_run_attempts=settings.max_run_attempts,
         event_notifier=event_notifier,
     )
+    storage = LocalFileStorage(settings.storage_root)
+    arxiv_gateway = HttpxArxivGateway(max_file_bytes=settings.max_upload_size_bytes)
+    model_adapters.append(arxiv_gateway)
+    review_repo = SqlalchemyReviewRepository
+    strategy_service = ReviewSearchStrategyService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=review_repo,
+        event_repo_factory=SqlalchemyEventRepository,
+        model_gateway=model_gateway,
+        event_notifier=event_notifier,
+    )
+    arxiv_service = ArxivProjectImportService(
+        session_factory=session_factory,
+        arxiv_gateway=arxiv_gateway,
+        storage=storage,
+        project_repo_factory=SqlalchemyProjectRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        review_repo_factory=review_repo,
+        total_download_budget_bytes=settings.max_upload_size_bytes * 10,
+        event_notifier=event_notifier,
+    )
+    dependency_wait_service = ReviewDependencyWaitService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        review_repo_factory=review_repo,
+        event_notifier=event_notifier,
+    )
+    matrix_service = ReviewEvidenceMatrixService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=review_repo,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        chunk_repo_factory=SqlalchemyChunkRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        retriever=retriever,
+        model_gateway=model_gateway,
+        event_notifier=event_notifier,
+    )
+    outline_service = ReviewOutlineService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=review_repo,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        model_gateway=model_gateway,
+        event_notifier=event_notifier,
+    )
+    outline_decision = ReviewOutlineDecisionService(
+        session_factory=session_factory,
+        review_repo_factory=review_repo,
+    )
+    section_service = ReviewSectionService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=review_repo,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        model_gateway=model_gateway,
+        event_notifier=event_notifier,
+    )
+    export_service = ReviewExportService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=review_repo,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        model_invocation_repo_factory=SqlalchemyModelInvocationRepository,
+        storage=storage,
+        event_notifier=event_notifier,
+    )
+    review_executor = ReviewExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=review_repo,
+        strategy_service=strategy_service,
+        arxiv_service=arxiv_service,
+        dependency_wait_service=dependency_wait_service,
+        matrix_service=matrix_service,
+        outline_service=outline_service,
+        outline_decision_service=outline_decision,
+        section_service=section_service,
+        export_service=export_service,
+        checkpoint_store=PostgresCheckpointStore(settings.database_url),
+    )
     dispatcher = RunDispatcher(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -386,6 +501,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
             RunType.INGESTION: ingestion_executor.execute,
             RunType.INDEXING: indexing_executor.execute,
             RunType.RAG_ANSWER: rag_answer_executor.execute,
+            RunType.REVIEW: review_executor.execute,
         },
         event_notifier=event_notifier,
     )

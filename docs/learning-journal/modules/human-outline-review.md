@@ -26,11 +26,12 @@ ReviewOutlineService.propose_and_pause()
   → 新 Worker / 新 Attempt
   → Command(resume={request_id, human_input_id})
   → 后继 Node 从业务库复核持久事实
-  ├─ approve/edit → approved_outline_output_id → 切片 8 安全边界
+  ├─ approve/edit → approved_outline_output_id → Section/Artifact 固定后继图
   └─ feedback → feedback_round+1 → 新 Outline/Request → 再次 interrupt
 ```
 
-API、SSE 和前端表单属于切片 9；章节生成属于切片 8。本模块没有把不完整图注册到生产 Worker。
+本模块完成时 API、SSE 与生产接线留给切片 9；现在后端 API、通用 SSE 和完整生产图已接通，前端表单
+仍属于后续产品闭环。
 
 ## Outline 上下文和 Validator
 
@@ -143,9 +144,7 @@ Graph State 只增加 `human_input_request_id`、`human_input_id`、`feedback_hu
 - 尚未设置 feedback 最大轮次、模型调用和 token 总预算；后续按 Profile 校准；
 - Outline 模型没有结构修复调用；非法输出稳定失败，避免本切片引入未讨论的额外模型成本；
 - 只验证结构、范围与 Evidence 闭包，不自动判断大纲是否具有学术价值；
-- 生产 Review Executor 尚未接线；切片 8 完成章节、引用、一致性和 Artifact 边界前，安全占位节点不能
-  被当成完整 Review 成功；
-- API/SSE/前端人工表单属于切片 9。
+- 后端 API、SSE 和生产 Review Executor 已在切片 9 接线；前端人工表单仍属于后续产品闭环。
 
 ## 60 秒面试说明
 

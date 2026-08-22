@@ -21,8 +21,9 @@ RUNNING Review Run + scoped search-strategy.v1 Output
   → 聚合 Output + Step 成功 + completed Event 同事务
 ```
 
-服务不创建 Search Strategy，也不生成 Outline/Section/Artifact。它尚未注册为生产 Worker Executor：
-当前固定图若在 Matrix 后到达 `END`，会错误地把没有大纲和 Artifact 的 Review Run 标成成功。
+服务本身不创建 Search Strategy，也不生成 Outline/Section/Artifact。切片 9 已由生产
+`ReviewExecutor` 在图外依次调用固定 Search Strategy、arXiv 与本服务，再进入 Outline→Artifact
+持久图；Matrix 不再作为图的 `END` 或成功边界。
 
 ## 状态、数据与事务
 

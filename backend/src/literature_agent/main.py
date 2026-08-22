@@ -8,6 +8,7 @@ from literature_agent.api.health import router as health_router
 from literature_agent.api.paper_files import router as paper_files_router
 from literature_agent.api.papers import router as papers_router
 from literature_agent.api.projects import router as projects_router
+from literature_agent.api.reviews import router as reviews_router
 from literature_agent.api.runs import router as runs_router
 from literature_agent.infrastructure.lifespan import app_lifespan
 
@@ -25,6 +26,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/health")
     app.include_router(projects_router)
     app.include_router(runs_router)
+    app.include_router(reviews_router)
     app.include_router(paper_files_router)
     app.include_router(papers_router)
     app.include_router(documents_router)

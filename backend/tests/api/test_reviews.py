@@ -1,0 +1,208 @@
+"""Review Project-scoped API 契约测试。"""
+
+from dataclasses import dataclass
+
+import pytest_asyncio
+from fastapi.testclient import TestClient
+
+from literature_agent.api.dependencies import get_actor
+from literature_agent.api.reviews import (
+    get_outline_input_service,
+    get_review_query_service,
+    get_review_run_service,
+    get_review_workflow_service,
+)
+from literature_agent.application.review_workflow_service import CreateReviewRunResult
+from literature_agent.domain.actor import ActorContext
+from literature_agent.domain.exceptions import RunNotFoundError
+from literature_agent.domain.review import (
+    ReviewOutputType,
+    create_review_output,
+)
+from literature_agent.main import create_app
+
+
+class _Workflow:
+    async def create_review_run(self, actor, project_id, question, key, correlation_id):
+        assert actor.owner_id == "user-1"
+        assert (project_id, question, key, correlation_id) == (
+            "project-1",
+            "研究问题",
+            "create-1",
+            "api-create-review",
+        )
+        return CreateReviewRunResult("review-1", "queued")
+
+
+class _Query:
+    def __init__(self) -> None:
+        self.output_value = create_review_output(
+            review_run_id="review-1",
+            output_type=ReviewOutputType.EVIDENCE_MATRIX,
+            output_key="evidence-matrix",
+            version=1,
+            schema_version="evidence-matrix.v1",
+            payload={"rows": []},
+            idempotency_key="matrix",
+        )
+
+    async def output(self, actor, project_id, run_id, output_type):
+        if actor.owner_id != "user-1" or project_id != "project-1" or run_id != "review-1":
+            raise RunNotFoundError(run_id)
+        return self.output_value if output_type is ReviewOutputType.EVIDENCE_MATRIX else None
+
+    @staticmethod
+    def _scope(actor, project_id, run_id):
+        if actor.owner_id != "user-1" or project_id != "project-1" or run_id != "review-1":
+            raise RunNotFoundError(run_id)
+
+    async def detail(self, actor, project_id, run_id):
+        self._scope(actor, project_id, run_id)
+        return _Row(run_id="review-1"), _Row(run_id="review-1"), [], None
+
+    async def sources(self, actor, project_id, run_id):
+        self._scope(actor, project_id, run_id)
+        return [_Row(source_id="source-1")]
+
+    async def artifacts(self, actor, project_id, run_id):
+        self._scope(actor, project_id, run_id)
+        return [_Row(artifact_id="artifact-1")]
+
+    async def artifact_content(self, actor, project_id, run_id, artifact_id):
+        self._scope(actor, project_id, run_id)
+        if artifact_id != "artifact-1":
+            raise RunNotFoundError(artifact_id)
+        return _Artifact(), b"# Review\n"
+
+
+class _OutlineInput:
+    def __init__(self) -> None:
+        self.kwargs = None
+
+    async def submit(self, **kwargs):
+        self.kwargs = kwargs
+        return _SubmitResult(True)
+
+
+@dataclass(frozen=True)
+class _SubmitResult:
+    accepted: bool
+
+
+class _RunService:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def cancel_run(self, *_args):
+        self.cancelled = True
+
+    async def list_events(self, actor, run_id, after_sequence, limit):
+        assert (actor.owner_id, run_id, after_sequence, limit) == (
+            "user-1",
+            "review-1",
+            2,
+            5,
+        )
+        return [_Event()]
+
+
+@dataclass(frozen=True)
+class _Row:
+    run_id: str | None = None
+    source_id: str | None = None
+    artifact_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _Artifact:
+    artifact_id: str = "artifact-1"
+    media_type: str = "text/markdown"
+    content_hash: str = "a" * 64
+
+
+@dataclass(frozen=True)
+class _Event:
+    sequence: int = 3
+    event_type: str = "review_artifact_created"
+
+
+@pytest_asyncio.fixture
+async def client():
+    app = create_app()
+    query = _Query()
+    outline = _OutlineInput()
+    runs = _RunService()
+    app.dependency_overrides[get_actor] = lambda: ActorContext("user-1")
+    app.dependency_overrides[get_review_workflow_service] = lambda: _Workflow()
+    app.dependency_overrides[get_review_query_service] = lambda: query
+    app.dependency_overrides[get_outline_input_service] = lambda: outline
+    app.dependency_overrides[get_review_run_service] = lambda: runs
+    with TestClient(app) as test_client:
+        yield test_client, query, outline, runs
+    app.dependency_overrides.clear()
+
+
+def test_create_requires_idempotency_key_and_returns_created(client) -> None:
+    test_client, *_ = client
+    missing = test_client.post(
+        "/api/v1/projects/project-1/reviews", json={"research_question": "研究问题"}
+    )
+    assert missing.status_code == 400
+
+    response = test_client.post(
+        "/api/v1/projects/project-1/reviews",
+        json={"research_question": "研究问题"},
+        headers={"Idempotency-Key": "create-1"},
+    )
+    assert response.status_code == 202
+    assert response.json() == {"run_id": "review-1", "status": "queued", "reused": False}
+
+
+def test_matrix_is_project_scoped_and_missing_outline_is_404(client) -> None:
+    test_client, *_ = client
+    response = test_client.get("/api/v1/projects/project-1/reviews/review-1/evidence-matrix")
+    assert response.status_code == 200
+    assert response.json()["payload"] == {"rows": []}
+
+    hidden = test_client.get("/api/v1/projects/other/reviews/review-1/evidence-matrix")
+    assert hidden.status_code == 404
+    outline = test_client.get("/api/v1/projects/project-1/reviews/review-1/outline")
+    assert outline.status_code == 404
+
+
+def test_outline_input_passes_request_and_output_versions(client) -> None:
+    test_client, _, outline, _ = client
+    response = test_client.post(
+        "/api/v1/projects/project-1/reviews/review-1/outline-input",
+        headers={"Idempotency-Key": "input-1"},
+        json={
+            "request_id": "request-1",
+            "request_version": 1,
+            "outline_output_id": "outline-1",
+            "action": "approve",
+            "payload": {},
+        },
+    )
+    assert response.status_code == 200
+    assert outline.kwargs["outline_output_id"] == "outline-1"
+    assert outline.kwargs["owner_id"] == "user-1"
+    assert outline.kwargs["idempotency_key"] == "input-1"
+
+
+def test_detail_sources_artifacts_download_cancel_and_event_cursor(client) -> None:
+    test_client, _, _, runs = client
+    base = "/api/v1/projects/project-1/reviews/review-1"
+
+    assert test_client.get(base).json()["run"]["run_id"] == "review-1"
+    assert test_client.get(f"{base}/sources").json() == [
+        {"run_id": None, "source_id": "source-1", "artifact_id": None}
+    ]
+    assert test_client.get(f"{base}/artifacts").json()[0]["artifact_id"] == "artifact-1"
+    content = test_client.get(f"{base}/artifacts/artifact-1/content")
+    assert content.content == b"# Review\n"
+    assert content.headers["etag"] == '"' + "a" * 64 + '"'
+    events = test_client.get(f"{base}/events?after_sequence=2&limit=5")
+    assert events.json() == [{"sequence": 3, "event_type": "review_artifact_created"}]
+    assert test_client.get(f"{base}/events?after_sequence=-1").status_code == 422
+    assert test_client.post(f"{base}/cancel").status_code == 202
+    assert runs.cancelled

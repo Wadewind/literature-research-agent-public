@@ -269,6 +269,35 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return result.rowcount == 1
 
+    async def advance_review_final(
+        self,
+        review_run: ReviewRun,
+        *,
+        expected_stage: str,
+        expected_final_artifact_id: str | None,
+    ) -> bool:
+        """用 Stage 与最终指针双条件收敛导出提交。"""
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(ReviewRunORM)
+                .where(
+                    ReviewRunORM.run_id == review_run.run_id,
+                    ReviewRunORM.current_stage == expected_stage,
+                    ReviewRunORM.final_artifact_id.is_(None)
+                    if expected_final_artifact_id is None
+                    else ReviewRunORM.final_artifact_id == expected_final_artifact_id,
+                )
+                .values(
+                    current_stage=review_run.current_stage.value,
+                    final_artifact_id=review_run.final_artifact_id,
+                    statistics_summary=review_run.statistics_summary,
+                    updated_at=review_run.updated_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         """按创建顺序有界列出等待依赖的 Review Run。"""
         result = await self._session.execute(
@@ -727,6 +756,30 @@ class SqlalchemyReviewRepository(ReviewRepository):
         row = result.scalar_one_or_none()
         return _human_input_to_domain(row) if row else None
 
+    async def get_latest_resolved_human_input_scoped(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> tuple[HumanInputRequest, HumanInput] | None:
+        result = await self._session.execute(
+            select(HumanInputRequestORM, HumanInputORM)
+            .join(RunORM, RunORM.run_id == HumanInputRequestORM.review_run_id)
+            .join(
+                HumanInputORM,
+                HumanInputORM.human_input_id == HumanInputRequestORM.resolved_input_id,
+            )
+            .where(
+                HumanInputRequestORM.review_run_id == run_id,
+                HumanInputRequestORM.status == HumanInputRequestStatus.RESOLVED.value,
+                RunORM.project_id == project_id,
+                RunORM.owner_id == owner_id,
+            )
+            .order_by(HumanInputRequestORM.request_version.desc())
+            .limit(1)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return _request_to_domain(row[0]), _human_input_to_domain(row[1])
+
     async def add_artifact(self, artifact: Artifact) -> Artifact:
         self._session.add(
             ArtifactORM(
@@ -746,6 +799,62 @@ class SqlalchemyReviewRepository(ReviewRepository):
             )
         )
         return artifact
+
+    async def get_or_add_artifact(self, artifact: Artifact) -> Artifact:
+        """用唯一键收敛 Artifact 重放，并返回数据库赢家。"""
+        values = {
+            "artifact_id": artifact.artifact_id,
+            "review_run_id": artifact.review_run_id,
+            "project_id": artifact.project_id,
+            "owner_id": artifact.owner_id,
+            "artifact_type": artifact.artifact_type.value,
+            "storage_key": artifact.storage_key,
+            "content_hash": artifact.content_hash,
+            "size_bytes": artifact.size_bytes,
+            "media_type": artifact.media_type,
+            "idempotency_key": artifact.idempotency_key,
+            "source_output_id": artifact.source_output_id,
+            "artifact_metadata": artifact.metadata,
+            "created_at": artifact.created_at,
+        }
+        await self._session.execute(
+            postgresql.insert(ArtifactORM).values(**values).on_conflict_do_nothing()
+        )
+        result = await self._session.execute(
+            select(ArtifactORM).where(
+                ArtifactORM.review_run_id == artifact.review_run_id,
+                ArtifactORM.idempotency_key == artifact.idempotency_key,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            result = await self._session.execute(
+                select(ArtifactORM).where(ArtifactORM.storage_key == artifact.storage_key)
+            )
+            row = result.scalar_one()
+        return _artifact_to_domain(row)
+
+    async def get_artifact_scoped(
+        self,
+        artifact_id: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> Artifact | None:
+        result = await self._session.execute(
+            select(ArtifactORM)
+            .join(ReviewRunORM, ReviewRunORM.run_id == ArtifactORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                *self._scope(run_id, project_id, owner_id),
+                ArtifactORM.artifact_id == artifact_id,
+                ArtifactORM.review_run_id == run_id,
+                ArtifactORM.project_id == project_id,
+                ArtifactORM.owner_id == owner_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        return _artifact_to_domain(row) if row else None
 
     async def list_artifacts_scoped(
         self, run_id: str, project_id: str, owner_id: str

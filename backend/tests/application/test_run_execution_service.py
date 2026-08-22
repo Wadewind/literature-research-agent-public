@@ -184,6 +184,46 @@ async def test_execute_duplicate_job_is_skipped(
     assert calls == [run.run_id]
 
 
+async def test_review_finalize_closes_attempt_without_duplicate_succeeded_event(
+    run_repo: FakeRunRepository,
+    event_repo: FakeEventRepository,
+    attempt_repo: FakeAttemptRepository,
+    outbox_repo: FakeOutboxRepository,
+) -> None:
+    """Review Executor 已原子提交终态时，外层只关闭 Attempt。"""
+    run = await _add_run(run_repo)
+
+    async def finalize_review(running: Run, correlation_id: str) -> None:
+        current = await run_repo.get_by_id(running.run_id)
+        assert current is not None
+        assert await run_repo.update_status(
+            running.run_id,
+            RunStatus.RUNNING,
+            RunStatus.SUCCEEDED,
+            current.event_sequence + 1,
+        )
+        await event_repo.add(
+            create_event(
+                run_id=running.run_id,
+                sequence=current.event_sequence,
+                event_type="run_succeeded",
+                actor_type="system",
+                correlation_id=correlation_id,
+                payload={"final_artifact_id": "artifact-1"},
+            )
+        )
+
+    service = _make_service(
+        run_repo, event_repo, attempt_repo, outbox_repo, finalize_review
+    )
+
+    assert await service.execute(run.run_id, "review-job") is ExecutionOutcome.COMPLETED
+    assert await service.execute(run.run_id, "duplicate-job") is ExecutionOutcome.SKIPPED
+    assert _event_types(event_repo, run.run_id) == ["run_started", "run_succeeded"]
+    attempt = await attempt_repo.get_latest_by_run(run.run_id)
+    assert attempt is not None and attempt.status is AttemptStatus.SUCCEEDED
+
+
 async def test_execute_missing_run(
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,

@@ -68,6 +68,27 @@ ParseRevision 和 Evidence 的闭包。
 - Markdown 固定使用 `[1]` 数字引用，系统内部映射到精确 Evidence 和 PDF 定位；
 - 第一版不提供引用样式切换。
 
+编号按最终 Markdown 中论文的首次引用顺序分配，同一论文复用同一编号。导出同时持久化完整映射，
+包含 Paper/PaperVersion、ReviewSource、arXiv ID/version、Claim、Evidence 及页码/章节定位；不能只把
+不可回查的 References 文本写进 Markdown。
+
+## 决策六：生产执行边界与 Artifact 提交
+
+- `ReviewExecutor` 负责图外 Search Strategy、arXiv 导入和依赖等待；`WAITING_DEPENDENCY` 是业务 Run
+  状态，不是 LangGraph Interrupt。持久图从 Outline 开始，Outline 是唯一 HITL，之后固定连接章节、
+  引用、一致性、导出和 Finalize；
+- Resume 前可以重复调用图外服务，但服务必须先复用持久 Step/Output/Source，保证零重复模型/arXiv
+  调用和零重复业务副作用；只有明确没有 checkpoint 时才允许提交完整初始 State。损坏 checkpoint
+  属永久错误，不能静默覆盖；
+- 固定导出六类 Artifact：Markdown、Search Strategy、Source Manifest、Evidence Matrix、完整
+  Bibliography 映射和 Run Summary；文件正文进入 Storage，PostgreSQL 只保存元数据、哈希、来源
+  Output 与稳定幂等键；
+- Storage 写入发生在数据库事务外，使用 owner/Run/content-hash 组成稳定 key。提交前重新持锁复核
+  RUNNING Review；取消后不得新增 Artifact/Event/Stage。写文件后崩溃允许留下可复用缓存，重放以
+  相同 key/hash 收敛，不做可能误删并发结果的补偿删除；
+- Review API 按 owner+Project+Run 隔离。Project-scoped Event 列表用于游标读取，实时 SSE 复用通用
+  Run Event Stream 与 `Last-Event-ID`，不另建一套 Review 通知事实来源。
+
 ## 后果
 
 正面影响：Phase 3 能集中验证 LangGraph HITL、可靠等待恢复和 Evidence-first 生成；外部下载面更小；模型成本和章节上下文更可控；Run、Event、Attempt、Outbox 与 Checkpoint 的职责明确。

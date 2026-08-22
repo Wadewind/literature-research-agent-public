@@ -56,6 +56,16 @@ class ReviewRepository(Protocol):
         """仅在当前 Stage 匹配时推进 ReviewRun。"""
         ...
 
+    async def advance_review_final(
+        self,
+        review_run: ReviewRun,
+        *,
+        expected_stage: str,
+        expected_final_artifact_id: str | None,
+    ) -> bool:
+        """条件式推进最终 Artifact 指针和 Review Stage。"""
+        ...
+
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         """有界列出等待论文依赖的 Review Run ID，供内部对账使用。"""
         ...
@@ -183,8 +193,28 @@ class ReviewRepository(Protocol):
         """按提交者幂等键回放当前范围内的人工输入。"""
         ...
 
+    async def get_latest_resolved_human_input_scoped(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> tuple[HumanInputRequest, HumanInput] | None:
+        """读取最高版本已解决请求及其持久输入，供 Worker Resume。"""
+        ...
+
     async def add_artifact(self, artifact: Artifact) -> Artifact:
         """保存 Artifact 元数据，不保存文件正文。"""
+        ...
+
+    async def get_or_add_artifact(self, artifact: Artifact) -> Artifact:
+        """按 Review Run/幂等键原子创建或回读 Artifact。"""
+        ...
+
+    async def get_artifact_scoped(
+        self,
+        artifact_id: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> Artifact | None:
+        """读取当前范围内的指定 Artifact。"""
         ...
 
     async def list_artifacts_scoped(

@@ -121,7 +121,7 @@ class FakeChatModel(ChatModel):
         max_tokens: int | None = None,
     ) -> ChatResult:
         """返回确定性的合法结构化响应。"""
-        content = self._scripted_response(messages)
+        content = self._scripted_response(messages, json_schema)
         return ChatResult(
             content=content,
             model=self.model,
@@ -129,8 +129,98 @@ class FakeChatModel(ChatModel):
         )
 
     @staticmethod
-    def _scripted_response(messages: list[ChatMessage]) -> str:
+    def _scripted_response(messages: list[ChatMessage], json_schema: dict | None = None) -> str:
         """按 Prompt 中的证据 ID 脚本化生成合法 RagAnswerOutput JSON。"""
+        properties = set((json_schema or {}).get("properties", {}))
+        prompt = _last_json_object(messages)
+        if properties == {"normalized_question", "arxiv_query", "dimensions"}:
+            question = str(prompt.get("research_question", "文献综述问题"))
+            return json.dumps(
+                {
+                    "normalized_question": question,
+                    "arxiv_query": "all:agent",
+                    "dimensions": [
+                        {
+                            "dimension_key": "method",
+                            "name": "方法",
+                            "extraction_question": "采用了什么方法？",
+                        },
+                        {
+                            "dimension_key": "evaluation",
+                            "name": "评测",
+                            "extraction_question": "如何进行评测？",
+                        },
+                        {
+                            "dimension_key": "limitations",
+                            "name": "限制",
+                            "extraction_question": "有哪些限制？",
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        if properties == {"rows"} and "evidence_context" in prompt:
+            evidence_context = prompt.get("evidence_context", [])
+            evidence_id = evidence_context[0]["evidence_id"] if evidence_context else None
+            paper_id = prompt.get("paper", {}).get("paper_id")
+            rows = []
+            for index, item in enumerate(prompt.get("dimensions", [])):
+                extracted = index == 0 and evidence_id is not None
+                rows.append(
+                    {
+                        "paper_id": paper_id,
+                        "dimension_key": item["dimension_key"],
+                        "status": "extracted" if extracted else "insufficient_evidence",
+                        "finding": "Fake 模型基于受控证据提取的方法结论。" if extracted else None,
+                        "limitations": None,
+                        "evidence_ids": [evidence_id] if extracted else [],
+                    }
+                )
+            return json.dumps({"rows": rows}, ensure_ascii=False)
+        if properties == {"sections"} and "dimensions" in prompt:
+            dimensions = prompt.get("dimensions", [])
+            return json.dumps(
+                {
+                    "sections": [
+                        {
+                            "section_key": "synthesis",
+                            "title": "研究综合",
+                            "purpose": "综合比较现有证据。",
+                            "dimension_keys": [item["dimension_key"] for item in dimensions[:3]],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        if properties == {"section_key", "title", "status", "summary", "claims", "terminology"}:
+            section = prompt.get("section", {})
+            evidence = prompt.get("evidence", [])
+            if evidence:
+                payload = {
+                    "section_key": section.get("section_key"),
+                    "title": section.get("title"),
+                    "status": "answered",
+                    "summary": "Fake 模型根据受控 Evidence 形成章节摘要。",
+                    "claims": [
+                        {
+                            "text": "现有研究提供了可追溯的方法证据。",
+                            "evidence_ids": [evidence[0]["evidence_id"]],
+                        }
+                    ],
+                    "terminology": [],
+                }
+            else:
+                payload = {
+                    "section_key": section.get("section_key"),
+                    "title": section.get("title"),
+                    "status": "insufficient_evidence",
+                    "summary": "当前章节证据不足。",
+                    "claims": [],
+                    "terminology": [],
+                }
+            return json.dumps(payload, ensure_ascii=False)
+        if properties == {"status", "issues"} and "sections" in prompt:
+            return '{"status":"consistent","issues":[]}'
         evidence_ids: list[str] = []
         for message in messages:
             if message.role != "user":
@@ -151,3 +241,16 @@ class FakeChatModel(ChatModel):
             ],
         }
         return json.dumps(payload, ensure_ascii=False)
+
+
+def _last_json_object(messages: list[ChatMessage]) -> dict:
+    for message in reversed(messages):
+        if message.role != "user":
+            continue
+        try:
+            value = json.loads(message.content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
