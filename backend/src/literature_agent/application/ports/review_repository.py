@@ -50,6 +50,16 @@ class ReviewRepository(Protocol):
         """按 arXiv 排名列出有权访问的来源。"""
         ...
 
+    async def get_source_scoped_for_update(
+        self, source_id: str, run_id: str, project_id: str, owner_id: str
+    ) -> ReviewSource | None:
+        """锁定并读取有权访问的来源，供幂等状态推进。"""
+        ...
+
+    async def save_source(self, source: ReviewSource) -> None:
+        """保存来源的受控导入状态与 Paper 关联。"""
+        ...
+
     async def add_dependency(self, dependency: ReviewDependency) -> ReviewDependency:
         """追加一条父 Run 依赖。"""
         ...

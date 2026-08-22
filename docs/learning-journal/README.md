@@ -22,4 +22,4 @@ learning-journal/
 
 ## 当前阶段
 
-[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)、[Phase 1：Project、个人文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)和 [Phase 2：有引用的 RAG 问答](phases/phase-02-cited-rag-qa.md)已经完成。Phase 2 已通过固定 14 题管线评测、可靠性证据审计、Phase 1–2 Playwright E2E、真实 Docling 以及真实 Embedding/结构化 Chat 显式 Smoke；Fake 评测只证明工程闭环，真实 Provider 只证明最小调用契约，均不宣称生产模型质量。[Phase 3：可暂停恢复的固定文献综述 Workflow](phases/phase-03-review-workflow.md)正在按切片开发，目前已完成等待/恢复基础和 Review Workflow 数据契约。
+[Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)、[Phase 1：Project、个人文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)和 [Phase 2：有引用的 RAG 问答](phases/phase-02-cited-rag-qa.md)已经完成。Phase 2 已通过固定 14 题管线评测、可靠性证据审计、Phase 1–2 Playwright E2E、真实 Docling 以及真实 Embedding/结构化 Chat 显式 Smoke；Fake 评测只证明工程闭环，真实 Provider 只证明最小调用契约，均不宣称生产模型质量。[Phase 3：可暂停恢复的固定文献综述 Workflow](phases/phase-03-review-workflow.md)正在按切片开发，目前已完成等待/恢复基础、Review Workflow 数据契约，以及受限 arXiv 检索与幂等项目导入。

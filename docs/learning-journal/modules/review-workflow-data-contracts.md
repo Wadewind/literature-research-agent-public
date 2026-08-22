@@ -112,7 +112,8 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 ## 已知限制与扩展路径
 
 - 尚无 Review HTTP API 和前端页面，`Idempotency-Key` 只在应用服务契约中生效；
-- 尚无 Step/Source/Dependency 状态推进应用服务，当前 Repository 只提供追加和范围查询；
+- arXiv 导入切片已为 Source 增加 scoped 行锁与受控状态保存，并能追加检索 Step 和导入依赖；其他
+  Step、Dependency 对账和状态推进仍由后续切片实现；
 - Request 的数据库约束可以阻止第二条 Input，但切片 7 仍必须用行锁和条件更新原子解决 Request；
 - 数据库只保证目标存在和主要唯一性，不自动保证跨聚合归属：ReviewRun 当前 Output/Artifact、
   ReviewSource 的 Paper/PaperVersion 配对、Request 的 resolved Input、Artifact 的

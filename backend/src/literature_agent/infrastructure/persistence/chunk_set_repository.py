@@ -89,6 +89,23 @@ class SqlalchemyChunkSetRepository(ChunkSetRepository):
         orm = result.scalar_one_or_none()
         return _to_domain(orm) if orm else None
 
+    async def get_ready_by_version(self, version_id: str) -> ChunkSet | None:
+        result = await self._session.execute(
+            select(ChunkSetORM)
+            .join(
+                DocumentParseRevisionORM,
+                ChunkSetORM.parse_revision_id == DocumentParseRevisionORM.revision_id,
+            )
+            .where(
+                DocumentParseRevisionORM.version_id == version_id,
+                ChunkSetORM.status == ChunkSetStatus.READY.value,
+            )
+            .order_by(ChunkSetORM.created_at.desc())
+            .limit(1)
+        )
+        orm = result.scalar_one_or_none()
+        return _to_domain(orm) if orm else None
+
     async def count_ready_by_version_ids(self, version_ids: list[str]) -> int:
         """统计给定 PaperVersion 集合下 ready ChunkSet 的数量。"""
         if not version_ids:

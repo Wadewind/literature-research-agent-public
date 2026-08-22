@@ -53,6 +53,20 @@ class FakeChunkSetRepository(ChunkSetRepository):
             return None
         return max(matches, key=lambda c: c.created_at)
 
+    async def get_ready_by_version(self, version_id: str) -> ChunkSet | None:
+        if self._parse_revision_repo is None:
+            return None
+        matches: list[ChunkSet] = []
+        for chunk_set in self._chunk_sets.values():
+            revision = await self._parse_revision_repo.get_by_id(chunk_set.parse_revision_id)
+            if (
+                revision is not None
+                and revision.version_id == version_id
+                and chunk_set.status == ChunkSetStatus.READY
+            ):
+                matches.append(chunk_set)
+        return max(matches, key=lambda value: value.created_at) if matches else None
+
     async def count_ready_by_version_ids(self, version_ids: list[str]) -> int:
         """统计给定 Version 集合下 ready ChunkSet 的数量。"""
         if not version_ids or self._parse_revision_repo is None:

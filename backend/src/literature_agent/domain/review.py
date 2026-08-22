@@ -186,6 +186,49 @@ class ReviewSource:
     created_at: datetime
     updated_at: datetime
 
+    def mark_importing(self, paper_id: str, paper_version_id: str) -> "ReviewSource":
+        """绑定可信 Paper/Version，并进入等待解析索引的导入状态。"""
+        if self.status is not ReviewSourceStatus.DISCOVERED:
+            raise ValueError("只有 discovered 来源可以开始导入")
+        if not paper_id or not paper_version_id:
+            raise ValueError("Paper 与 PaperVersion 不能为空")
+        return replace(
+            self,
+            status=ReviewSourceStatus.IMPORTING,
+            paper_id=paper_id,
+            paper_version_id=paper_version_id,
+            failure_code=None,
+            updated_at=datetime.now(UTC),
+        )
+
+    def mark_ready(self, paper_id: str, paper_version_id: str) -> "ReviewSource":
+        """绑定已具有 ready ChunkSet 的 Paper/Version。"""
+        if self.status is ReviewSourceStatus.DISCOVERED:
+            importing = self.mark_importing(paper_id, paper_version_id)
+        elif (
+            self.status is ReviewSourceStatus.IMPORTING
+            and self.paper_id == paper_id
+            and self.paper_version_id == paper_version_id
+        ):
+            importing = self
+        else:
+            raise ValueError("只有匹配的 discovered/importing 来源可以就绪")
+        return replace(importing, status=ReviewSourceStatus.READY, updated_at=datetime.now(UTC))
+
+    def mark_failed(self, failure_code: str) -> "ReviewSource":
+        """以稳定错误码记录单篇永久或重试耗尽失败。"""
+        if self.status not in {
+            ReviewSourceStatus.DISCOVERED,
+            ReviewSourceStatus.IMPORTING,
+        } or not failure_code:
+            raise ValueError("只有 discovered/importing 来源可以记录导入失败")
+        return replace(
+            self,
+            status=ReviewSourceStatus.FAILED,
+            failure_code=failure_code,
+            updated_at=datetime.now(UTC),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewDependency:

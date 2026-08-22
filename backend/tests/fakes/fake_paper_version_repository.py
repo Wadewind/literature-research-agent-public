@@ -12,6 +12,10 @@ class FakePaperVersionRepository(PaperVersionRepository):
     def __init__(self) -> None:
         self._versions: dict[str, PaperVersion] = {}
 
+    async def acquire_owner_hash_lock(self, owner_id: str, file_hash: str) -> None:
+        """Fake 顺序执行，无需模拟 PostgreSQL advisory lock。"""
+        return None
+
     async def add(self, version: PaperVersion) -> PaperVersion:
         """将 PaperVersion 存入内存。"""
         self._versions[version.version_id] = version

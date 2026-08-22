@@ -70,6 +70,27 @@ class FakeReviewRepository(ReviewRepository):
             (x for x in self.sources if x.review_run_id == run_id), key=lambda x: x.rank
         )
 
+    async def get_source_scoped_for_update(
+        self, source_id: str, run_id: str, project_id: str, owner_id: str
+    ) -> ReviewSource | None:
+        if not self._visible(run_id, project_id, owner_id):
+            return None
+        return next(
+            (
+                source
+                for source in self.sources
+                if source.source_id == source_id and source.review_run_id == run_id
+            ),
+            None,
+        )
+
+    async def save_source(self, source: ReviewSource) -> None:
+        for index, current in enumerate(self.sources):
+            if current.source_id == source.source_id:
+                self.sources[index] = source
+                return
+        raise KeyError(source.source_id)
+
     async def add_dependency(self, dependency: ReviewDependency) -> ReviewDependency:
         self.dependencies.append(dependency)
         return dependency

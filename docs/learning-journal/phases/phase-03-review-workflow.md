@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1 已确认，切片 2 已完成并等待确认）
+- 当前状态：开发中（切片 1–2 已确认，切片 3 已完成并等待确认）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -211,11 +211,19 @@ Review Worker 下载 PDF 后不直接调用 Ingestion Executor。`ArxivProjectIm
 4. 由现有 Ingestion 流程继续创建 Indexing Run；
 5. 建立 Review Run 对论文就绪条件的 `run_dependency`。
 
-幂等键至少包含：
+实际实现沿用现有 Ingestion/Indexing 的分层幂等身份，不再额外发明一个与现有 Profile 脱节的
+`ingestion_profile_version`：
 
 ```text
-(review_run_id, arxiv_id_or_version, ingestion_profile_version)
+检索完成事实       = (review_run_id, search_query_hash)
+Review Source      = (review_run_id, arxiv_id, arxiv_version)
+PaperVersion       = (owner_id, pdf_sha256)
+ParseRevision      = (paper_version_id, parse_profile_hash)
+ChunkSet           = (parse_revision_id, chunk_profile_hash)
 ```
+
+因此同一 Review Run 不会重复纳入同一 arXiv 版本，相同 PDF 在 owner 范围内复用，而解析器或切块配置
+变化仍会由真实 Profile hash 产生新的 Revision/ChunkSet；这比只保存一个名义版本号更贴合既有执行链。
 
 父 Review Run 等待的是“指定 PaperVersion 已存在可用 ChunkSet”，而不只是某个 Ingestion Run 显示成功。这样可以兼容 Ingestion 后续触发 Indexing、已有索引复用以及子 Run 重试。
 
@@ -536,7 +544,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 
 1. [x] 更新状态机、Attempt/Outbox 语义和迁移，先完成等待/恢复事务测试；
 2. [x] 建立 Review Run、Step、Source、Dependency、Output、Human Input 数据契约；
-3. [ ] 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
+3. [x] 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
 4. [ ] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
 5. [ ] 接入 LangGraph checkpoint，验证 crash recovery；
 6. [ ] 实现 Evidence Matrix 固定提取策略与 Validator；
@@ -608,6 +616,48 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 实现和取舍详见
 [Review Workflow 数据契约](../modules/review-workflow-data-contracts.md)。
 
+### 18.3 切片 3 完成记录（2026-08-22）
+
+- 新增确定性的 `ArxivSearchQuery`：只接受 arXiv 允许字段、受限分页与排序，拒绝 URL、控制字符和
+  未允许字段；本切片不生成检索策略，模型输出留给后续固定图节点；
+- 新增 `HttpxArxivGateway`，只访问官方 API/PDF Host。Atom 结果保持 API rank、按 arXiv
+  ID/version 去重并截断；历史 `http` 官方 PDF 地址规范化为 `https`，Feed 注入的非官方 URL 会在
+  下载前拒绝；
+- Atom Feed 与 PDF 都使用流式累计读取：Feed 默认限制 2 MiB；PDF 在每次重定向后重新验证 scheme、
+  Host、凭据和 `/pdf/` 路径，并限制 50 MiB 单文件与剩余总预算；两者都先验证 Content-Type 与
+  Content-Length，PDF 另校验 `%PDF-` magic bytes 和 SHA-256。
+  timeout、transport、429 和 5xx 最多尝试三次，耗尽后仍作为临时错误上抛供 Run 重试；404、非法
+  PDF、Host 和超限以稳定单篇错误码落库并继续；
+- `DownloadedPdf` 直接构造也必须满足 PDF MIME、magic bytes 与 `content_hash == SHA-256(content)`；
+  Adapter 的大小、重定向、尝试次数和官方 Host 子集，以及 Service 总下载预算均在构造时 fail-fast，
+  不能通过配置关闭边界或扩成任意 Host；
+- `search_sources()` 先在短事务中验证 owner/Project/Review Run，再出网，并在提交事务重新锁定范围。
+  Source、`arxiv_search_completed` Event 与 `SEARCH_ARXIV` 成功 Step 同事务保存；查询指纹 Step 让
+  有结果和零结果都能回放，不重复出网、Event 或 Source；
+- PDF 下载和 Storage 写入均在数据库事务外。缓存键固定为
+  `{owner_id}/arxiv-cache/sha256/{sha256}.pdf`，不包含标题或未经清理的 arXiv 文本；数据库失败时
+  保留可复用/对账缓存，不执行可能删除并发执行者文件的补偿删除；
+- 每篇登记使用短事务创建或复用 Paper、PaperVersion、ProjectPaper、Ingestion Run、`run_created`
+  Event 和 Outbox，同时绑定 ReviewSource 与依赖；现有 Ingestion Worker/Executor 继续创建 Indexing
+  Run，本服务不直接调用 Executor。已有 ready ChunkSet 时通过 Revision→Version 连接验证归属并建立
+  satisfied PaperVersion/ChunkSet 依赖；
+- 同 owner+SHA-256 首次登记使用 PostgreSQL 事务级 advisory lock 配合既有唯一索引，不同 Review
+  Run 并发导入会收敛为一套 Paper/Version/Ingestion Run/Outbox。复用 Version 的旧 Ingestion Run
+  只有同时匹配 owner、当前 Project 和 `RunType.INGESTION` 才成为 RUN 依赖；跨 Project 时只保留
+  PaperVersion 依赖供切片 4 对账；
+- 已归档 Paper 不会被自动恢复或绑定为后续 RAG 不可见的 ready Source，而以
+  `review_source_paper_archived` 稳定失败；该行为与现有 ProjectLibrary/Phase 1 语义一致；
+- `ReviewRepository` 增加 scoped source 行锁与受控保存，`ChunkSetRepository` 增加按 Version 查询
+  ready ChunkSet，`PaperVersionRepository` 增加 owner+hash 事务锁；未新增数据库表或迁移。
+
+验证结果：最终补强后的 arXiv 领域/HTTP Adapter/应用定向测试 `47 passed`，定向 PostgreSQL
+并发与回滚测试 `2 passed`；Backend 完整非集成测试 `446 passed, 4 skipped`，完整
+PostgreSQL/Testcontainers integration `95 passed`；`ruff check src tests`、`pyright` 与
+`git diff --check` 通过。本切片没有前端改动，因此未重复运行 Web 测试与构建。
+
+实现和取舍详见
+[arXiv 检索与项目导入](../modules/arxiv-search-project-import.md)。
+
 ## 19. 重点测试
 
 - Run 和 Attempt 的合法/非法等待状态转换；
@@ -661,12 +711,13 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 
 这些参数进入 Profile 配置快照；校准不改变已经确认的产品流程。
 
-## 22. 预计学习笔记
+## 22. 学习笔记进度
 
 模块实际完成后再创建：
 
-- `docs/learning-journal/modules/arxiv-search-and-paper-import.md`
-- `docs/learning-journal/modules/langgraph-checkpoint-and-resume.md`
-- `docs/learning-journal/modules/human-outline-review.md`
-- `docs/learning-journal/modules/review-evidence-matrix.md`
-- `docs/learning-journal/modules/review-artifact-generation.md`
+- 已完成：`docs/learning-journal/modules/arxiv-search-project-import.md`（已从预计列表移出）；
+- 后续预计：
+  - `docs/learning-journal/modules/langgraph-checkpoint-and-resume.md`
+  - `docs/learning-journal/modules/human-outline-review.md`
+  - `docs/learning-journal/modules/review-evidence-matrix.md`
+  - `docs/learning-journal/modules/review-artifact-generation.md`

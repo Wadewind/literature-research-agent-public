@@ -12,6 +12,10 @@ class PaperVersionRepository(Protocol):
         """保存 PaperVersion。"""
         ...
 
+    async def acquire_owner_hash_lock(self, owner_id: str, file_hash: str) -> None:
+        """在当前事务内串行化同 owner+hash 的首次登记。"""
+        ...
+
     async def get_by_id(self, version_id: str) -> PaperVersion | None:
         """按 ID 查询 PaperVersion；不存在返回 None。"""
         ...

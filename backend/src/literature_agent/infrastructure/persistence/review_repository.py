@@ -256,6 +256,34 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return [_source_to_domain(x) for x in result.scalars().all()]
 
+    async def get_source_scoped_for_update(
+        self, source_id: str, run_id: str, project_id: str, owner_id: str
+    ) -> ReviewSource | None:
+        result = await self._session.execute(
+            select(ReviewSourceORM)
+            .join(ReviewRunORM, ReviewRunORM.run_id == ReviewSourceORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                *self._scope(run_id, project_id, owner_id),
+                ReviewSourceORM.source_id == source_id,
+                ReviewSourceORM.review_run_id == run_id,
+            )
+            .with_for_update()
+        )
+        row = result.scalar_one_or_none()
+        return _source_to_domain(row) if row else None
+
+    async def save_source(self, source: ReviewSource) -> None:
+        result = await self._session.execute(
+            select(ReviewSourceORM).where(ReviewSourceORM.source_id == source.source_id)
+        )
+        row = result.scalar_one()
+        row.status = source.status.value
+        row.paper_id = source.paper_id
+        row.paper_version_id = source.paper_version_id
+        row.failure_code = source.failure_code
+        row.updated_at = source.updated_at
+
     async def add_dependency(self, dependency: ReviewDependency) -> ReviewDependency:
         self._session.add(
             RunDependencyORM(

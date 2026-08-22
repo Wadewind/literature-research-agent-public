@@ -1,6 +1,6 @@
 """PaperVersion Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.paper_version_repository import (
@@ -58,6 +58,13 @@ class SqlalchemyPaperVersionRepository(PaperVersionRepository):
         """保存 PaperVersion。"""
         self._session.add(_to_orm(version))
         return version
+
+    async def acquire_owner_hash_lock(self, owner_id: str, file_hash: str) -> None:
+        """使用事务级 advisory lock 串行化唯一约束前的查询与插入。"""
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"paper-version:{owner_id}:{file_hash}"},
+        )
 
     async def get_by_id(self, version_id: str) -> PaperVersion | None:
         """按 ID 查询 PaperVersion。"""

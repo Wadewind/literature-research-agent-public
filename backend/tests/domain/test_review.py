@@ -119,6 +119,27 @@ def test_review_run_rejects_invalid_version_name() -> None:
         )
 
 
+def test_review_source_import_state_is_one_way() -> None:
+    """来源只能从 discovered 进入 importing/ready/failed，终态不能被覆盖。"""
+    source = create_review_source(
+        review_run_id="run-1",
+        arxiv_id="2401.00001",
+        arxiv_version="v1",
+        rank=1,
+        metadata_snapshot={},
+    )
+    importing = source.mark_importing("paper-1", "version-1")
+    ready = source.mark_ready("paper-1", "version-1")
+    failed = importing.mark_failed("ingestion_failed")
+
+    assert importing.status is ReviewSourceStatus.IMPORTING
+    assert ready.status is ReviewSourceStatus.READY
+    assert failed.status is ReviewSourceStatus.FAILED
+    assert importing.mark_ready("paper-1", "version-1").status is ReviewSourceStatus.READY
+    with pytest.raises(ValueError, match="discovered/importing"):
+        ready.mark_failed("late-failure")
+
+
 @pytest.mark.parametrize(
     ("dependency_type", "targets"),
     [
