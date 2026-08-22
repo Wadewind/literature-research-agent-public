@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：待开发
+- 当前状态：开发中（切片 1 已完成，等待确认）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -507,18 +507,46 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 
 ## 18. 实现切片
 
-1. 更新状态机、Attempt/Outbox 语义和迁移，先完成等待/恢复事务测试；
-2. 建立 Review Run、Step、Source、Dependency、Output、Human Input 数据契约；
-3. 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
-4. 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
-5. 接入 LangGraph checkpoint，验证 crash recovery；
-6. 实现 Evidence Matrix 固定提取策略与 Validator；
-7. 实现 Outline interrupt、approve/edit/feedback 和 Resume；
-8. 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
-9. 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
-10. 根据实际代码更新模块学习笔记与阶段完成状态。
+1. [x] 更新状态机、Attempt/Outbox 语义和迁移，先完成等待/恢复事务测试；
+2. [ ] 建立 Review Run、Step、Source、Dependency、Output、Human Input 数据契约；
+3. [ ] 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
+4. [ ] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
+5. [ ] 接入 LangGraph checkpoint，验证 crash recovery；
+6. [ ] 实现 Evidence Matrix 固定提取策略与 Validator；
+7. [ ] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
+8. [ ] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
+9. [ ] 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
+10. [ ] 根据实际代码更新模块学习笔记与阶段完成状态。
 
 每个切片遵循：契约/失败测试 → 最小实现 → 集成测试 → 文档更新。
+
+### 18.1 切片 1 完成记录（2026-08-22）
+
+- `RunStatus` 已增加 `WAITING_INPUT`、`WAITING_DEPENDENCY`；两者均属于
+  `ACTIVE_RUN_STATUSES`，支持 `RUNNING → WAITING_* → QUEUED` 和等待中直接取消；
+- `AttemptStatus.PAUSED`、`ExecutionOutcome.PAUSED` 已接入。执行器把 Run 推进等待状态后，
+  `RunExecutionService` 以 `PAUSED` 正常结束当前 Attempt，Outbox 保持 `DISPATCHED`；
+- Outbox Port、Fake 与 SQLAlchemy Adapter 已增加 `schedule_again(run_id)`：只允许
+  `DISPATCHED → PENDING`，立即到期、清空 `dispatched_at`，不增加 `attempt_count`；
+  `reset_for_retry()` 仍只用于失败重试并增加计数；
+- 新增 `WaitingRunResumeService`，按受限的依赖完成或人工输入原因，在同一事务内完成
+  `WAITING_* → QUEUED`、原因 Event 和 `schedule_again()`；同时校验 owner 与 Project，错误等待
+  状态、重复调用、跨 Project 或 Outbox 不可重置均拒绝提交；PostgreSQL 集成测试确认 Outbox
+  条件失败或抛错时 Run/Event 回滚；
+- 恢复核心提供不自行提交的 `resume_in_session()`，后续 HumanInput/Dependency 应用服务必须先在
+  同一 session 保存原因记录，再调用该方法并由最外层统一 commit；本切片尚无这些业务表，不能
+  把“原因记录”和恢复三项操作拆成两个事务；
+- 前端状态工具已识别两种等待状态、取消能力、中文文案和两类正常恢复 Event；
+- 未新增 Alembic migration：`runs.status`、`run_attempts.status` 均为无数据库枚举/Check
+  约束的 `String(20)`，新值不改变表结构；`queue_outbox` 也未增加字段或约束。切片 2 再按实际
+  Review 数据契约创建迁移；
+- 本切片没有提前增加 `RunType.REVIEW`、Review 数据模型、arXiv 或 LangGraph 实现。
+- 已知 crash gap：如果 Run 已提交 `WAITING_*` 或终态，但进程在 best-effort 关闭 Attempt 前崩溃，
+  现有 Reconciler 只查询 Run 仍为 `RUNNING` 的 Attempt，无法关闭这条残留 `RUNNING` Attempt；
+  Phase 3 切片 5 的 crash recovery 必须补测试并解决，当前不能宣称已有 Reconciler 兜底。
+
+验证结果：Backend 非集成测试 `387 passed, 4 skipped`；完整 PostgreSQL/Valkey integration
+`86 passed`；`ruff check src tests` 与 `pyright` 通过；Web Vitest `65 passed`，生产构建通过。
 
 ## 19. 重点测试
 

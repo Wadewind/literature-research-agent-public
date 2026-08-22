@@ -12,6 +12,7 @@ from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import InvalidPdfInputError
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import Run, RunStatus, create_run
+from literature_agent.domain.run_attempt import AttemptStatus
 from tests.fakes.fake_attempt_repository import FakeAttemptRepository
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_outbox_repository import FakeOutboxRepository
@@ -218,6 +219,50 @@ async def test_execute_cancelled_run_is_skipped(
 
     assert outcome == ExecutionOutcome.SKIPPED
     assert _event_types(event_repo, run.run_id) == []
+
+
+@pytest.mark.parametrize(
+    "waiting_status",
+    [RunStatus.WAITING_INPUT, RunStatus.WAITING_DEPENDENCY],
+)
+async def test_execute_waiting_run_pauses_attempt(
+    waiting_status: RunStatus,
+    run_repo: FakeRunRepository,
+    event_repo: FakeEventRepository,
+    attempt_repo: FakeAttemptRepository,
+    outbox_repo: FakeOutboxRepository,
+) -> None:
+    """执行器进入等待状态时返回 PAUSED，并正常关闭当前 Attempt。"""
+
+    async def _pausing_executor(run: Run, _correlation_id: str) -> None:
+        loaded = await run_repo.get_by_id(run.run_id)
+        assert loaded is not None
+        updated = await run_repo.update_status(
+            run.run_id,
+            RunStatus.RUNNING,
+            waiting_status,
+            loaded.event_sequence + 1,
+        )
+        assert updated
+
+    run = await _add_run(run_repo)
+    await _seed_dispatched_outbox(outbox_repo, run.run_id)
+    service = _make_service(
+        run_repo, event_repo, attempt_repo, outbox_repo, _pausing_executor
+    )
+
+    outcome = await service.execute(run.run_id, correlation_id="job-1")
+
+    assert outcome == ExecutionOutcome.PAUSED
+    loaded = await run_repo.get_by_id(run.run_id)
+    assert loaded is not None
+    assert loaded.status == waiting_status
+    attempt = await attempt_repo.get_latest_by_run(run.run_id)
+    assert attempt is not None
+    assert attempt.status == AttemptStatus.PAUSED
+    entry = await outbox_repo.get_by_run_id(run.run_id)
+    assert entry is not None
+    assert entry.status == OutboxStatus.DISPATCHED
 
 
 async def test_execute_transient_error_schedules_retry(

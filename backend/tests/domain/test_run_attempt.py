@@ -46,3 +46,15 @@ def test_finish_sets_terminal_status_and_error() -> None:
     assert finished.finished_at == now
     assert finished.heartbeat_at == now
     assert finished.error == error
+
+
+def test_finish_as_paused_is_normal_without_error() -> None:
+    """等待输入或依赖时，Attempt 以 PAUSED 正常释放 Worker。"""
+    attempt = create_run_attempt("run-1", 1, "worker-a:1")
+    now = datetime.now(UTC)
+
+    finished = attempt.finish(AttemptStatus.PAUSED, now)
+
+    assert finished.status == AttemptStatus.PAUSED
+    assert finished.finished_at == now
+    assert finished.error is None

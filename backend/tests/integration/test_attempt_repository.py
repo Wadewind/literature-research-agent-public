@@ -93,6 +93,27 @@ async def test_heartbeat_and_finish_are_conditional(
     assert latest.finished_at is not None
 
 
+async def test_finish_as_paused_round_trips(
+    session: AsyncSession, running_run: str
+) -> None:
+    """PAUSED 应作为正常结束状态写入并读回。"""
+    repo = SqlalchemyAttemptRepository(session)
+    attempt = create_run_attempt(running_run, 1, "worker-a:1")
+    await repo.add(attempt)
+    await session.flush()
+
+    assert await repo.finish_if_running(
+        attempt.attempt_id, AttemptStatus.PAUSED, datetime.now(UTC)
+    )
+    await session.flush()
+
+    loaded = await repo.get_latest_by_run(running_run)
+    assert loaded is not None
+    assert loaded.status == AttemptStatus.PAUSED
+    assert loaded.finished_at is not None
+    assert loaded.error is None
+
+
 async def test_list_expired_running_joins_run_status(
     session: AsyncSession, running_run: str
 ) -> None:

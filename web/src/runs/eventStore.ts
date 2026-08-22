@@ -38,6 +38,8 @@ export const KNOWN_EVENT_TYPES = [
   "run_created",
   "run_started",
   "run_requeued",
+  "dependency_wait_completed",
+  "human_input_submitted",
   "run_cancel_requested",
   "parse_started",
   "parse_completed",

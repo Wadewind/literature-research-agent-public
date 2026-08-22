@@ -15,6 +15,7 @@ class AttemptStatus(StrEnum):
     """Attempt 生命周期状态。"""
 
     RUNNING = "running"
+    PAUSED = "paused"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"

@@ -5,7 +5,7 @@ Worker 从队列收到只携带 ``run_id`` 的 Job 后，由本服务从 Postgre
 
 - 本服务负责原子认领（QUEUED → RUNNING + ``run_started`` Event）、
   创建 Attempt 与执行期间的心跳、执行器抛错时的失败策略兜底
-  （分类后 FAILED 或 RETRY_WAIT）、以及终态后关闭 Attempt；
+  （分类后 FAILED 或 RETRY_WAIT）、以及执行器退出后按 Run 状态关闭 Attempt；
 - 执行器（如 IngestionExecutor）负责业务流程、进度 Event 和
   终态的原子提交（结果、当前指针、Run 终态、``result_committed``
   Event 在同一事务），从而不暴露半成品。
@@ -45,7 +45,7 @@ from literature_agent.domain.run_attempt import (
 
 TSession = TypeVar("TSession", bound=Session)
 
-# 执行器签名：接收已认领的 RUNNING Run 与关联标识符，自行推进终态
+# 执行器签名：接收已认领的 RUNNING Run 与关联标识符，自行推进终态或等待状态
 RunExecutor = Callable[[Run, str], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ class ExecutionOutcome(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     RETRY_SCHEDULED = "retry_scheduled"
+    PAUSED = "paused"
     MISSING = "missing"
     SKIPPED = "skipped"
 
@@ -87,7 +88,7 @@ class RunExecutionService:
             event_repo_factory: 根据 session 创建 EventRepository 的工厂。
             attempt_repo_factory: 根据 session 创建 AttemptRepository 的工厂。
             outbox_repo_factory: 根据 session 创建 OutboxRepository 的工厂。
-            executor: 业务执行器，事务外调用，负责推进终态。
+            executor: 业务执行器，事务外调用，负责推进终态或等待状态。
             worker_id: 当前 Worker 标识（写入 Attempt）。
             heartbeat_interval_seconds: 心跳间隔秒数。
             max_run_attempts: 最大执行尝试次数（含首次）。
@@ -141,7 +142,12 @@ class RunExecutionService:
             return ExecutionOutcome.FAILED
         if final_status == RunStatus.RETRY_WAIT:
             return ExecutionOutcome.RETRY_SCHEDULED
-        # 执行期间被并发取消，或执行器未推进终态
+        if final_status in {
+            RunStatus.WAITING_INPUT,
+            RunStatus.WAITING_DEPENDENCY,
+        }:
+            return ExecutionOutcome.PAUSED
+        # 执行期间被并发取消，或执行器没有推进到已知结束状态
         return ExecutionOutcome.SKIPPED
 
     async def _start(
@@ -219,11 +225,17 @@ class RunExecutionService:
         attempt_id: str,
         final_status: RunStatus | None,
     ) -> None:
-        """按 Run 终态关闭 Attempt（best effort，崩溃场景由对账循环兜底）。"""
+        """按 Run 结束状态 best-effort 关闭 Attempt。
+
+        Run 已先提交等待或终态、但进程在关闭 Attempt 前崩溃时，现有对账查询
+        不会处理这条 RUNNING Attempt；该间隙留给 Phase 3 crash recovery 切片修复。
+        """
         mapping = {
             RunStatus.SUCCEEDED: AttemptStatus.SUCCEEDED,
             RunStatus.FAILED: AttemptStatus.FAILED,
             RunStatus.RETRY_WAIT: AttemptStatus.FAILED,
+            RunStatus.WAITING_INPUT: AttemptStatus.PAUSED,
+            RunStatus.WAITING_DEPENDENCY: AttemptStatus.PAUSED,
             RunStatus.CANCELLED: AttemptStatus.CANCELLED,
         }
         attempt_status = AttemptStatus.FAILED

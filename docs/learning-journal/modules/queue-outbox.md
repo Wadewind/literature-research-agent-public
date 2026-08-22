@@ -25,8 +25,15 @@ Worker 进程（python -m literature_agent.worker）│
             → 条件认领 QUEUED → RUNNING，同事务创建 Attempt（+ run_started Event）
             → 执行期间心跳任务周期更新 Attempt.heartbeat_at（30s，失败只记日志）
             → 事务外调用执行器（IngestionExecutor + Parser 组合）
-            → 执行器负责推进 RUNNING → SUCCEEDED/FAILED/RETRY_WAIT/CANCELLED
-            → 终态后 best-effort 关闭 Attempt；崩溃场景由对账循环兜底
+            → 执行器负责推进 RUNNING → 终态/重试/等待状态
+            → 执行器退出后按 Run 状态 best-effort 关闭 Attempt
+
+正常等待恢复（Phase 3 切片 1）
+  → WaitingRunResumeService
+    → 同一事务：WAITING_* → QUEUED
+                 + 原因 Event
+                 + Outbox DISPATCHED → PENDING（schedule_again）
+  → Dispatcher 投递新 Job → 新 Attempt
 ```
 
 - 数据库提交与队列投递之间不假设原子性：Outbox 是持久化间隙，崩溃后下一轮派发循环补投；
@@ -39,8 +46,10 @@ Worker 进程（python -m literature_agent.worker）│
 - `run_id` 唯一约束保证一个 Run 最多一条投递记录。
 - 投递失败退避：`min(2^(n-1), 60s)`；达到 `outbox_max_attempts`（默认 10）进入 `failed` 终态，等待人工介入。
 - `try_mark_dispatched` 是 `WHERE status='pending'` 的条件更新，重复标记只有一个生效。
-- `run_attempts` 表：`attempt_id`（PK）、`run_id`（FK）、`attempt_number`、`worker_id`、`status`（`running`/`succeeded`/`failed`/`cancelled`）、`started_at`、`heartbeat_at`、`finished_at`、`error`（JSONB）；唯一约束 `(run_id, attempt_number)`。Attempt 是运维记录（lease/对账依据），业务事实仍以 Run 和 Event 为准。
+- `run_attempts` 表：`attempt_id`（PK）、`run_id`（FK）、`attempt_number`、`worker_id`、`status`（`running`/`paused`/`succeeded`/`failed`/`cancelled`）、`started_at`、`heartbeat_at`、`finished_at`、`error`（JSONB）；唯一约束 `(run_id, attempt_number)`。Attempt 是运维记录（lease/对账依据），业务事实仍以 Run 和 Event 为准。
 - 重试复用 Outbox 行：`reset_for_retry` 把 `dispatched` 条件重置为 `pending`、推迟 `scheduled_at` 并累计 `attempt_count`，不新增行。
+- 正常恢复也复用同一 Outbox 行：`schedule_again` 把 `dispatched` 条件重置为立即到期的
+  `pending`，清空 `dispatched_at`，但不增加 `attempt_count`；它不表示失败重试。
 
 ## 关键决定与替代方案
 
@@ -56,16 +65,26 @@ Worker 进程（python -m literature_agent.worker）│
 - **错误分类最小两类**（2026-08-20 定稿）：永久错误（`InvalidPdfInputError`/`FileValidationError` 输入类）直接 FAILED；临时错误（`parser_timeout`、资源类、未知异常）预算内 RETRY_WAIT 重试，预算 `max_run_attempts` 默认 3（含首次），退避沿用 Outbox 参数。分类表集中在领域函数 `is_permanent_error`。
 - **Outbox 不可重置时降级 FAILED**：重试前提是 Outbox 记录仍可重置；记录缺失或状态异常时无法保证重新投递，直接 FAILED，避免 Run 滞留 RETRY_WAIT。
 - **对账循环放在 Worker 进程**：不单独部署 Reconciler；多实例并发对账由持锁二次校验 + 条件更新兜底。
-- **Attempt 关闭是 best effort**：不要求 Attempt 状态与 Run 终态同事务；崩溃场景由对账循环关闭。
+- **Attempt 关闭是 best effort**：不要求 Attempt 状态与 Run 等待/终态同事务。现有对账查询只
+  处理 Run 仍为 `RUNNING` 的过期 Attempt；若 Run 状态已提交而 Worker 在关闭 Attempt 前崩溃，
+  会留下残留 `RUNNING` Attempt，这是已知 crash gap，不宣称已有兜底。
+- **PAUSED 表示正常释放 Worker**（Phase 3 切片 1）：Run 进入等待输入或依赖后，当前 Attempt
+  以 `paused` 结束，不进入失败预算；Outbox 保持 `dispatched`，直到正常恢复事务调用
+  `schedule_again`。
+- **正常恢复不是 Dispatcher 的隐式行为**：受限应用服务显式提交 `WAITING_* → QUEUED`、原因
+  Event 和 Outbox 重置，避免仅修改队列状态而丢失业务时间线。
 
 ## 失败、重试、重复和取消行为
 
 - 队列不可用：投递抛错 → `attempt_count + 1`、按退避推迟，记录保持 `pending`，恢复后补投（有集成测试）。
 - 投递成功但标记前崩溃：记录保持 `pending`，下一轮重复投递，队列去重 + Worker 幂等保证 Effectively Once。
 - 执行体抛错（切片 8 起按错误分类）：永久错误 → FAILED + `run_failed`；临时错误且预算内 → RETRY_WAIT + `run_retry_scheduled` + Outbox 重置，派发循环到点重投；预算耗尽 → FAILED。Event 只记录错误类型和截断消息，不记录堆栈。
-- Worker 崩溃：Attempt 停止心跳，lease 过期（600s）后对账循环收回——Attempt 置 `failed`（worker_crashed），Run 按失败策略 RETRY_WAIT 重投或 FAILED。
+- Worker 在 Run 仍为 RUNNING 时崩溃：Attempt 停止心跳，lease 过期（600s）后对账循环收回——
+  Attempt 置 `failed`（worker_crashed），Run 按失败策略 RETRY_WAIT 重投或 FAILED。
 - 复活的原 Worker 提交结果时条件更新失败（Run 已非 RUNNING 或已被收回），不产生第二个终态。
 - 执行期间并发取消：完成时条件更新失败，返回 SKIPPED，不产生第二个终态。
+- 正常恢复重复调用：第一次将 Run 改为 QUEUED 后，后续调用被条件状态拒绝，不重复写 Event；
+  Outbox 缺失或状态异常时整个事务回滚，不留下已排队却无法投递的 Run。
 
 ## 安全和可观测性
 
@@ -83,14 +102,22 @@ Worker 进程（python -m literature_agent.worker）│
 - `tests/domain/test_run_attempt.py`、`test_retry_policy.py`：Attempt 生命周期、永久/临时分类、退避上限。
 - `tests/application/test_run_reconcile_service.py`：lease 过期收回重投、心跳新鲜不动、终态跳过、预算耗尽 FAILED。
 - `tests/integration/test_attempt_repository.py`：唯一约束、心跳/结束条件更新、过期查询 join Run 状态。
+- `tests/application/test_waiting_run_resume_service.py`：依赖/Human Input 恢复、状态约束、重复调用与所有权。
+- `tests/integration/test_waiting_run_resume_transaction.py`：正常恢复三项效果同事务及 Outbox 异常回滚。
+- `tests/integration/test_outbox_repository.py`：`schedule_again` 不增加计数，`reset_for_retry` 增加计数。
 
 切片 8 完成时的历史快照：`uv run pytest -q` 148 passed + 2 skipped，`ruff check` 与 `pyright` 无告警。当前测试基线以 Phase 1 进度记录为准。
+
+Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 integration
+`86 passed`；`ruff check src tests` 与 `pyright` 通过。新增的 7 个定向 PostgreSQL 用例覆盖
+`PAUSED`、等待状态活跃性、`schedule_again` 计数差异及恢复事务回滚。
 
 ## 代码入口
 
 - 领域：`backend/src/literature_agent/domain/queue_outbox.py`
 - 端口：`backend/src/literature_agent/application/ports/outbox_repository.py`、`run_queue.py`
 - 服务：`backend/src/literature_agent/application/outbox_dispatch_service.py`、`run_execution_service.py`、`run_reconcile_service.py`、`failure_policy.py`
+- 正常恢复服务：`backend/src/literature_agent/application/waiting_run_resume_service.py`
 - 适配器：`backend/src/literature_agent/infrastructure/persistence/outbox_repository.py`、`infrastructure/queue/arq_run_queue.py`
 - Worker 入口：`backend/src/literature_agent/worker.py`
 - 迁移：`backend/migrations/versions/a4e0bc996e3b_create_queue_outbox_table.py`、`28a3aeb62280_create_run_attempts_table.py`
@@ -101,9 +128,18 @@ Worker 进程（python -m literature_agent.worker）│
 - 执行体已接入真实 Docling + pypdf 降级组合（切片 7，见 document-parsing 笔记）。
 - 单实例派发与对账循环；多实例依赖 Job ID 去重和条件更新，未使用 SKIP LOCKED 认领。
 - Outbox `failed` 终态（投递层）与 Run `failed`（预算耗尽）暂无自动告警和人工重放入口。
+- `schedule_again` 与正常恢复事务已实现，但依赖 Reconciler 和 Human Input 入口要在 Phase 3
+  后续切片才会调用它。
+- Run 已提交等待/终态后、Attempt best-effort 关闭前的崩溃不会被当前 Reconciler 发现；
+  Phase 3 crash recovery 切片必须补偿这类残留 Attempt。
 - 协作式取消不保证立即终止已进入 Parser 的底层计算。
 - SSE 实时通知在切片 9 接入（见 run-event 笔记）。
 
 ## 60 秒面试说明
 
-"可靠投递模块解决数据库提交和队列投递之间的可靠性间隙。创建 Run 时在同一事务写一条 Outbox 记录，派发循环把到期记录投递到 ARQ——投递用 run_id 作为 Job ID 去重，标记投递用条件更新，崩溃后补投安全。执行侧每次认领都创建 Attempt 并周期心跳：Worker 崩溃导致心跳停止，600 秒 lease 过期后对账循环把 Run 收回，按错误分类决定重试（RETRY_WAIT + Outbox 重置退避重投）还是失败。任何一环崩溃或重复都不丢任务、不重复执行、不永久卡住，业务上 Effectively Once，且重试只有 Outbox 退避一层主导。"
+"可靠投递模块用一条可重置 Outbox 跨越数据库提交与 ARQ 投递间隙。失败重试通过
+`reset_for_retry` 累计计数和退避；等待输入或依赖时，Attempt 以 `PAUSED` 正常释放 Worker，
+恢复则通过 `schedule_again` 立即重投且不占失败预算。恢复时 Run、原因 Event 和 Outbox 在同一
+事务更新；执行侧再用稳定 Job ID、Run 条件认领、Attempt lease 和对账收回处理重复投递，以及
+Run 仍为 RUNNING 时的 Worker 崩溃，实现业务上的 Effectively Once。等待/终态提交后的 Attempt
+关闭崩溃间隙仍需后续修复。"

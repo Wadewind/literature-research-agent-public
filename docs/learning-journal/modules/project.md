@@ -28,7 +28,10 @@ HTTP Route (api/projects.py)
 - 归档/恢复为幂等领域操作（`archive()`/`restore()`），归档状态由 `archived_at` 派生，无独立 status 列。
 - 数据库表 `projects` 以 `project_id` 为主键，`owner_id` 建立索引；`list_by_owner` 默认只返回 active，`include_archived=true` 时返回全部。
 - 创建 Project 时在同一事务中 `repo.add` 后 `commit`；修改/归档/恢复经条件更新持久化并写 `updated_at`。
-- 归档前置校验：存在非终态 Run（`ACTIVE_RUN_STATUSES`：QUEUED/RUNNING/RETRY_WAIT/CANCEL_REQUESTED，唯一定义在 `domain/run.py`）时拒绝归档，API 返回 409 `project_has_active_runs`；已归档 Project 的写入口（上传、收录、移除收录、改名）返回 409 `project_archived`，读接口保持可用。
+- 归档前置校验：存在非终态 Run（`ACTIVE_RUN_STATUSES`：QUEUED/RUNNING/RETRY_WAIT/
+  WAITING_INPUT/WAITING_DEPENDENCY/CANCEL_REQUESTED，唯一定义在 `domain/run.py`）时拒绝归档，
+  API 返回 409 `project_has_active_runs`；已归档 Project 的写入口（上传、收录、移除收录、改名）
+  返回 409 `project_archived`，读接口保持可用。
 
 ## 关键决定与替代方案
 

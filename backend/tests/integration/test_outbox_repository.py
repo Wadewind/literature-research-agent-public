@@ -148,3 +148,41 @@ async def test_save_records_dispatch_failure(session, run_id: str) -> None:
     assert loaded is not None
     assert loaded.status == OutboxStatus.FAILED
     assert loaded.attempt_count == 2
+
+
+async def test_schedule_again_does_not_increment_attempt_count(session, run_id: str) -> None:
+    """正常恢复只重置投递状态，不计作失败重试。"""
+    repo = SqlalchemyOutboxRepository(session)
+    entry = create_outbox_entry(run_id)
+    await repo.add(entry)
+    await session.commit()
+    assert await repo.try_mark_dispatched(entry.outbox_id, datetime.now(UTC))
+    await session.commit()
+
+    assert await repo.schedule_again(run_id) is True
+    await session.commit()
+
+    loaded = await repo.get_by_run_id(run_id)
+    assert loaded is not None
+    assert loaded.status == OutboxStatus.PENDING
+    assert loaded.attempt_count == 0
+    assert loaded.dispatched_at is None
+    assert await repo.schedule_again(run_id) is False
+
+
+async def test_reset_for_retry_increments_attempt_count(session, run_id: str) -> None:
+    """失败重试与正常恢复不同，会增加失败计数。"""
+    repo = SqlalchemyOutboxRepository(session)
+    entry = create_outbox_entry(run_id)
+    await repo.add(entry)
+    await session.commit()
+    assert await repo.try_mark_dispatched(entry.outbox_id, datetime.now(UTC))
+    await session.commit()
+
+    assert await repo.reset_for_retry(run_id, datetime.now(UTC)) is True
+    await session.commit()
+
+    loaded = await repo.get_by_run_id(run_id)
+    assert loaded is not None
+    assert loaded.status == OutboxStatus.PENDING
+    assert loaded.attempt_count == 1

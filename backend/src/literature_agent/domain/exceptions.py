@@ -40,6 +40,14 @@ class RunConcurrentModificationError(Exception):
         super().__init__(f"Run {run_id} 并发修改冲突")
 
 
+class RunSchedulingError(Exception):
+    """Run 的 Outbox 缺失或状态异常，无法保证再次投递。"""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"Run {run_id} 无法重新调度")
+
+
 class FileValidationError(Exception):
     """上传文件校验失败（类型、大小、损坏等）。"""
 

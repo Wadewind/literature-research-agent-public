@@ -133,3 +133,24 @@ class SqlalchemyOutboxRepository(OutboxRepository):
             ),
         )
         return result.rowcount == 1
+
+    async def schedule_again(self, run_id: str) -> bool:
+        """正常恢复时条件重置为立即待投递，不增加失败计数。"""
+        now = datetime.now(UTC)
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(QueueOutboxORM)
+                .where(
+                    QueueOutboxORM.run_id == run_id,
+                    QueueOutboxORM.status == OutboxStatus.DISPATCHED.value,
+                )
+                .values(
+                    status=OutboxStatus.PENDING.value,
+                    scheduled_at=now,
+                    dispatched_at=None,
+                    updated_at=now,
+                ),
+            ),
+        )
+        return result.rowcount == 1

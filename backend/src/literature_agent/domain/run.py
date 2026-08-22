@@ -28,6 +28,8 @@ class RunStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     RETRY_WAIT = "retry_wait"
+    WAITING_INPUT = "waiting_input"
+    WAITING_DEPENDENCY = "waiting_dependency"
     CANCEL_REQUESTED = "cancel_requested"
     CANCELLED = "cancelled"
 
@@ -38,9 +40,13 @@ _TRANSITIONS: dict[RunStatus, set[RunStatus]] = {
         RunStatus.SUCCEEDED,
         RunStatus.FAILED,
         RunStatus.RETRY_WAIT,
+        RunStatus.WAITING_INPUT,
+        RunStatus.WAITING_DEPENDENCY,
         RunStatus.CANCEL_REQUESTED,
     },
     RunStatus.RETRY_WAIT: {RunStatus.QUEUED, RunStatus.CANCELLED},
+    RunStatus.WAITING_INPUT: {RunStatus.QUEUED, RunStatus.CANCELLED},
+    RunStatus.WAITING_DEPENDENCY: {RunStatus.QUEUED, RunStatus.CANCELLED},
     RunStatus.CANCEL_REQUESTED: {RunStatus.CANCELLED},
 }
 
@@ -56,6 +62,8 @@ ACTIVE_RUN_STATUSES: frozenset[RunStatus] = frozenset(
         RunStatus.QUEUED,
         RunStatus.RUNNING,
         RunStatus.RETRY_WAIT,
+        RunStatus.WAITING_INPUT,
+        RunStatus.WAITING_DEPENDENCY,
         RunStatus.CANCEL_REQUESTED,
     }
 )

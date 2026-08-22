@@ -3,7 +3,7 @@
 import pytest
 
 from literature_agent.domain.exceptions import InvalidRunTransitionError
-from literature_agent.domain.run import RunStatus, create_run
+from literature_agent.domain.run import ACTIVE_RUN_STATUSES, RunStatus, create_run
 
 
 def test_create_run_initial_state() -> None:
@@ -78,3 +78,36 @@ def test_request_cancel_running() -> None:
 
     run = run.transition_to(RunStatus.CANCELLED)
     assert run.status == RunStatus.CANCELLED
+
+
+@pytest.mark.parametrize(
+    "waiting_status",
+    [RunStatus.WAITING_INPUT, RunStatus.WAITING_DEPENDENCY],
+)
+def test_running_can_pause_and_waiting_can_resume(waiting_status: RunStatus) -> None:
+    """RUNNING 可进入两种等待状态，等待状态可重新排队。"""
+    run = create_run(project_id="p1", owner_id="u1", run_type="ingestion")
+    run = run.transition_to(RunStatus.RUNNING)
+
+    waiting = run.transition_to(waiting_status)
+    resumed = waiting.transition_to(RunStatus.QUEUED)
+
+    assert resumed.status == RunStatus.QUEUED
+
+
+@pytest.mark.parametrize(
+    "waiting_status",
+    [RunStatus.WAITING_INPUT, RunStatus.WAITING_DEPENDENCY],
+)
+def test_waiting_run_can_be_cancelled(waiting_status: RunStatus) -> None:
+    """两种等待状态都允许直接取消。"""
+    run = create_run(project_id="p1", owner_id="u1", run_type="ingestion")
+    run = run.transition_to(RunStatus.RUNNING).transition_to(waiting_status)
+
+    assert run.transition_to(RunStatus.CANCELLED).status == RunStatus.CANCELLED
+
+
+def test_waiting_states_are_active() -> None:
+    """等待中的 Run 仍属活跃业务，不能随 Project 一起归档。"""
+    assert RunStatus.WAITING_INPUT in ACTIVE_RUN_STATUSES
+    assert RunStatus.WAITING_DEPENDENCY in ACTIVE_RUN_STATUSES

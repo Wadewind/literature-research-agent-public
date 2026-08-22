@@ -61,6 +61,16 @@ describe("applyEvent", () => {
     expect(state.closed).toBe(false);
   });
 
+  it.each(["dependency_wait_completed", "human_input_submitted"])(
+    "正常恢复事件 %s 可订阅且不关闭 SSE",
+    (eventType) => {
+      const state = applyEvent(createEventStreamState(), makeEvent(1, eventType));
+
+      expect(KNOWN_EVENT_TYPES).toContain(eventType);
+      expect(state.closed).toBe(false);
+    },
+  );
+
   it("终态后仍忽略重复事件且保持收束", () => {
     let state = createEventStreamState();
     state = applyEvent(state, makeEvent(5, "run_failed"));

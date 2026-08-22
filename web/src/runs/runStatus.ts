@@ -18,7 +18,13 @@ export const TERMINAL_EVENT_TYPES = [
 ] as const;
 
 /** 可请求取消的状态：终态与已在取消流程中的状态不可重复取消。 */
-const CANCELLABLE_STATUSES = ["queued", "running", "retry_wait"] as const;
+const CANCELLABLE_STATUSES = [
+  "queued",
+  "running",
+  "retry_wait",
+  "waiting_input",
+  "waiting_dependency",
+] as const;
 
 export function isTerminal(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
@@ -41,6 +47,10 @@ export function statusLabel(status: string): string {
       return "运行中";
     case "retry_wait":
       return "等待重试";
+    case "waiting_input":
+      return "等待输入";
+    case "waiting_dependency":
+      return "等待依赖";
     case "cancel_requested":
       return "取消中";
     case "succeeded":

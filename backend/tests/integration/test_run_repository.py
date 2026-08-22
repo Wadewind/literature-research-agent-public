@@ -104,7 +104,7 @@ async def test_has_active_runs_by_project(
     session: AsyncSession,
     project: str,
 ) -> None:
-    """has_active_runs 只统计 QUEUED/RUNNING/RETRY_WAIT/CANCEL_REQUESTED。"""
+    """has_active_runs 排除终态，包含排队、运行、重试、等待和取消中。"""
     from dataclasses import replace
 
     assert await run_repo.has_active_runs(project) is False
@@ -122,3 +122,26 @@ async def test_has_active_runs_by_project(
     await run_repo.add(terminal)
     await session.commit()
     assert await run_repo.has_active_runs(project) is False
+
+
+@pytest.mark.parametrize(
+    "waiting_status",
+    [RunStatus.WAITING_INPUT, RunStatus.WAITING_DEPENDENCY],
+)
+async def test_waiting_run_is_active(
+    run_repo: SqlalchemyRunRepository,
+    session: AsyncSession,
+    project: str,
+    waiting_status: RunStatus,
+) -> None:
+    """两种等待状态都应阻止 Project 归档。"""
+    from dataclasses import replace
+
+    run = replace(
+        create_run(project_id=project, owner_id="user-1", run_type="ingestion"),
+        status=waiting_status,
+    )
+    await run_repo.add(run)
+    await session.commit()
+
+    assert await run_repo.has_active_runs(project) is True

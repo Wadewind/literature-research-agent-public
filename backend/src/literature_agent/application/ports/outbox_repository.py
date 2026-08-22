@@ -42,3 +42,11 @@ class OutboxRepository(Protocol):
         ``attempt_count`` 加一。返回是否更新成功。
         """
         ...
+
+    async def schedule_again(self, run_id: str) -> bool:
+        """把已投递记录条件重置为立即待投递（正常恢复用）。
+
+        仅当当前状态为 DISPATCHED 时成功；不增加 ``attempt_count``。
+        返回是否更新成功。
+        """
+        ...

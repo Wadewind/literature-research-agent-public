@@ -9,7 +9,14 @@ describe("isTerminal", () => {
     expect(isTerminal(status)).toBe(true);
   });
 
-  it.each(["queued", "running", "retry_wait", "cancel_requested"])(
+  it.each([
+    "queued",
+    "running",
+    "retry_wait",
+    "waiting_input",
+    "waiting_dependency",
+    "cancel_requested",
+  ])(
     "非终态：%s",
     (status) => {
       expect(isTerminal(status)).toBe(false);
@@ -18,7 +25,13 @@ describe("isTerminal", () => {
 });
 
 describe("isCancellable", () => {
-  it.each(["queued", "running", "retry_wait"])("可取消：%s", (status) => {
+  it.each([
+    "queued",
+    "running",
+    "retry_wait",
+    "waiting_input",
+    "waiting_dependency",
+  ])("可取消：%s", (status) => {
     expect(isCancellable(status)).toBe(true);
   });
 
@@ -34,6 +47,8 @@ describe("statusLabel", () => {
   it("已知状态有中文文案", () => {
     expect(statusLabel("succeeded")).toBe("成功");
     expect(statusLabel("cancel_requested")).toBe("取消中");
+    expect(statusLabel("waiting_input")).toBe("等待输入");
+    expect(statusLabel("waiting_dependency")).toBe("等待依赖");
   });
 
   it("未知状态原样返回", () => {

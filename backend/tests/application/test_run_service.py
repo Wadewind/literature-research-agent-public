@@ -1,5 +1,7 @@
 """Run Application Service 测试。"""
 
+from dataclasses import replace
+
 import pytest
 import pytest_asyncio
 
@@ -105,6 +107,32 @@ async def test_request_cancel_running_run(service: RunService) -> None:
     assert updated.status == RunStatus.CANCEL_REQUESTED
     events = await service.list_events(actor, run.run_id)
     assert events[-1].event_type == "run_cancel_requested"
+
+
+@pytest.mark.parametrize(
+    "waiting_status",
+    [RunStatus.WAITING_INPUT, RunStatus.WAITING_DEPENDENCY],
+)
+async def test_cancel_waiting_run(waiting_status: RunStatus) -> None:
+    """等待输入或依赖的 Run 可以直接取消并持久化事件。"""
+    run_repo = FakeRunRepository()
+    event_repo = FakeEventRepository()
+    service = RunService(
+        session_factory=fake_session,
+        run_repo_factory=lambda _session: run_repo,
+        event_repo_factory=lambda _session: event_repo,
+    )
+    actor = ActorContext(owner_id="user-1")
+    run = await service.create_run(actor, "project-1", "ingestion", {}, "corr-1")
+    await run_repo.add(replace(run, status=waiting_status))
+
+    updated = await service.cancel_run(actor, run.run_id, "corr-2")
+
+    assert updated.status == RunStatus.CANCELLED
+    loaded = await service.get_run(actor, run.run_id)
+    assert loaded.status == RunStatus.CANCELLED
+    events = await service.list_events(actor, run.run_id)
+    assert events[-1].event_type == "run_cancelled"
 
 
 @pytest.mark.asyncio

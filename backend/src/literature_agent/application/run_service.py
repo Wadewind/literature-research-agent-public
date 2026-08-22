@@ -209,6 +209,8 @@ class RunService:
                 RunStatus.CANCEL_REQUESTED,
                 RunStatus.QUEUED,
                 RunStatus.RETRY_WAIT,
+                RunStatus.WAITING_INPUT,
+                RunStatus.WAITING_DEPENDENCY,
             }:
                 target_status = RunStatus.CANCELLED
             elif run.status == RunStatus.RUNNING:

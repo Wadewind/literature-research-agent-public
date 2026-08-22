@@ -1,7 +1,7 @@
 """Outbox Repository 的内存假实现。"""
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 
 from literature_agent.application.ports.outbox_repository import OutboxRepository
 from literature_agent.domain.queue_outbox import OutboxStatus, QueueOutbox
@@ -60,6 +60,23 @@ class FakeOutboxRepository(OutboxRepository):
                     scheduled_at=scheduled_at,
                     dispatched_at=None,
                     updated_at=scheduled_at,
+                )
+                return True
+        return False
+
+    async def schedule_again(self, run_id: str) -> bool:
+        """正常恢复时重置为立即待投递，不增加失败计数。"""
+        now = datetime.now(UTC)
+        for outbox_id, entry in self._entries.items():
+            if entry.run_id == run_id:
+                if entry.status != OutboxStatus.DISPATCHED:
+                    return False
+                self._entries[outbox_id] = replace(
+                    entry,
+                    status=OutboxStatus.PENDING,
+                    scheduled_at=now,
+                    dispatched_at=None,
+                    updated_at=now,
                 )
                 return True
         return False
