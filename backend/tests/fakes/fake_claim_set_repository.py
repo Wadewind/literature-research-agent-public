@@ -17,14 +17,44 @@ class FakeClaimSetRepository(ClaimSetRepository):
         self._claim_sets[claim_set.claim_set_id] = claim_set
         return claim_set
 
+    async def get_or_add_claim_set(self, claim_set: ClaimSet) -> ClaimSet:
+        existing = await self.get_by_run_id(claim_set.run_id)
+        if existing is not None:
+            return existing
+        return await self.add_claim_set(claim_set)
+
     async def add_claims(self, claims: list[Claim]) -> None:
         """将 Claim 批量存入内存。"""
         for claim in claims:
             self._claims[claim.claim_id] = claim
 
+    async def get_or_add_claims(self, claims: list[Claim]) -> list[Claim]:
+        result: list[Claim] = []
+        for claim in claims:
+            existing = next(
+                (
+                    item
+                    for item in self._claims.values()
+                    if item.claim_set_id == claim.claim_set_id
+                    and item.sequence == claim.sequence
+                ),
+                None,
+            )
+            if existing is None:
+                self._claims[claim.claim_id] = claim
+                existing = claim
+            result.append(existing)
+        return result
+
     async def add_citations(self, citations: list[Citation]) -> None:
         """将 Citation 批量存入内存。"""
         self._citations.extend(citations)
+
+    async def get_or_add_citations(self, citations: list[Citation]) -> list[Citation]:
+        for citation in citations:
+            if citation not in self._citations:
+                self._citations.append(citation)
+        return list(citations)
 
     async def get_by_run_id(self, run_id: str) -> ClaimSet | None:
         """按 Run 返回 ClaimSet；不存在返回 None。"""

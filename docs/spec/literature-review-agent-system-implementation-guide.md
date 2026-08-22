@@ -804,6 +804,23 @@ Event 和 Outbox 重置同事务提交。崩溃恢复使用空输入继续 check
 `Command(resume=...)`，恢复后仍从业务数据库复核决定。approve/edit 固定批准的 Outline 版本，feedback
 追加下一 Outline/Request 并再次暂停；第一版反馈文本有界，但轮次预算尚待 Profile 校准。
 
+章节固定使用 `section.v1`，按批准 Outline 顺序生成。每次调用只读取当前章节维度命中的 Matrix 行、
+这些行引用的 Evidence 定位与摘录、前文章节短摘要和受控术语字典；不读取整篇论文、完整 Matrix 或
+前文全文。所有章节完成后复用统一 ClaimSet/Citation 表，并在 Phase 2 Validator 之上逐条校验
+Matrix Paper、READY Source、PaperVersion、ParseRevision、Project/Run Evidence 闭包。ClaimSet、
+Claim 和 Citation 使用数据库唯一约束上的原子 get-or-add，并在回读后比较完整稳定语义。
+
+章节与一致性输出 token 预算分别由 Review Profile 快照的 `section_output_token_limit` 和
+`consistency_output_token_limit` 控制，默认 4,000/2,000，并进入创建请求指纹；缺字段的早期
+`review.v1` 开发 Run 回退到相同默认值。原始模型 JSON 在 Schema 解析前分别限制为 192/64 KiB。
+章节节点还必须反查成功的 Matrix/Outline/Draft/Validate 业务 Step 闭包并固化新 Step input refs；
+所有副作用提交前持锁复核 Run 仍为 RUNNING Review，取消后不得新增 Output/Event 或推进 Stage。
+
+`consistency_check.v1` 产生小型版本化报告。术语、章节矛盾和冗余 issue 仅用于披露，不阻断导出且不
+触发自动重写；调用失败、范围错误或 Schema 非法都会阻断当前执行，只有合法报告可以继续，其中
+Schema 失败稳定结束 Step，模型调用和范围错误交给既有 Worker 错误分类/重试。第一版因此不把
+一致性模型当作事实正确性的通用 LLM Judge。
+
 ### 11.3 评测维度
 
 - Citation precision：引用是否真正支持 Claim；

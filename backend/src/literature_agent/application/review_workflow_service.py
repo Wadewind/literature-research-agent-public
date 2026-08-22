@@ -48,6 +48,8 @@ DEFAULT_CONFIG_SNAPSHOT = {
     "full_text_token_threshold": 12_000,
     "retrieval_top_k_per_dimension": 5,
     "evidence_context_token_limit": 16_000,
+    "section_output_token_limit": 4_000,
+    "consistency_output_token_limit": 2_000,
 }
 _IDEMPOTENCY_KEY_MAX_LENGTH = 255
 

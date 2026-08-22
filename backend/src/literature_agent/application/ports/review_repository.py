@@ -47,6 +47,15 @@ class ReviewRepository(Protocol):
         """条件式推进当前大纲指针和 Review Stage。"""
         ...
 
+    async def advance_review_stage(
+        self,
+        review_run: ReviewRun,
+        *,
+        expected_stage: str,
+    ) -> bool:
+        """仅在当前 Stage 匹配时推进 ReviewRun。"""
+        ...
+
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         """有界列出等待论文依赖的 Review Run ID，供内部对账使用。"""
         ...

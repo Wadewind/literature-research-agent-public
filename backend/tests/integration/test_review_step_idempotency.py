@@ -1,6 +1,8 @@
 """RunStep 节点副作用的 PostgreSQL 幂等测试。"""
 
 import asyncio
+from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -9,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from literature_agent.application.review_step_service import ReviewStepService
 from literature_agent.domain.exceptions import IdempotencyConflictError
 from literature_agent.domain.project import create_project
-from literature_agent.domain.review import ReviewStepKey, create_review_run
+from literature_agent.domain.review import ReviewStage, ReviewStepKey, create_review_run
 from literature_agent.domain.run import create_run
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
@@ -84,3 +86,33 @@ async def test_concurrent_same_step_converges_and_semantic_conflict_is_rejected(
             run.run_id, project.project_id, "user-1"
         )
     assert len(rows) == 1
+
+
+async def test_review_stage_advance_is_conditional(db_engine) -> None:
+    factory, project, run = await _seed(db_engine)
+    async with factory() as session:
+        repo = SqlalchemyReviewRepository(session)
+        review = await repo.get_review_run_scoped_for_update(
+            run.run_id, project.project_id, "user-1"
+        )
+        assert review is not None
+        drafted = replace(
+            review,
+            current_stage=ReviewStage.DRAFT_SECTIONS,
+            updated_at=datetime.now(UTC),
+        )
+        assert await repo.advance_review_stage(
+            drafted, expected_stage=ReviewStage.VALIDATE_REQUEST.value
+        )
+        assert not await repo.advance_review_stage(
+            replace(drafted, current_stage=ReviewStage.VALIDATE_SECTIONS),
+            expected_stage=ReviewStage.VALIDATE_REQUEST.value,
+        )
+        await session.commit()
+
+    async with factory() as session:
+        loaded = await SqlalchemyReviewRepository(session).get_review_run_scoped(
+            run.run_id, project.project_id, "user-1"
+        )
+        assert loaded is not None
+        assert loaded.current_stage is ReviewStage.DRAFT_SECTIONS

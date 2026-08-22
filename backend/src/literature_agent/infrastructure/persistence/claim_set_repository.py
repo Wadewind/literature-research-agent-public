@@ -1,6 +1,7 @@
 """ClaimSet Repository 的 PostgreSQL 适配器。"""
 
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.claim_set_repository import ClaimSetRepository
@@ -45,6 +46,23 @@ class SqlalchemyClaimSetRepository(ClaimSetRepository):
         )
         return claim_set
 
+    async def get_or_add_claim_set(self, claim_set: ClaimSet) -> ClaimSet:
+        """按 Run 唯一键收敛并发创建。"""
+        await self._session.execute(
+            postgresql.insert(ClaimSetORM)
+            .values(
+                claim_set_id=claim_set.claim_set_id,
+                run_id=claim_set.run_id,
+                answer_status=claim_set.answer_status.value,
+                created_at=claim_set.created_at,
+            )
+            .on_conflict_do_nothing(index_elements=[ClaimSetORM.run_id])
+        )
+        persisted = await self.get_by_run_id(claim_set.run_id)
+        if persisted is None:  # pragma: no cover - INSERT/SELECT 同事务防御
+            raise RuntimeError("ClaimSet 幂等写入后无法回读")
+        return persisted
+
     async def add_claims(self, claims: list[Claim]) -> None:
         """批量保存 Claim。"""
         self._session.add_all(
@@ -59,14 +77,54 @@ class SqlalchemyClaimSetRepository(ClaimSetRepository):
             ]
         )
 
+    async def get_or_add_claims(self, claims: list[Claim]) -> list[Claim]:
+        """按 ClaimSet/sequence 收敛并发，并返回数据库赢家的 Claim ID。"""
+        if not claims:
+            return []
+        claim_set_ids = {item.claim_set_id for item in claims}
+        if len(claim_set_ids) != 1:
+            raise ValueError("Claim 批量幂等写入只能属于同一 ClaimSet")
+        await self._session.execute(
+            postgresql.insert(ClaimORM)
+            .values(
+                [
+                    {
+                        "claim_id": item.claim_id,
+                        "claim_set_id": item.claim_set_id,
+                        "sequence": item.sequence,
+                        "text": item.text,
+                    }
+                    for item in claims
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=[ClaimORM.claim_set_id, ClaimORM.sequence])
+        )
+        persisted = await self.list_claims(claims[0].claim_set_id)
+        by_sequence = {item.sequence: item for item in persisted}
+        return [by_sequence[item.sequence] for item in claims]
+
     async def add_citations(self, citations: list[Citation]) -> None:
         """批量保存 Citation。"""
         self._session.add_all(
-            [
-                CitationORM(claim_id=c.claim_id, evidence_id=c.evidence_id)
-                for c in citations
-            ]
+            [CitationORM(claim_id=c.claim_id, evidence_id=c.evidence_id) for c in citations]
         )
+
+    async def get_or_add_citations(self, citations: list[Citation]) -> list[Citation]:
+        """按 Citation 复合主键收敛重复写入。"""
+        if not citations:
+            return []
+        await self._session.execute(
+            postgresql.insert(CitationORM)
+            .values(
+                [{"claim_id": item.claim_id, "evidence_id": item.evidence_id} for item in citations]
+            )
+            .on_conflict_do_nothing(index_elements=[CitationORM.claim_id, CitationORM.evidence_id])
+        )
+        result: list[Citation] = []
+        for claim_id in dict.fromkeys(item.claim_id for item in citations):
+            result.extend(await self.list_citations(claim_id))
+        expected = {(item.claim_id, item.evidence_id) for item in citations}
+        return [item for item in result if (item.claim_id, item.evidence_id) in expected]
 
     async def get_by_run_id(self, run_id: str) -> ClaimSet | None:
         """按 Run 查询 ClaimSet；不存在返回 None。"""

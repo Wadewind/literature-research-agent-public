@@ -235,3 +235,39 @@ async def test_outline_feedback_loops_to_new_request_and_interrupts_again() -> N
     assert completed["approved_outline_output_id"] == "outline-edited"
     assert completed["outline_boundary_reached"] is True
     assert entry_calls == 2
+
+
+def test_approved_outline_connects_sections_to_safe_export_boundary() -> None:
+    async def entry(_state):
+        return {"outline_output_id": "outline-1", "human_input_request_id": "request-1"}
+
+    async def decision(_state):
+        return {"outline_action": "approve", "approved_outline_output_id": "outline-1"}
+
+    async def draft(_state):
+        return {"section_output_ids": ["section-1"]}
+
+    async def validate(_state):
+        return {"claim_set_id": "claims-1"}
+
+    async def consistency(_state):
+        return {"consistency_output_id": "consistency-1"}
+
+    graph = ReviewGraphFactory(
+        outline_entry_node=entry,
+        outline_decision_node=decision,
+        section_draft_node=draft,
+        section_validate_node=validate,
+        consistency_node=consistency,
+    ).compile(InMemorySaver())
+    mermaid = graph.get_graph().draw_mermaid()
+
+    assert "apply_outline_decision -. &nbsp;approved&nbsp; .-> draft_sections" in mermaid
+    assert "draft_sections --> validate_sections" in mermaid
+    assert "validate_sections --> consistency_check" in mermaid
+    assert "consistency_check --> section_boundary" in mermaid
+    assert "section_boundary --> __end__" in mermaid
+    assert (
+        "apply_outline_decision -. &nbsp;approved&nbsp; .-> outline_boundary"
+        not in mermaid
+    )

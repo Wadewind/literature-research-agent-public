@@ -2,7 +2,10 @@
 
 import pytest
 
-from literature_agent.application.review_workflow_service import ReviewWorkflowService
+from literature_agent.application.review_workflow_service import (
+    DEFAULT_CONFIG_SNAPSHOT,
+    ReviewWorkflowService,
+)
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import (
     IdempotencyConflictError,
@@ -67,6 +70,8 @@ async def test_create_review_run_is_atomic_business_bundle() -> None:
     assert run.status is RunStatus.QUEUED and run.event_sequence == 2
     assert review is not None and review.research_question == "LangGraph 如何可靠恢复？"
     assert review.prompt_versions["evidence_extract"] == "review-evidence-extraction.v1"
+    assert review.config_snapshot["section_output_token_limit"] == 4_000
+    assert review.config_snapshot["consistency_output_token_limit"] == 2_000
     assert event_rows[0].event_type == "review_run_created"
     assert event_rows[0].payload == {
         "status": "queued",
@@ -95,6 +100,24 @@ async def test_create_review_run_idempotency_replay_and_conflict() -> None:
 
     with pytest.raises(IdempotencyConflictError):
         await service.create_review_run(**{**kwargs, "research_question": "问题二"})
+
+
+async def test_output_token_profile_participates_in_request_fingerprint(monkeypatch) -> None:
+    service, projects, *_ = _service()
+    project = create_project("user-1", "HITL", "")
+    await projects.add(project)
+    kwargs = {
+        "actor": ActorContext(owner_id="user-1"),
+        "project_id": project.project_id,
+        "research_question": "问题一",
+        "idempotency_key": "review-profile-fingerprint",
+        "correlation_id": "corr-1",
+    }
+    await service.create_review_run(**kwargs)
+    monkeypatch.setitem(DEFAULT_CONFIG_SNAPSHOT, "section_output_token_limit", 4_001)
+
+    with pytest.raises(IdempotencyConflictError):
+        await service.create_review_run(**kwargs)
 
 
 async def test_create_review_run_enforces_owner_and_active_project() -> None:

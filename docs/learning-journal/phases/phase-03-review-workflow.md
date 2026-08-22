@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1–6 已确认，切片 7 已完成并等待确认）
+- 当前状态：开发中（切片 1–8 已完成）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -566,7 +566,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 5. [x] 接入 LangGraph checkpoint，验证 crash recovery；
 6. [x] 实现 Evidence Matrix 固定提取策略与 Validator；
 7. [x] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
-8. [ ] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
+8. [x] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
 9. [ ] 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
 10. [ ] 根据实际代码更新模块学习笔记与阶段完成状态。
 
@@ -823,6 +823,64 @@ Backend 完整非集成测试 `508 passed, 4 skipped`，完整 PostgreSQL/Valkey
 
 实现和取舍详见
 [人工大纲确认与恢复](../modules/human-outline-review.md)。
+
+### 18.8 切片 8 完成记录（2026-08-23）
+
+- 新增 `section.v1`：每节按批准 Outline 顺序生成，固定保存 `section_key/title/status/summary/claims/
+  terminology`。`answered` 的每个 Claim 必须绑定 1–10 个不重复 Evidence；
+  `insufficient_evidence` 不得生成 Claim。每节最多 50 个 Claim 和 50 个术语，摘要、Claim、术语及
+  Output 均受已有 ReviewOutput 大小边界约束；
+- `section_draft.v1` 的每次模型调用只接收研究问题、当前批准 Section、命中该 Section 维度的 Matrix
+  行、这些行实际引用的 Evidence 定位与摘录、已完成前文的短摘要、统一术语字典、Schema、引用规则
+  和配置快照中的输出 token 预算。不传整篇论文、完整 Matrix、失败清单或无关 Evidence；章节按顺序生成，
+  因此前文摘要和术语只来自已经持久化且重新校验的 Section Output；
+- 新建 `review.v1` 的 Profile 快照固定包含 `section_output_token_limit=4000` 和
+  `consistency_output_token_limit=2000`，字段随创建请求指纹持久化；切片 8 之前创建且缺少字段的开发
+  Run 使用相同 v1 默认值兼容。显式字段必须是整数，章节范围 256–16,000、一致性范围 256–8,000；
+  `section.v1` 原始模型 JSON 在 Pydantic 解析前限制为 192 KiB，`consistency-report.v1` 限制为
+  64 KiB，并继续受 ReviewOutput 256 KiB 总上限保护；
+- 每节使用稳定 Output key/幂等键追加 `SECTION` ReviewOutput；Output 与
+  `section_draft_completed` Event 在同一持锁短事务提交。节点重放先回读、验证并复用既有 Output，
+  不再次调用模型；所有章节完成后，`DRAFT_SECTIONS` Step 和 Stage 推进到引用校验；
+- 复用 Phase 2 的 `ClaimSet/Claim/Citation` 表和基础 Citation Validator，但将领域语义从
+  RAG-only 泛化为一次生成结果。PostgreSQL Repository 增加原子 get-or-add：ClaimSet 按 `run_id`、
+  Claim 按 `(claim_set_id, sequence)`、Citation 按复合主键收敛；写入后回读数据库赢家 ID，并比较
+  完整 Claim 文本和 Citation 集合，拒绝同幂等身份的异义结果，不破坏原有显式 `add_*` 的 Phase 2
+  唯一约束测试；
+- Review Citation Validator 先执行 Phase 2 的非空/零引用/伪造/重复/跨 Run 规则，再逐条复核
+  Matrix row 的 Paper 与当前 READY ReviewSource、owner 下 PaperVersion、当前成功 ParseRevision、
+  Project/Run Evidence 闭包。校验成功时 ClaimSet、Claim、Citation、`VALIDATE_SECTIONS` Step、Stage
+  和 `citation_validation_completed(passed=true)` Event 同事务提交；失败时持久化 FAILED Step 与
+  `passed=false`/稳定 reason counts Event，并阻断一致性和导出，不增加模型 repair；
+- 章节入口不只信任 Graph State：每次加载均反查 `BUILD_EVIDENCE_MATRIX` 与 `REVIEW_OUTLINE` 已成功且
+  Output refs 分别命中本次 Matrix/批准 Outline；Validate 还反查成功的 Draft Step，Consistency 反查
+  成功的 Validate Step 与 ClaimSet。三个新 Step 的 input refs 固化依赖 Output IDs、Section IDs、
+  ClaimSet ID 及 Prompt/Schema/Validator 版本，重放逐字段比较；
+- 所有创建/完成 Step、提交 Section/Consistency Output、ClaimSet/Citation Event 和失败收尾事务均先
+  持锁复核 Run 仍为当前 owner/Project 的 RUNNING Review。模型返回后若已请求取消，不提交新 Output、
+  Event 或 Stage；取消终态仍由切片 9 Executor 统一收敛。成功新增 Citation Event 在 commit 后发送
+  轻量通知，纯重放不重复 Event/通知；
+- `consistency_check.v1` 只读取结构化 Section 的摘要、Claim 文本和术语，输出版本化
+  `consistency-report.v1`。`terminology/contradiction/redundancy` issues 是非阻断报告，不触发模型重写；
+  合法 issues 完成 Step 并把 Stage 推进到 `EXPORT_REVIEW`；Schema 非法会稳定标记 Step 失败，
+  Scope 或模型调用失败会阻断本次执行并交给既有 Worker 错误分类/重试，不会进入导出；
+- 固定 LangGraph 已扩展为 approve/edit → `draft_sections` → `validate_sections` →
+  `consistency_check` → 切片 9 安全边界。Graph State 只增加 Section Output、ClaimSet 和 Consistency
+  Output ID；生产 Review Executor 仍不注册，避免在 Markdown Artifact 尚未导出时虚假成功；
+- 未新增 migration：现有 ReviewOutput 类型 Check 已含 `section/consistency_report`，ClaimSet 三表也
+  已具备所需唯一约束。新增 Repository 方法是在这些约束上实现原子 get-or-add。
+
+切片定向验证：章节领域/应用及 Review 创建契约 `31 passed`，与 Phase 2 Citation/RAG 回归
+`47 passed` 合并为 `78 passed`；PostgreSQL
+ClaimSet 并发与既有 Evidence/Claim 回归 `7 passed`；补充 ClaimSet/Review Stage PostgreSQL 定向回归
+`4 passed`。根审查定位并修复了异步图内同步 Interrupt/条件路由经线程执行器恢复后无法继续调度的
+问题：两者改为 async callable 后，approve 与 feedback 再次 interrupt 的真实 Resume 测试均通过，
+Graph 全文件回归为 `11 passed`。Ruff 与 Pyright 通过。
+切片收尾时完整非集成回归为 `575 passed, 4 skipped`，完整 PostgreSQL/Testcontainers
+集成回归为 `111 passed`。
+
+实现和取舍详见
+[综述章节写作、引用校验与一致性报告](../modules/review-section-citation-consistency.md)。
 
 ## 19. 重点测试
 

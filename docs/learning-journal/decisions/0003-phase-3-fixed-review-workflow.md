@@ -47,11 +47,24 @@ Evidence Matrix 行保存 Paper、维度、finding、limitations、状态和真�
 
 章节生成只接收该章节关联维度的 Matrix 行及其 Evidence，不接收所有论文全文或完整 Matrix。最终全文生成 ClaimSet 并复用 Citation Validator。
 
+章节固定使用 `section.v1`，按批准 Outline 顺序生成。后续章节只额外接收前文短摘要和统一术语字典，
+不接收前文章节全文。综述 ClaimSet 复用 Phase 2 表，但通过 `run_id`、Claim sequence 和 Citation 复合
+主键的原子 get-or-add 收敛重放，并逐条复核 Matrix Paper 到 READY Source、PaperVersion、
+ParseRevision 和 Evidence 的闭包。
+
+`consistency_check.v1` 只生成结构化一致性报告。发现术语、矛盾或冗余 issue 是非阻断结果，第一版不
+自动重写章节；模型调用、Scope 或 Schema 失败都会阻断当前执行，只有合法报告可以继续。Schema
+失败稳定结束 Step，模型调用和 Scope 失败交给既有 Worker 错误分类/重试。这样一致性模型不会成为
+事实正确性的通用 Judge，也不会引入未预算的修复循环。
+
 ## 决策五：固定版本和引用格式
 
 - Workflow 使用 `review.v1`；
 - Prompt 使用用途明确的 `name.v1`；
 - Model Profile 使用 `review-default.v1`，Run 保存配置快照；
+- Profile 快照包含 `section_output_token_limit=4000` 与
+  `consistency_output_token_limit=2000`，并进入创建请求指纹；缺字段的早期 `review.v1` 开发 Run
+  明确回退到同一默认值；
 - Markdown 固定使用 `[1]` 数字引用，系统内部映射到精确 Evidence 和 PDF 定位；
 - 第一版不提供引用样式切换。
 

@@ -594,7 +594,7 @@ class EvidenceORM(Base):
 
 
 class ClaimSetORM(Base):
-    """ClaimSet 的持久化映射（一个 rag_answer Run 至多一个）。"""
+    """ClaimSet 的持久化映射（一个生成结果 Run 至多一个）。"""
 
     __tablename__ = "claim_sets"
 

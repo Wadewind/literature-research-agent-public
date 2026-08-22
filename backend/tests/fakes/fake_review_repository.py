@@ -63,6 +63,15 @@ class FakeReviewRepository(ReviewRepository):
         self.review_runs[review_run.run_id] = review_run
         return True
 
+    async def advance_review_stage(
+        self, review_run: ReviewRun, *, expected_stage: str
+    ) -> bool:
+        current = self.review_runs.get(review_run.run_id)
+        if current is None or current.current_stage.value != expected_stage:
+            return False
+        self.review_runs[review_run.run_id] = review_run
+        return True
+
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         # 父 Run 的真实状态由 Service 持锁后二次校验；Fake 只提供候选。
         return list(self.review_runs)[:limit]

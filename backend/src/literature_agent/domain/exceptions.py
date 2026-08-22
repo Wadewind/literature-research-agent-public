@@ -260,3 +260,15 @@ class ReviewOutlineInvalidError(Exception):
 
 class HumanInputConflictError(Exception):
     """人工输入已解决、已过期，或幂等键被不同语义复用。"""
+
+
+class ReviewSectionScopeError(Exception):
+    """章节、Matrix、Evidence 或来源闭包不属于当前 Review Run。"""
+
+
+class ReviewSectionInvalidError(Exception):
+    """章节或一致性模型输出不满足固定结构化契约。"""
+
+
+class ReviewCitationInvalidError(Exception):
+    """综述 ClaimSet 未通过确定性 Citation Validator。"""

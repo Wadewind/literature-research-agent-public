@@ -251,6 +251,24 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return result.rowcount == 1
 
+    async def advance_review_stage(self, review_run: ReviewRun, *, expected_stage: str) -> bool:
+        """用 Stage 条件更新防止旧节点覆盖后继状态。"""
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(ReviewRunORM)
+                .where(
+                    ReviewRunORM.run_id == review_run.run_id,
+                    ReviewRunORM.current_stage == expected_stage,
+                )
+                .values(
+                    current_stage=review_run.current_stage.value,
+                    updated_at=review_run.updated_at,
+                )
+            )
+        )
+        return result.rowcount == 1
+
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         """按创建顺序有界列出等待依赖的 Review Run。"""
         result = await self._session.execute(

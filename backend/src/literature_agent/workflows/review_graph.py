@@ -37,6 +37,9 @@ class ReviewGraphState(TypedDict):
     human_input_id: NotRequired[str]
     outline_action: NotRequired[str]
     outline_boundary_reached: NotRequired[bool]
+    claim_set_id: NotRequired[str]
+    consistency_output_id: NotRequired[str]
+    section_boundary_reached: NotRequired[bool]
 
 
 ReviewGraphNode = Callable[[ReviewGraphState], Awaitable[dict]]
@@ -61,7 +64,7 @@ def review_graph_config(review_run_id: str) -> RunnableConfig:
     }
 
 
-def _review_outline_interrupt(state: ReviewGraphState) -> dict:
+async def _review_outline_interrupt(state: ReviewGraphState) -> dict:
     """纯 Interrupt 节点；恢复值只携带待业务库复核的稳定 ID。"""
     request_id = state.get("human_input_request_id")
     outline_output_id = state.get("outline_output_id")
@@ -89,7 +92,7 @@ def _review_outline_interrupt(state: ReviewGraphState) -> dict:
     }
 
 
-def _outline_route(state: ReviewGraphState) -> str:
+async def _outline_route(state: ReviewGraphState) -> str:
     action = state.get("outline_action")
     if action == "feedback":
         return "feedback"
@@ -101,6 +104,11 @@ def _outline_route(state: ReviewGraphState) -> str:
 async def _outline_boundary(_state: ReviewGraphState) -> dict:
     """切片 8 接入章节写作前的安全占位边界。"""
     return {"outline_boundary_reached": True}
+
+
+async def _section_boundary(_state: ReviewGraphState) -> dict:
+    """切片 9 接入 Artifact 导出前的安全占位边界。"""
+    return {"section_boundary_reached": True}
 
 
 class ReviewGraphFactory:
@@ -116,16 +124,29 @@ class ReviewGraphFactory:
         *,
         outline_entry_node: ReviewGraphNode | None = None,
         outline_decision_node: ReviewGraphNode | None = None,
+        section_draft_node: ReviewGraphNode | None = None,
+        section_validate_node: ReviewGraphNode | None = None,
+        consistency_node: ReviewGraphNode | None = None,
     ) -> None:
         self._slice_node = slice_node
         self._outline_entry_node = outline_entry_node
         self._outline_decision_node = outline_decision_node
+        self._section_draft_node = section_draft_node
+        self._section_validate_node = section_validate_node
+        self._consistency_node = consistency_node
         if slice_node is None and (outline_entry_node is None or outline_decision_node is None):
             raise ValueError("必须提供 slice_node 或完整 Outline 节点")
         if slice_node is not None and (
             outline_entry_node is not None or outline_decision_node is not None
         ):
             raise ValueError("切片骨架与 Outline 图不能同时配置")
+        configured = (section_draft_node, section_validate_node, consistency_node)
+        if any(item is not None for item in configured) and not all(
+            item is not None for item in configured
+        ):
+            raise ValueError("章节图必须同时提供 draft/validate/consistency 节点")
+        if slice_node is not None and any(item is not None for item in configured):
+            raise ValueError("切片骨架与章节图不能同时配置")
 
     def compile(self, checkpointer: BaseCheckpointSaver):
         """使用调用方持有生命周期的持久 Checkpointer 编译图。"""
@@ -142,16 +163,37 @@ class ReviewGraphFactory:
         graph.add_node("propose_outline", RunnableLambda(outline_entry_node))
         graph.add_node("review_outline", _review_outline_interrupt)
         graph.add_node("apply_outline_decision", RunnableLambda(outline_decision_node))
-        graph.add_node("outline_boundary", RunnableLambda(_outline_boundary))
+        section_draft_node = self._section_draft_node
+        section_validate_node = self._section_validate_node
+        consistency_node = self._consistency_node
+        if (
+            section_draft_node is not None
+            and section_validate_node is not None
+            and consistency_node is not None
+        ):
+            graph.add_node("draft_sections", RunnableLambda(section_draft_node))
+            graph.add_node("validate_sections", RunnableLambda(section_validate_node))
+            graph.add_node("consistency_check", RunnableLambda(consistency_node))
+            graph.add_node("section_boundary", RunnableLambda(_section_boundary))
+            approved_target = "draft_sections"
+        else:
+            approved_target = "outline_boundary"
+            graph.add_node("outline_boundary", RunnableLambda(_outline_boundary))
         graph.add_edge(START, "propose_outline")
         graph.add_edge("propose_outline", "review_outline")
         graph.add_edge("review_outline", "apply_outline_decision")
         graph.add_conditional_edges(
             "apply_outline_decision",
             _outline_route,
-            {"feedback": "propose_outline", "approved": "outline_boundary"},
+            {"feedback": "propose_outline", "approved": approved_target},
         )
-        graph.add_edge("outline_boundary", END)
+        if section_draft_node is not None:
+            graph.add_edge("draft_sections", "validate_sections")
+            graph.add_edge("validate_sections", "consistency_check")
+            graph.add_edge("consistency_check", "section_boundary")
+            graph.add_edge("section_boundary", END)
+        else:
+            graph.add_edge("outline_boundary", END)
         return graph.compile(checkpointer=checkpointer)
 
 
@@ -208,4 +250,6 @@ class ReviewWorkflowRuntime:
             raise CheckpointUnavailableError("LangGraph checkpoint 数据库不可用") from exc
         if result is None:
             raise CheckpointDataError("Checkpoint 不存在或没有可恢复状态")
+        if not isinstance(result, dict):
+            raise CheckpointDataError("Checkpoint 返回的 Graph State 结构非法")
         return ReviewGraphState(**result)

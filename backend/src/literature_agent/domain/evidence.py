@@ -1,9 +1,10 @@
-"""Evidence / ClaimSet / Claim / Citation 领域实体（切片 7）。
+"""Evidence / ClaimSet / Claim / Citation 领域实体。
 
 Evidence 是一次 ``rag_answer`` Run 检索结果的固化快照：denormalize
 paper/version/parse_revision/章节/页码/摘录，历史回答不因后续移出、
-换版或归档而改变（ADR 0002）。ClaimSet 是一次回答的结构化 Claim
-集合（一个 Run 至多一个）；Citation 关联 Claim 与其依据的 Evidence。
+换版或归档而改变（ADR 0002）。ClaimSet 是一次 RAG 回答或 Review
+生成结果的结构化 Claim 集合（一个 Run 至多一个）；Citation 关联 Claim
+与其依据的 Evidence。
 """
 
 from dataclasses import dataclass, field
@@ -67,11 +68,11 @@ class Evidence:
 
 @dataclass(frozen=True, slots=True)
 class ClaimSet:
-    """一次 RAG 回答的结构化 Claim 集合（一个 Run 至多提交一个）。
+    """一次生成结果的结构化 Claim 集合（一个 Run 至多提交一个）。
 
     属性:
         claim_set_id: ClaimSet 标识符。
-        run_id: 产生该回答的 rag_answer Run。
+        run_id: 产生该结果的 RAG 或 Review Run。
         answer_status: 回答状态（answered / insufficient_evidence）。
         created_at: 提交时间（UTC）。
     """

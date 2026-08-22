@@ -12,12 +12,24 @@ class ClaimSetRepository(Protocol):
         """保存 ClaimSet（``run_id`` 唯一：一个 Run 只提交一个）。"""
         ...
 
+    async def get_or_add_claim_set(self, claim_set: ClaimSet) -> ClaimSet:
+        """按 ``run_id`` 原子创建或回读 ClaimSet。"""
+        ...
+
     async def add_claims(self, claims: list[Claim]) -> None:
         """批量保存 Claim（``(claim_set_id, sequence)`` 唯一）。"""
         ...
 
+    async def get_or_add_claims(self, claims: list[Claim]) -> list[Claim]:
+        """按 ``(claim_set_id, sequence)`` 原子创建并按序回读。"""
+        ...
+
     async def add_citations(self, citations: list[Citation]) -> None:
         """批量保存 Citation（复合主键去重）。"""
+        ...
+
+    async def get_or_add_citations(self, citations: list[Citation]) -> list[Citation]:
+        """按复合主键原子创建或回读 Citation。"""
         ...
 
     async def get_by_run_id(self, run_id: str) -> ClaimSet | None:
