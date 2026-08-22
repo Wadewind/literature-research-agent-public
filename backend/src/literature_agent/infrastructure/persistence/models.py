@@ -4,7 +4,17 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.schema import Computed
@@ -735,4 +745,320 @@ class MessageORM(Base):
         UniqueConstraint(
             "conversation_id", "sequence", name="uq_messages_conversation_sequence"
         ),
+    )
+
+
+class ReviewRunORM(Base):
+    """通用 Run 的固定综述 Workflow 扩展记录。"""
+
+    __tablename__ = "review_runs"
+
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id"),
+        primary_key=True,
+    )
+    research_question: Mapped[str] = mapped_column(Text, nullable=False)
+    workflow_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    model_profile_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    prompt_versions: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    config_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    statistics_summary: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    current_stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    current_outline_output_id: Mapped[str | None] = mapped_column(
+        ForeignKey(
+            "review_outputs.output_id",
+            use_alter=True,
+            name="fk_review_runs_current_outline_output",
+        ),
+        nullable=True,
+    )
+    final_artifact_id: Mapped[str | None] = mapped_column(
+        ForeignKey(
+            "artifacts.artifact_id",
+            use_alter=True,
+            name="fk_review_runs_final_artifact",
+        ),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RunStepORM(Base):
+    """Review Run 内的一次可观察 Step 执行。"""
+
+    __tablename__ = "run_steps"
+
+    step_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.run_id"), index=True, nullable=False
+    )
+    step_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    input_refs: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    output_refs: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("sequence >= 1", name="ck_run_steps_sequence_positive"),
+        CheckConstraint(
+            "status IN ('pending','running','paused','succeeded','failed','cancelled')",
+            name="ck_run_steps_status",
+        ),
+        UniqueConstraint("run_id", "sequence", name="uq_run_steps_run_sequence"),
+        UniqueConstraint("run_id", "idempotency_key", name="uq_run_steps_run_idempotency"),
+    )
+
+
+class ReviewSourceORM(Base):
+    """Review Run 自动纳入的 arXiv 来源。"""
+
+    __tablename__ = "review_sources"
+
+    source_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    review_run_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.run_id"), index=True, nullable=False
+    )
+    arxiv_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    arxiv_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    rank: Mapped[int] = mapped_column(nullable=False)
+    metadata_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    paper_id: Mapped[str | None] = mapped_column(ForeignKey("papers.paper_id"), nullable=True)
+    paper_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("paper_versions.version_id"), nullable=True
+    )
+    failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("rank >= 1", name="ck_review_sources_rank_positive"),
+        CheckConstraint(
+            "status IN ('discovered','importing','ready','failed')",
+            name="ck_review_sources_status",
+        ),
+        UniqueConstraint(
+            "review_run_id",
+            "arxiv_id",
+            "arxiv_version",
+            name="uq_review_sources_run_arxiv_version",
+        ),
+        UniqueConstraint("review_run_id", "rank", name="uq_review_sources_run_rank"),
+    )
+
+
+class RunDependencyORM(Base):
+    """Review Run 对 Run/PaperVersion/ChunkSet 的受限依赖。"""
+
+    __tablename__ = "run_dependencies"
+
+    dependency_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    parent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.run_id"), index=True, nullable=False
+    )
+    dependency_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.run_id"), nullable=True)
+    target_paper_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("paper_versions.version_id"), nullable=True
+    )
+    target_chunk_set_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chunk_sets.chunk_set_id"), nullable=True
+    )
+    failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    satisfied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "dependency_type IN ('run','paper_version','chunk_set')",
+            name="ck_run_dependencies_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending','satisfied','failed')",
+            name="ck_run_dependencies_status",
+        ),
+        CheckConstraint(
+            "(dependency_type = 'run' AND target_run_id IS NOT NULL "
+            "AND target_paper_version_id IS NULL AND target_chunk_set_id IS NULL) OR "
+            "(dependency_type = 'paper_version' AND target_run_id IS NULL "
+            "AND target_paper_version_id IS NOT NULL AND target_chunk_set_id IS NULL) OR "
+            "(dependency_type = 'chunk_set' AND target_run_id IS NULL "
+            "AND target_paper_version_id IS NULL AND target_chunk_set_id IS NOT NULL)",
+            name="ck_run_dependencies_exact_target",
+        ),
+        Index(
+            "uq_run_dependencies_run_target_run",
+            "parent_run_id",
+            "target_run_id",
+            unique=True,
+            postgresql_where=target_run_id.is_not(None),
+        ),
+        Index(
+            "uq_run_dependencies_run_target_version",
+            "parent_run_id",
+            "target_paper_version_id",
+            unique=True,
+            postgresql_where=target_paper_version_id.is_not(None),
+        ),
+        Index(
+            "uq_run_dependencies_run_target_chunk_set",
+            "parent_run_id",
+            "target_chunk_set_id",
+            unique=True,
+            postgresql_where=target_chunk_set_id.is_not(None),
+        ),
+    )
+
+
+class ReviewOutputORM(Base):
+    """追加写入的版本化结构化 Review 产物。"""
+
+    __tablename__ = "review_outputs"
+
+    output_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    review_run_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.run_id"), index=True, nullable=False
+    )
+    output_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    output_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    version: Mapped[int] = mapped_column(nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_review_outputs_version_positive"),
+        CheckConstraint(
+            "output_type IN ('search_strategy','evidence_matrix','outline','section',"
+            "'consistency_report','final_review')",
+            name="ck_review_outputs_type",
+        ),
+        UniqueConstraint(
+            "review_run_id",
+            "output_type",
+            "output_key",
+            "version",
+            name="uq_review_outputs_run_type_key_version",
+        ),
+        UniqueConstraint(
+            "review_run_id", "idempotency_key", name="uq_review_outputs_run_idempotency"
+        ),
+    )
+
+
+class HumanInputRequestORM(Base):
+    """版本化大纲人工输入请求。"""
+
+    __tablename__ = "human_input_requests"
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    review_run_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.run_id"), index=True, nullable=False
+    )
+    request_version: Mapped[int] = mapped_column(nullable=False)
+    outline_output_id: Mapped[str] = mapped_column(
+        ForeignKey("review_outputs.output_id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    allowed_actions: Mapped[list] = mapped_column(JSONB, nullable=False)
+    resolved_input_id: Mapped[str | None] = mapped_column(
+        ForeignKey(
+            "human_inputs.human_input_id",
+            use_alter=True,
+            name="fk_human_input_requests_resolved_input",
+        ),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("request_version >= 1", name="ck_human_input_requests_version"),
+        CheckConstraint(
+            "status IN ('open','resolved','cancelled')",
+            name="ck_human_input_requests_status",
+        ),
+        UniqueConstraint(
+            "review_run_id", "request_version", name="uq_human_input_requests_run_version"
+        ),
+        UniqueConstraint(
+            "request_id", "request_version", name="uq_human_input_requests_id_version"
+        ),
+        Index(
+            "uq_human_input_requests_one_open_per_run",
+            "review_run_id",
+            unique=True,
+            postgresql_where=(status == "open"),
+        ),
+    )
+
+
+class HumanInputORM(Base):
+    """同一请求至多一条的不可变用户输入。"""
+
+    __tablename__ = "human_inputs"
+
+    human_input_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    request_version: Mapped[int] = mapped_column(nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    submitted_by: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id", "request_version"],
+            ["human_input_requests.request_id", "human_input_requests.request_version"],
+            name="fk_human_inputs_request_version",
+        ),
+        CheckConstraint("action IN ('approve','edit','feedback')", name="ck_human_inputs_action"),
+        UniqueConstraint("request_id", name="uq_human_inputs_request"),
+        UniqueConstraint(
+            "submitted_by", "idempotency_key", name="uq_human_inputs_submitter_idempotency"
+        ),
+    )
+
+
+class ArtifactORM(Base):
+    """Artifact Storage 中持久文件的业务元数据。"""
+
+    __tablename__ = "artifacts"
+
+    artifact_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    review_run_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.run_id"), index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    artifact_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(nullable=False)
+    media_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_output_id: Mapped[str | None] = mapped_column(
+        ForeignKey("review_outputs.output_id"), nullable=True
+    )
+    artifact_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("size_bytes >= 0", name="ck_artifacts_size_nonnegative"),
+        CheckConstraint(
+            "artifact_type IN ('review_markdown','search_strategy','source_manifest',"
+            "'evidence_matrix','bibliography','run_summary')",
+            name="ck_artifacts_type",
+        ),
+        UniqueConstraint("storage_key", name="uq_artifacts_storage_key"),
+        UniqueConstraint("review_run_id", "idempotency_key", name="uq_artifacts_run_idempotency"),
     )

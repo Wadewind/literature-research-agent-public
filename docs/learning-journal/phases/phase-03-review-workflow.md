@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1 已完成，等待确认）
+- 当前状态：开发中（切片 1 已确认，切片 2 已完成并等待确认）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -268,7 +268,7 @@ Checkpoint 的 `thread_id` 必须稳定映射到 Review Run，Resume 必须带�
 
 Run 创建时保存 Workflow、Prompt、Model Profile 版本及生效配置快照。名称采用稳定的 `name.vN`，参数调整若影响可复现语义则升级版本；纯部署配置不写进名称，但仍进入快照。
 
-## 9. 数据模型草案
+## 9. 数据模型契约
 
 ### 9.1 `review_runs`
 
@@ -298,7 +298,34 @@ Run 创建时保存 Workflow、Prompt、Model Profile 版本及生效配置快�
 
 保存最终 Markdown、内容哈希、大小、存储位置、创建时间、生成配置与来源 Output 版本。
 
-具体字段和索引在各实现切片开始前通过迁移测试收敛，不在本 Spec 预先固化所有 ORM 细节。
+### 9.8 切片 2 已落地的约束
+
+- `review_runs.run_id` 同时是主键和通用 `runs.run_id` 外键；研究问题、Workflow/Prompt/
+  Model Profile 版本、配置快照、受控统计摘要和当前阶段都持久化，通用 Run 继续拥有生命周期与
+  Project/owner；统计摘要只包含固定来源/模型调用/token 计数，不作为万能 JSON；
+- `run_steps` 以 `(run_id, sequence)` 固定展示顺序，以 `(run_id, idempotency_key)` 阻止
+  重放时重复副作用；输入和输出 JSON 只保存稳定业务引用，不用于保存正文；
+- `review_sources` 以 `(review_run_id, arxiv_id, arxiv_version)` 和
+  `(review_run_id, rank)` 去重，Paper/PaperVersion 在完成导入前允许为空；
+- `run_dependencies` 不使用无可靠 FK 的多态 `target_id`。它使用 `target_run_id`、
+  `target_paper_version_id`、`target_chunk_set_id` 三个显式可空 FK，通过 Check 保证类型与唯一
+  非空目标一致，并为三类目标分别建立部分唯一索引；
+- `review_outputs` 只提供追加写入，`(review_run_id, output_type, output_key, version)` 与
+  `(review_run_id, idempotency_key)` 唯一。结构化 JSON 受 256 KiB 领域上限保护；更大的 Markdown
+  或矩阵导出必须进入 Artifact Storage；
+- `human_input_requests` 以 `(review_run_id, request_version)` 版本化，并以部分唯一索引保证
+  同一 Review Run 最多一个 `open` 请求；`human_inputs.request_id` 唯一，且
+  `(request_id, request_version)` 复合 FK 拒绝过期版本；同一提交者的幂等键也唯一；
+- `artifacts` 只保存 Storage Key、SHA-256、大小、MIME、来源 Output 和小型 metadata，不保存
+  文件正文；Storage Key 与 `(review_run_id, idempotency_key)` 唯一；
+- 对外读取由 `ReviewRepository` 统一带上 `run_id + project_id + owner_id`，通过通用 Run 联表
+  校验范围。写入方法只供已经授权的应用服务或 Worker 使用，此内部边界在 Port 中明确说明。
+
+数据库在本切片只保证目标存在、受限类型和主要唯一性，不保证所有跨聚合引用都属于同一业务范围。
+后续写入服务必须在同一事务中校验：ReviewRun 的当前 Output/Artifact、ReviewSource 的
+`paper_id`/`paper_version_id` 配对、HumanInputRequest 的 `resolved_input_id`、Artifact 的
+Project/owner/来源 Output，均与目标 Review Run 一致。前三个 current/resolved 指针会形成循环引用，
+迁移先建表再添加真实 FK；不能把“有 FK”表述为已经验证上述归属。
 
 ## 10. arXiv 检索、下载与导入
 
@@ -508,7 +535,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 ## 18. 实现切片
 
 1. [x] 更新状态机、Attempt/Outbox 语义和迁移，先完成等待/恢复事务测试；
-2. [ ] 建立 Review Run、Step、Source、Dependency、Output、Human Input 数据契约；
+2. [x] 建立 Review Run、Step、Source、Dependency、Output、Human Input 数据契约；
 3. [ ] 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
 4. [ ] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
 5. [ ] 接入 LangGraph checkpoint，验证 crash recovery；
@@ -548,6 +575,39 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 验证结果：Backend 非集成测试 `387 passed, 4 skipped`；完整 PostgreSQL/Valkey integration
 `86 passed`；`ruff check src tests` 与 `pyright` 通过；Web Vitest `65 passed`，生产构建通过。
 
+### 18.2 切片 2 完成记录（2026-08-22）
+
+- `RunType.REVIEW` 已加入通用 Run 契约；新增 `ReviewWorkflowService.create_review_run()`，在一个
+  事务中校验 active Project 与 owner，并创建通用 Run、`review_runs`、
+  `review_run_created` Event、Outbox 和通用 IdempotencyKey；同键同请求回放原 Run，同键不同请求
+  冲突。HTTP Route 留到切片 9，但后续 API 必须要求 `Idempotency-Key` 并复用该服务；
+- 新增不可变领域契约与受限枚举：ReviewRun、RunStep、ReviewSource、ReviewDependency、
+  ReviewOutput、HumanInputRequest/HumanInput 和 Artifact；固定版本使用 `name.vN` 校验，受控 JSON
+  有大小上限，ReviewRun 统计摘要只使用固定计数键，Artifact 不接收文件正文；
+- 新增单一 Alembic migration `a8c3e5f7b9d1`，创建 `review_runs`、`run_steps`、
+  `review_sources`、`run_dependencies`、`review_outputs`、`human_input_requests`、
+  `human_inputs` 和 `artifacts`，并落地 FK、Check、顺序、版本与幂等唯一约束；迁移已在独立
+  PostgreSQL 数据库实际执行 `upgrade head → downgrade -1 → upgrade head`；
+- 新增 `ReviewRepository` Port、SQLAlchemy Adapter 与应用测试 Fake。所有公开查询方法同时要求
+  `run_id`、`project_id`、`owner_id`；Output Repository 不提供覆盖旧版本的方法；
+- 本切片只建立数据契约和 Review Run 最小创建闭环，没有实现 Review API、arXiv HTTP、Source
+  导入状态推进、Dependency Reconciler、LangGraph、Evidence Matrix、HumanInput 提交/恢复或
+  Artifact 文件写入；这些行为仍按后续切片顺序开发；
+- HumanInput “同一请求只能解决一次”当前由领域状态机、`human_inputs.request_id` 唯一约束、
+  请求版本复合 FK 和单 open 请求部分唯一索引共同固定。切片 7 仍需实现带行锁的
+  “保存 Input + 解决 Request + 恢复 Run”事务，不能只依赖前端禁用按钮。
+- 数据库当前只保证引用目标存在和主要唯一性；ReviewRun 当前 Output/Artifact、ReviewSource 的
+  Paper/PaperVersion 配对、Request 的 resolved Input，以及 Artifact 的 Project/owner/来源 Output
+  归属，必须由对应后续写服务在同一事务中校验，不能依赖 FK 自动保证同一 Review Run 范围。
+
+验证结果：切片 2 定向领域/应用测试 `11 passed`、定向 PostgreSQL 集成测试 `7 passed`；Backend
+完整非集成测试 `398 passed, 4 skipped`，完整 PostgreSQL/Testcontainers integration
+`93 passed`；`ruff check src tests` 与 `pyright` 通过。迁移还在独立 PostgreSQL 数据库通过
+`upgrade head → downgrade -1 → upgrade head`。本切片没有前端改动，因此未重复运行 Web 测试与构建。
+
+实现和取舍详见
+[Review Workflow 数据契约](../modules/review-workflow-data-contracts.md)。
+
 ## 19. 重点测试
 
 - Run 和 Attempt 的合法/非法等待状态转换；
@@ -560,6 +620,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 - Evidence Matrix 的跨 Project、跨 Paper、伪造 Evidence 和证据不足校验；
 - Section 只能读取对应维度与当前 Run 可见 Evidence；
 - ClaimSet 和数字引用映射闭包；
+- 后续 Output/Source/HumanInput/Artifact 写服务拒绝跨 Review Run、跨 Project、跨 owner 的引用配对；
 - Worker crash、临时失败、部分论文失败、全部失败和取消；
 - SSE 断线后按 Event 序号重放；
 - arXiv HTTP allowlist、重定向、超时、大小和无效 PDF。

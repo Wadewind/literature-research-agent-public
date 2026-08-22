@@ -11,13 +11,14 @@ from literature_agent.domain.exceptions import InvalidRunTransitionError
 class RunType(StrEnum):
     """Run 类型枚举。
 
-    Worker 按 ``run_type`` 显式分发到对应执行器；``RAG_ANSWER``
-    在切片 8 接线，本阶段只定义。
+    Worker 按 ``run_type`` 显式分发到对应执行器；``REVIEW`` 在 Phase 3
+    切片 2 建立创建契约，执行器将在后续切片接线。
     """
 
     INGESTION = "ingestion"
     INDEXING = "indexing"
     RAG_ANSWER = "rag_answer"
+    REVIEW = "review"
 
 
 class RunStatus(StrEnum):
