@@ -19,15 +19,21 @@ Worker 崩溃
   → resume(review_run_id) → ainvoke(None, 同一 Thread 配置)
   → 从 pending checkpoint 续跑
 
+人工输入已持久化
+  → resume_human_input(review_run_id, request_id, human_input_id)
+  → Command(resume={request_id, human_input_id})
+  → review_outline 从头重执行并返回 Resume 值
+  → 后继节点从业务库复核 Request/HumanInput/Outline 闭包
+
 周期 RunReconcileService
   ├─ 原有：仍 RUNNING 且 lease 过期 → 收回 Run、失败重试
   └─ 新增：业务 Run 已离开旧执行边界 → 关闭残留 RUNNING Attempt
 ```
 
-本切片的 `ReviewGraphFactory` 只提供可注入单个切片节点的 `review.v1` 演进骨架，用于验证真实
-checkpoint 和节点重放。切片 6 已实现 Evidence Matrix 应用服务，但 Search Strategy 图节点与
-Outline/Interrupt 尚未实现，因此仍未把 Review Executor 注册到生产 `RunDispatcher`：否则 Matrix
-之后直接到 `END`，Review Run 会在没有大纲和 Artifact 时虚假成功。
+`ReviewGraphFactory` 保留可注入单切片的 crash-recovery 测试骨架，并在切片 7 增加真实
+`propose_outline → review_outline interrupt → apply_outline_decision` 边界。feedback 路由回到
+proposal 并再次 interrupt；approve/edit 只到达切片 8 的安全占位节点。章节、引用和 Artifact 尚未
+完成，因此仍未把 Review Executor 注册到生产 `RunDispatcher`，避免占位节点令 Run 虚假成功。
 
 ## 状态、数据与生命周期
 
@@ -38,6 +44,9 @@ Outline/Interrupt 尚未实现，因此仍未把 Review Executor 注册到生产
   因此不能把 Workflow 版本错误地声称为根 namespace；
 - `start()` 只接受首次完整 State；`resume()` 只接受业务 Run ID，并向 LangGraph 传 `None`，避免把
   恢复误当成同一 Thread 的新一轮输入；
+- HITL 不复用 `resume(None)`：HumanInput 必须先在业务事务中持久化、解决当前 Request 并重新调度，
+  Runtime 随后用 `Command(resume={request_id,human_input_id})` 恢复。Command 只传小型稳定 ID，
+  不能替代 owner/Project/Run 授权和数据库闭包校验；
 - Checkpointer 使用显式 `AsyncConnection` 生命周期、`autocommit=True`、`dict_row`，不泄漏连接；
 - Runtime 不调用官方 `setup()`。Alembic migration 创建并版本化官方 3.1.1 的四张表、三个索引和
   migration 版本 0–9；
@@ -83,6 +92,9 @@ Outbox。
 - Runtime：稳定 Thread/namespace、start/resume 分离、完成后重复恢复不重跑节点、读写错误分类；
 - PostgreSQL：两个全新 connection/checkpointer/runtime 跨实例恢复 pending task，不同 Run 隔离，
   副作用后崩溃重放只保留一份幂等业务结果；
+- HITL：MemorySaver 验证 approve/edit 与 feedback 再次 interrupt；真实 PostgreSQL Saver 验证首个
+  Runtime interrupt 后关闭连接，新 Runtime/新连接通过同 Thread 的 Command Resume，proposal 和
+  decision 各只执行一次；
 - Attempt：正常恢复旧 Attempt→PAUSED、新 Attempt 不动；Review 失败重试旧 Attempt→FAILED；
   新鲜 `CANCEL_REQUESTED` Attempt 不动，过期后 Run/Attempt→CANCELLED 且不重试；并发 PostgreSQL
   Reconciler 单效果；
@@ -99,9 +111,8 @@ Outbox。
 
 ## 已知限制
 
-- 固定图仍是 Runtime 契约骨架，尚未接线生产 Review Executor；应在切片 7 形成 Search Strategy、
-  Evidence Matrix 和 Outline interrupt 的完整执行边界后注册；
-- 本切片不实现 `interrupt()`/HumanInput，属于切片 7；
+- 固定图已具备 Outline interrupt/feedback loop，但尚未接线生产 Review Executor；切片 8 完成章节、
+  引用、一致性和 Artifact 后再形成安全终态；
 - Checkpoint 尚无按删除 Project/Run 的清理和保留策略；
 - Attempt 分类依赖业务 Event 完整性；无法确定原因时安全保留记录，后续可增加告警；
 - 每个显式 Context 使用一个 psycopg 连接；生产接线时由 Worker 生命周期持有，尚未引入连接池。

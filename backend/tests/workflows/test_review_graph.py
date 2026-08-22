@@ -93,6 +93,7 @@ async def test_workflow_version_mismatch_is_permanent_data_error() -> None:
 
 async def test_missing_resume_checkpoint_is_permanent_data_error() -> None:
     """不存在的 Thread 不能被当成临时故障无限重试。"""
+
     async def node(_state: ReviewGraphState) -> dict:
         return {}
 
@@ -138,3 +139,99 @@ async def test_node_value_error_is_not_misclassified_as_checkpoint_error() -> No
     with pytest.raises(ValueError) as raised:
         await runtime.start(_state("run-1"))
     assert raised.value is error
+
+
+async def test_outline_interrupt_approve_resumes_with_persisted_ids() -> None:
+    saver = InMemorySaver()
+    calls = {"entry": 0, "decision": 0}
+
+    async def entry(_state: ReviewGraphState) -> dict:
+        calls["entry"] += 1
+        return {
+            "outline_output_id": "outline-1",
+            "human_input_request_id": "request-1",
+            "feedback_round": 0,
+        }
+
+    async def decision(state: ReviewGraphState) -> dict:
+        calls["decision"] += 1
+        assert state["human_input_request_id"] == "request-1"
+        assert state["human_input_id"] == "input-1"
+        return {
+            "outline_action": "approve",
+            "approved_outline_output_id": "outline-1",
+        }
+
+    first_runtime = ReviewWorkflowRuntime(
+        ReviewGraphFactory(
+            outline_entry_node=entry,
+            outline_decision_node=decision,
+        ),
+        saver,
+    )
+    paused = await first_runtime.start(_state("review-1"))
+    assert paused["human_input_request_id"] == "request-1"
+    assert calls == {"entry": 1, "decision": 0}
+
+    # 使用同一 Saver 重建 Runtime，模拟进程重启后 Command(resume=...)。
+    restarted = ReviewWorkflowRuntime(
+        ReviewGraphFactory(
+            outline_entry_node=entry,
+            outline_decision_node=decision,
+        ),
+        saver,
+    )
+    resumed = await restarted.resume_human_input(
+        "review-1", request_id="request-1", human_input_id="input-1"
+    )
+    assert resumed["approved_outline_output_id"] == "outline-1"
+    assert resumed["outline_boundary_reached"] is True
+    assert calls == {"entry": 1, "decision": 1}
+
+
+async def test_outline_feedback_loops_to_new_request_and_interrupts_again() -> None:
+    saver = InMemorySaver()
+    entry_calls = 0
+
+    async def entry(state: ReviewGraphState) -> dict:
+        nonlocal entry_calls
+        entry_calls += 1
+        version = state.get("feedback_round", 0) + 1
+        return {
+            "outline_output_id": f"outline-{version}",
+            "human_input_request_id": f"request-{version}",
+        }
+
+    async def decision(state: ReviewGraphState) -> dict:
+        if state["human_input_id"] == "feedback-1":
+            return {
+                "outline_action": "feedback",
+                "feedback_round": 1,
+                "feedback_human_input_id": "feedback-1",
+            }
+        return {
+            "outline_action": "edit",
+            "approved_outline_output_id": "outline-edited",
+        }
+
+    runtime = ReviewWorkflowRuntime(
+        ReviewGraphFactory(
+            outline_entry_node=entry,
+            outline_decision_node=decision,
+        ),
+        saver,
+    )
+    await runtime.start(_state("review-2"))
+    second_pause = await runtime.resume_human_input(
+        "review-2", request_id="request-1", human_input_id="feedback-1"
+    )
+    assert second_pause["human_input_request_id"] == "request-2"
+    assert second_pause["outline_output_id"] == "outline-2"
+    assert entry_calls == 2
+
+    completed = await runtime.resume_human_input(
+        "review-2", request_id="request-2", human_input_id="edit-2"
+    )
+    assert completed["approved_outline_output_id"] == "outline-edited"
+    assert completed["outline_boundary_reached"] is True
+    assert entry_calls == 2

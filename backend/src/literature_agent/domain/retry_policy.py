@@ -14,6 +14,8 @@ from literature_agent.domain.exceptions import (
     InvalidPdfInputError,
     ModelOutputInvalidError,
     RagAnswerInputError,
+    ReviewOutlineInvalidError,
+    ReviewOutlineScopeError,
 )
 from literature_agent.domain.model_errors import (
     ModelAuthError,
@@ -30,6 +32,8 @@ _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     EvidenceScopeError,
     EvidenceMatrixInvalidError,
     EvidenceMatrixScopeError,
+    ReviewOutlineInvalidError,
+    ReviewOutlineScopeError,
     RagAnswerInputError,
     ModelOutputInvalidError,
     ModelAuthError,

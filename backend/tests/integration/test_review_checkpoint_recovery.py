@@ -129,3 +129,58 @@ async def test_checkpoint_recovers_across_connections_and_isolates_threads(db_en
             (f"review.v1:review-run:{second_run_id}", ""),
         ]
     )
+
+
+async def test_outline_interrupt_resumes_with_command_after_runtime_restart(db_engine) -> None:
+    """真实 PostgresSaver 保存 interrupt，新 Runtime 用持久 ID Command 恢复。"""
+    database_url = db_engine.url.render_as_string(hide_password=False)
+    store = PostgresCheckpointStore(database_url)
+    run_id = "outline-checkpoint-run"
+    calls = {"entry": 0, "decision": 0}
+
+    async def entry(_state: ReviewGraphState) -> dict:
+        calls["entry"] += 1
+        return {
+            "outline_output_id": "outline-1",
+            "human_input_request_id": "request-1",
+            "feedback_round": 0,
+        }
+
+    async def decision(state: ReviewGraphState) -> dict:
+        calls["decision"] += 1
+        assert state["human_input_request_id"] == "request-1"
+        assert state["human_input_id"] == "input-1"
+        return {
+            "outline_action": "approve",
+            "approved_outline_output_id": "outline-1",
+        }
+
+    async with store.open() as bootstrap:
+        await bootstrap.setup()
+        first = ReviewWorkflowRuntime(
+            ReviewGraphFactory(
+                outline_entry_node=entry,
+                outline_decision_node=decision,
+            ),
+            bootstrap,
+        )
+        paused = await first.start(_state(run_id))
+        assert paused["human_input_request_id"] == "request-1"
+
+    async with store.open() as restarted_saver:
+        restarted = ReviewWorkflowRuntime(
+            ReviewGraphFactory(
+                outline_entry_node=entry,
+                outline_decision_node=decision,
+            ),
+            restarted_saver,
+        )
+        resumed = await restarted.resume_human_input(
+            run_id,
+            request_id="request-1",
+            human_input_id="input-1",
+        )
+
+    assert resumed["approved_outline_output_id"] == "outline-1"
+    assert resumed["outline_boundary_reached"] is True
+    assert calls == {"entry": 1, "decision": 1}

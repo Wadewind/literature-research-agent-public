@@ -248,3 +248,15 @@ class EvidenceMatrixInvalidError(Exception):
     def __init__(self, message: str = "evidence_matrix_invalid") -> None:
         self.message = message
         super().__init__(message)
+
+
+class ReviewOutlineScopeError(Exception):
+    """大纲上下文、Output、Request 或 HumanInput 不属于当前 Review 范围。"""
+
+
+class ReviewOutlineInvalidError(Exception):
+    """模型生成的大纲不满足 ``outline.v1`` 确定性契约。"""
+
+
+class HumanInputConflictError(Exception):
+    """人工输入已解决、已过期，或幂等键被不同语义复用。"""

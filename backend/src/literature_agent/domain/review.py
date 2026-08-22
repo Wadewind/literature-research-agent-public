@@ -208,6 +208,25 @@ class RunStep:
             completed_at=datetime.now(UTC),
         )
 
+    def pause(self, output_refs: dict) -> "RunStep":
+        """人工等待时暂停 Step；保留最新请求的小型引用。"""
+        _validate_json_object(output_refs, "Step 暂停引用", _MAX_CONFIG_BYTES)
+        if self.status is not ReviewStepStatus.RUNNING:
+            raise ValueError("只有 running Step 可以暂停")
+        return replace(
+            self,
+            status=ReviewStepStatus.PAUSED,
+            output_refs=dict(output_refs),
+            error_code=None,
+            completed_at=None,
+        )
+
+    def resume(self) -> "RunStep":
+        """新 Worker 恢复人工等待 Step。"""
+        if self.status is not ReviewStepStatus.PAUSED:
+            raise ValueError("只有 paused Step 可以恢复")
+        return replace(self, status=ReviewStepStatus.RUNNING)
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewSource:
@@ -607,6 +626,8 @@ def create_human_input(
         raise ValueError(f"动作 {selected_action.value} 不允许")
     if not submitted_by or not idempotency_key:
         raise ValueError("提交者和幂等键不能为空")
+    if len(idempotency_key) > 255:
+        raise ValueError("幂等键不能超过 255 个字符")
     _validate_json_object(payload, "HumanInput payload", _MAX_METADATA_BYTES)
     return HumanInput(
         human_input_id=str(uuid4()),

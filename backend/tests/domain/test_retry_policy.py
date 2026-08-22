@@ -8,6 +8,8 @@ from literature_agent.domain.exceptions import (
     FileValidationError,
     InvalidPdfInputError,
     ParserResourceError,
+    ReviewOutlineInvalidError,
+    ReviewOutlineScopeError,
 )
 from literature_agent.domain.retry_policy import (
     compute_retry_backoff,
@@ -22,6 +24,8 @@ def test_permanent_input_errors() -> None:
     assert is_permanent_error(CheckpointDataError("checkpoint 无效"))
     assert is_permanent_error(EvidenceMatrixScopeError("范围非法"))
     assert is_permanent_error(EvidenceMatrixInvalidError())
+    assert is_permanent_error(ReviewOutlineScopeError("范围非法"))
+    assert is_permanent_error(ReviewOutlineInvalidError("大纲非法"))
 
 
 def test_temporary_errors() -> None:

@@ -153,6 +153,19 @@ def _request_to_domain(value: HumanInputRequestORM) -> HumanInputRequest:
     )
 
 
+def _human_input_to_domain(value: HumanInputORM) -> HumanInput:
+    return HumanInput(
+        human_input_id=value.human_input_id,
+        request_id=value.request_id,
+        request_version=value.request_version,
+        action=HumanInputAction(value.action),
+        payload=value.payload,
+        submitted_by=value.submitted_by,
+        idempotency_key=value.idempotency_key,
+        created_at=value.created_at,
+    )
+
+
 def _artifact_to_domain(value: ArtifactORM) -> Artifact:
     return Artifact(
         artifact_id=value.artifact_id,
@@ -200,6 +213,43 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         row = result.scalar_one_or_none()
         return _review_run_to_domain(row) if row else None
+
+    async def get_review_run_scoped_for_update(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> ReviewRun | None:
+        result = await self._session.execute(
+            select(ReviewRunORM)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(*self._scope(run_id, project_id, owner_id))
+            .with_for_update()
+        )
+        row = result.scalar_one_or_none()
+        return _review_run_to_domain(row) if row else None
+
+    async def advance_review_outline(
+        self,
+        review_run: ReviewRun,
+        *,
+        expected_outline_output_id: str | None,
+    ) -> bool:
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(ReviewRunORM)
+                .where(
+                    ReviewRunORM.run_id == review_run.run_id,
+                    ReviewRunORM.current_outline_output_id.is_(None)
+                    if expected_outline_output_id is None
+                    else ReviewRunORM.current_outline_output_id == expected_outline_output_id,
+                )
+                .values(
+                    current_stage=review_run.current_stage.value,
+                    current_outline_output_id=review_run.current_outline_output_id,
+                    updated_at=review_run.updated_at,
+                )
+            )
+        )
+        return result.rowcount == 1
 
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         """按创建顺序有界列出等待依赖的 Review Run。"""
@@ -480,6 +530,38 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return request
 
+    async def get_or_add_human_input_request(self, request: HumanInputRequest) -> HumanInputRequest:
+        values = {
+            "request_id": request.request_id,
+            "review_run_id": request.review_run_id,
+            "request_version": request.request_version,
+            "outline_output_id": request.outline_output_id,
+            "status": request.status.value,
+            "allowed_actions": [item.value for item in request.allowed_actions],
+            "resolved_input_id": request.resolved_input_id,
+            "created_at": request.created_at,
+            "resolved_at": request.resolved_at,
+        }
+        await self._session.execute(
+            postgresql.insert(HumanInputRequestORM).values(**values).on_conflict_do_nothing()
+        )
+        result = await self._session.execute(
+            select(HumanInputRequestORM).where(
+                HumanInputRequestORM.review_run_id == request.review_run_id,
+                HumanInputRequestORM.request_version == request.request_version,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            result = await self._session.execute(
+                select(HumanInputRequestORM).where(
+                    HumanInputRequestORM.review_run_id == request.review_run_id,
+                    HumanInputRequestORM.status == HumanInputRequestStatus.OPEN.value,
+                )
+            )
+            row = result.scalar_one()
+        return _request_to_domain(row)
+
     async def get_open_human_input_request_scoped(
         self, run_id: str, project_id: str, owner_id: str
     ) -> HumanInputRequest | None:
@@ -495,6 +577,47 @@ class SqlalchemyReviewRepository(ReviewRepository):
         row = result.scalar_one_or_none()
         return _request_to_domain(row) if row else None
 
+    async def get_human_input_request_scoped_for_update(
+        self,
+        request_id: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> HumanInputRequest | None:
+        result = await self._session.execute(
+            select(HumanInputRequestORM)
+            .join(ReviewRunORM, ReviewRunORM.run_id == HumanInputRequestORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                *self._scope(run_id, project_id, owner_id),
+                HumanInputRequestORM.request_id == request_id,
+                HumanInputRequestORM.review_run_id == run_id,
+            )
+            .with_for_update()
+        )
+        row = result.scalar_one_or_none()
+        return _request_to_domain(row) if row else None
+
+    async def resolve_human_input_request(
+        self, request: HumanInputRequest, *, expected_status: str
+    ) -> bool:
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(HumanInputRequestORM)
+                .where(
+                    HumanInputRequestORM.request_id == request.request_id,
+                    HumanInputRequestORM.status == expected_status,
+                )
+                .values(
+                    status=request.status.value,
+                    resolved_input_id=request.resolved_input_id,
+                    resolved_at=request.resolved_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
     async def add_human_input(self, human_input: HumanInput) -> HumanInput:
         self._session.add(
             HumanInputORM(
@@ -509,6 +632,82 @@ class SqlalchemyReviewRepository(ReviewRepository):
             )
         )
         return human_input
+
+    async def get_or_add_human_input(self, human_input: HumanInput) -> HumanInput:
+        values = {
+            "human_input_id": human_input.human_input_id,
+            "request_id": human_input.request_id,
+            "request_version": human_input.request_version,
+            "action": human_input.action.value,
+            "payload": human_input.payload,
+            "submitted_by": human_input.submitted_by,
+            "idempotency_key": human_input.idempotency_key,
+            "created_at": human_input.created_at,
+        }
+        await self._session.execute(
+            postgresql.insert(HumanInputORM).values(**values).on_conflict_do_nothing()
+        )
+        result = await self._session.execute(
+            select(HumanInputORM).where(
+                HumanInputORM.submitted_by == human_input.submitted_by,
+                HumanInputORM.idempotency_key == human_input.idempotency_key,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            result = await self._session.execute(
+                select(HumanInputORM).where(HumanInputORM.request_id == human_input.request_id)
+            )
+            row = result.scalar_one()
+        return _human_input_to_domain(row)
+
+    async def get_human_input_scoped(
+        self,
+        human_input_id: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> HumanInput | None:
+        result = await self._session.execute(
+            select(HumanInputORM)
+            .join(
+                HumanInputRequestORM,
+                HumanInputRequestORM.request_id == HumanInputORM.request_id,
+            )
+            .join(ReviewRunORM, ReviewRunORM.run_id == HumanInputRequestORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                *self._scope(run_id, project_id, owner_id),
+                HumanInputORM.human_input_id == human_input_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        return _human_input_to_domain(row) if row else None
+
+    async def get_human_input_by_idempotency_scoped(
+        self,
+        submitted_by: str,
+        idempotency_key: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> HumanInput | None:
+        result = await self._session.execute(
+            select(HumanInputORM)
+            .join(
+                HumanInputRequestORM,
+                HumanInputRequestORM.request_id == HumanInputORM.request_id,
+            )
+            .join(ReviewRunORM, ReviewRunORM.run_id == HumanInputRequestORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                *self._scope(run_id, project_id, owner_id),
+                HumanInputORM.submitted_by == submitted_by,
+                HumanInputORM.idempotency_key == idempotency_key,
+            )
+        )
+        row = result.scalar_one_or_none()
+        return _human_input_to_domain(row) if row else None
 
     async def add_artifact(self, artifact: Artifact) -> Artifact:
         self._session.add(

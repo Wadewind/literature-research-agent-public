@@ -796,6 +796,14 @@ once；单篇修复后仍非法也会先持久化稳定失败 Output，后续论
 再次调用已永久失败论文。聚合 Output、总 Step 成功与 completed Event 同事务提交。Checkpoint 之后
 发生崩溃时，节点重放先复核并返回既有聚合 Output，不重做模型副作用。
 
+大纲生成只读取研究问题、固定分析维度、已验证 Matrix 的受控摘要和论文覆盖统计，不读取论文全文。
+`outline_generate.v1` 的结构化结果经确定性 `outline.v1` Validator 后版本化保存；Request 与等待状态通过
+幂等短事务推进。`review_outline` 节点在 `interrupt()` 前保持纯函数式边界。HumanInput 必须先按
+owner/Project/Run、Request 版本和当前 Outline 校验并持久化，再与 Request resolve、Run 重新排队、
+Event 和 Outbox 重置同事务提交。崩溃恢复使用空输入继续 checkpoint；HITL 恢复使用仅含持久 ID 的
+`Command(resume=...)`，恢复后仍从业务数据库复核决定。approve/edit 固定批准的 Outline 版本，feedback
+追加下一 Outline/Request 并再次暂停；第一版反馈文本有界，但轮次预算尚待 Profile 校准。
+
 ### 11.3 评测维度
 
 - Citation precision：引用是否真正支持 Claim；

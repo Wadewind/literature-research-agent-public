@@ -46,6 +46,23 @@ class FakeReviewRepository(ReviewRepository):
             return None
         return self.review_runs.get(run_id)
 
+    async def get_review_run_scoped_for_update(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> ReviewRun | None:
+        return await self.get_review_run_scoped(run_id, project_id, owner_id)
+
+    async def advance_review_outline(
+        self,
+        review_run: ReviewRun,
+        *,
+        expected_outline_output_id: str | None,
+    ) -> bool:
+        current = self.review_runs.get(review_run.run_id)
+        if current is None or current.current_outline_output_id != expected_outline_output_id:
+            return False
+        self.review_runs[review_run.run_id] = review_run
+        return True
+
     async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
         # 父 Run 的真实状态由 Service 持锁后二次校验；Fake 只提供候选。
         return list(self.review_runs)[:limit]
@@ -166,6 +183,28 @@ class FakeReviewRepository(ReviewRepository):
         self.requests.append(request)
         return request
 
+    async def get_or_add_human_input_request(self, request: HumanInputRequest) -> HumanInputRequest:
+        existing = next(
+            (
+                item
+                for item in self.requests
+                if item.review_run_id == request.review_run_id
+                and item.request_version == request.request_version
+            ),
+            None,
+        )
+        if existing is None:
+            existing = next(
+                (
+                    item
+                    for item in self.requests
+                    if item.review_run_id == request.review_run_id
+                    and item.status is HumanInputRequestStatus.OPEN
+                ),
+                None,
+            )
+        return existing if existing is not None else await self.add_human_input_request(request)
+
     async def get_open_human_input_request_scoped(
         self, run_id: str, project_id: str, owner_id: str
     ) -> HumanInputRequest | None:
@@ -181,9 +220,92 @@ class FakeReviewRepository(ReviewRepository):
             None,
         )
 
+    async def get_human_input_request_scoped_for_update(
+        self,
+        request_id: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> HumanInputRequest | None:
+        if not self._visible(run_id, project_id, owner_id):
+            return None
+        return next(
+            (
+                item
+                for item in self.requests
+                if item.request_id == request_id and item.review_run_id == run_id
+            ),
+            None,
+        )
+
+    async def resolve_human_input_request(
+        self, request: HumanInputRequest, *, expected_status: str
+    ) -> bool:
+        for index, current in enumerate(self.requests):
+            if current.request_id == request.request_id and current.status.value == expected_status:
+                self.requests[index] = request
+                return True
+        return False
+
     async def add_human_input(self, human_input: HumanInput) -> HumanInput:
         self.inputs.append(human_input)
         return human_input
+
+    async def get_or_add_human_input(self, human_input: HumanInput) -> HumanInput:
+        existing = next(
+            (
+                item
+                for item in self.inputs
+                if item.request_id == human_input.request_id
+                or (
+                    item.submitted_by == human_input.submitted_by
+                    and item.idempotency_key == human_input.idempotency_key
+                )
+            ),
+            None,
+        )
+        return existing if existing is not None else await self.add_human_input(human_input)
+
+    async def get_human_input_scoped(
+        self,
+        human_input_id: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> HumanInput | None:
+        if not self._visible(run_id, project_id, owner_id):
+            return None
+        request_ids = {item.request_id for item in self.requests if item.review_run_id == run_id}
+        return next(
+            (
+                item
+                for item in self.inputs
+                if item.human_input_id == human_input_id and item.request_id in request_ids
+            ),
+            None,
+        )
+
+    async def get_human_input_by_idempotency_scoped(
+        self,
+        submitted_by: str,
+        idempotency_key: str,
+        run_id: str,
+        project_id: str,
+        owner_id: str,
+    ) -> HumanInput | None:
+        if not self._visible(run_id, project_id, owner_id):
+            return None
+        request_ids = {item.request_id for item in self.requests if item.review_run_id == run_id}
+        return next(
+            (
+                item
+                for item in self.inputs
+                if item.submitted_by == submitted_by
+                and item.idempotency_key == idempotency_key
+                and item.request_id in request_ids
+            ),
+            None,
+        )
 
     async def add_artifact(self, artifact: Artifact) -> Artifact:
         self.artifacts.append(artifact)

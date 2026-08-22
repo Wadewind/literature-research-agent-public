@@ -27,6 +27,8 @@ Phase 2 已完成带 Evidence 和 Citation 的 Project-scoped RAG。Phase 3 的�
 
 Interrupt 节点在 `interrupt()` 前不执行模型、数据库写入或其他不可重复副作用，因为 Resume 会从该节点重新执行。HumanInput 必须先持久化和校验，再重新调度 Review Run。
 
+`outline_generate.v1` 只接收研究问题、固定分析维度、已验证 Matrix 的受控摘要和覆盖统计。`outline.v1` 使用确定性 Schema/载荷 Validator；Outline 先版本化持久化，再以幂等短事务创建 OPEN Request 并把 Run/Step 推入等待。用户提交时，HumanInput、Request resolve、Run 重新排队、Event 与 Outbox 重置同事务提交。崩溃恢复继续使用空输入恢复 checkpoint；真正的 HITL Resume 使用只携带持久 `request_id`/`human_input_id` 的 `Command(resume=...)`，后继节点仍以业务数据库为事实来源。feedback 生成下一版本和 Request；第一版暂不设置反馈轮次上限，但文本载荷有界。
+
 ## 决策三：等待通过业务状态和可重置 Outbox 恢复
 
 - Review Run 创建或复用 Ingestion/Indexing 子 Run，不在 Review Worker 内直接执行导入器；

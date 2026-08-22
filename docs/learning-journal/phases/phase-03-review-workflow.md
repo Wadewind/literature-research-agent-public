@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1–5 已确认，切片 6 已完成并等待确认）
+- 当前状态：开发中（切片 1–6 已确认，切片 7 已完成并等待确认）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -459,6 +459,11 @@ Validator 只保证结构、归属和引用闭包，不宣称自动判断 findin
 
 持久化后进入 `review_outline` interrupt。`edit` 输入使用同一 Schema 和 Validator；`feedback` 会生成新 Outline 版本并产生新的 Human Input Request。
 
+`outline.v1` 第一版安全边界固定为：1–12 个章节；`section_key` 使用最多 64 字符的
+snake_case；`title` 最多 200 字符，`purpose` 最多 1,000 字符；每节关联 1–6 个不重复且属于
+Search Strategy 的维度；整体 JSON 不超过 64 KiB。人工 `feedback` 是去除首尾空白后 1–4,000
+字符的纯文本。`feedback_round` 必须非负且单调递增，但本切片尚不设置最大反馈轮次预算。
+
 ### 12.2 章节
 
 每个章节写作调用只接收：
@@ -560,7 +565,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 4. [x] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
 5. [x] 接入 LangGraph checkpoint，验证 crash recovery；
 6. [x] 实现 Evidence Matrix 固定提取策略与 Validator；
-7. [ ] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
+7. [x] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
 8. [ ] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
 9. [ ] 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
 10. [ ] 根据实际代码更新模块学习笔记与阶段完成状态。
@@ -778,6 +783,46 @@ Backend 完整非集成测试 `508 passed, 4 skipped`，完整 PostgreSQL/Valkey
 
 实现和取舍详见
 [Review Evidence Matrix](../modules/review-evidence-matrix.md)。
+
+### 18.7 切片 7 完成记录（2026-08-23）
+
+- 新增 `ReviewOutlineService` 与 `outline.v1` 确定性 Validator。模型上下文只包含研究问题、3–6 个
+  Search Strategy 维度、重新通过 Phase 6 Validator 的 Matrix 受控摘要、覆盖统计和持久反馈文本；
+  不包含 Chunk/PDF 全文、Evidence ID、未知 Source metadata 或模型原始历史；
+- Outline Prompt 固定为 `outline_generate.v1`。Output 使用反馈轮次形成稳定版本和幂等键；模型调用
+  发生在事务外，Output 先提交，随后 Request/等待事务提交。若进程在 Output 后崩溃，重放复用
+  Output，不再次调用模型；
+- 持锁等待事务原子保存/复用 OPEN `HumanInputRequest`，推进 ReviewRun current outline/stage，暂停
+  `REVIEW_OUTLINE` Step，完成 Run `RUNNING → WAITING_INPUT`，并追加 `outline_proposed`、
+  `human_input_requested` 两个 Event。首轮 `PROPOSE_OUTLINE`/`PERSIST_OUTLINE` Step 保留 v1 Output
+  引用；反馈轮由追加式 Output、Request 和 Event 观察，不伪装覆盖首轮 Step；
+- `HumanOutlineInputService` 严格校验 owner/Project/Run、当前 OPEN Request、request/output 版本、允许
+  action 和 payload。`approve` 只接受空 payload；`edit` 使用同一 Outline Validator 并追加新版本；
+  `feedback` 只接受有界文本。HumanInput、Request resolve、可选 edit Output/current pointer、Step 推进、
+  `human_input_submitted` Event、Run `WAITING_INPUT → QUEUED` 与 Outbox
+  `DISPATCHED → PENDING` 在同一事务提交，正常恢复不增加失败计数；
+- 同一提交者幂等键同语义回放原 HumanInput，异义冲突；同一 Request 只解决一次。Request 行锁、条件
+  更新、`human_inputs.request_id` 唯一约束和 Outbox 条件重置共同收敛并发双提交；Outbox 失败会回滚
+  HumanInput、Request、Step、Run 和 Event；
+- `review_outline` LangGraph Node 在 `interrupt()` 之前只读取 Graph State 并构造小型 interrupt 值，
+  不执行模型、数据库、Event 或其他副作用。崩溃恢复继续使用 `ainvoke(None)`；真正 HITL 使用
+  `Command(resume={request_id,human_input_id})`。后继节点按持久 Request/HumanInput/Outline Output
+  再次复核闭包，不能信任 Resume payload；
+- approve/edit 更新 `approved_outline_output_id` 并到达切片 8 的安全占位边界，不把 Review Run
+  虚假完成；feedback 单调增加 `feedback_round`、从持久 HumanInput 加载反馈、生成下一 Outline/
+  Request 并再次 interrupt。真实 PostgreSQL Checkpointer 验证了跨 Runtime/连接重启后的 Command
+  Resume；
+- 未新增数据库结构或 Alembic migration。生产 Review Executor 仍未注册：切片 8 的章节、引用、
+  一致性和 Artifact 链路尚未完成，当前把安全占位边界接到生产执行会虚假成功。反馈最大轮次预算仍
+  待 Profile 校准。
+
+验证结果：最终完整非集成回归为 `546 passed, 4 skipped`，完整 PostgreSQL/Valkey integration 为
+`108 passed`；最后闭包与范围审查后的 Outline 领域、应用、MemorySaver Graph、Step 和重试策略定向
+回归为 `59 passed`，HumanInput 事务与真实 PostgresSaver restart/Command Resume 集成为 `4 passed`；
+`ruff check src tests`、`pyright` 与 `git diff --check` 均通过。
+
+实现和取舍详见
+[人工大纲确认与恢复](../modules/human-outline-review.md)。
 
 ## 19. 重点测试
 

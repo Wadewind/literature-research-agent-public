@@ -218,6 +218,14 @@ def test_human_input_request_can_only_resolve_once() -> None:
             submitted_by="user-1",
             idempotency_key="submit-2",
         )
+    with pytest.raises(ValueError, match="255"):
+        create_human_input(
+            request=request,
+            action=HumanInputAction.APPROVE,
+            payload={},
+            submitted_by="user-1",
+            idempotency_key="x" * 256,
+        )
 
 
 def test_review_output_is_versioned_and_payload_is_bounded() -> None:
@@ -261,6 +269,24 @@ def test_run_step_terminal_state_cannot_be_reopened() -> None:
         succeeded.start()
     with pytest.raises(ValueError, match="pending/running"):
         succeeded.fail("late_failure")
+
+
+def test_review_outline_step_can_pause_resume_and_pause_again() -> None:
+    step = create_run_step(
+        run_id="review-1",
+        step_key=ReviewStepKey.REVIEW_OUTLINE,
+        sequence=9,
+        idempotency_key="review-1:review-outline",
+    ).start()
+
+    first_pause = step.pause({"request_id": "request-1"})
+    resumed = first_pause.resume()
+    second_pause = resumed.pause({"request_id": "request-2"})
+    succeeded = second_pause.resume().succeed({"outline_output_id": "outline-2"})
+
+    assert first_pause.status is ReviewStepStatus.PAUSED
+    assert second_pause.output_refs == {"request_id": "request-2"}
+    assert succeeded.status is ReviewStepStatus.SUCCEEDED
 
 
 def test_artifact_rejects_inline_content_and_invalid_hash() -> None:

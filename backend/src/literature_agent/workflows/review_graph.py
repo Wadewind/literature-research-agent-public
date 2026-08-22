@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.errors import EmptyInputError
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 from psycopg import Error as PsycopgError
 
 from literature_agent.domain.exceptions import (
@@ -31,6 +32,11 @@ class ReviewGraphState(TypedDict):
     approved_outline_output_id: NotRequired[str]
     section_output_ids: NotRequired[list[str]]
     feedback_round: NotRequired[int]
+    feedback_human_input_id: NotRequired[str]
+    human_input_request_id: NotRequired[str]
+    human_input_id: NotRequired[str]
+    outline_action: NotRequired[str]
+    outline_boundary_reached: NotRequired[bool]
 
 
 ReviewGraphNode = Callable[[ReviewGraphState], Awaitable[dict]]
@@ -55,6 +61,48 @@ def review_graph_config(review_run_id: str) -> RunnableConfig:
     }
 
 
+def _review_outline_interrupt(state: ReviewGraphState) -> dict:
+    """纯 Interrupt 节点；恢复值只携带待业务库复核的稳定 ID。"""
+    request_id = state.get("human_input_request_id")
+    outline_output_id = state.get("outline_output_id")
+    if not request_id or not outline_output_id:
+        raise CheckpointDataError("大纲 Interrupt 缺少持久 Request/Output ID")
+    resumed = interrupt(
+        {
+            "kind": "review_outline",
+            "request_id": request_id,
+            "outline_output_id": outline_output_id,
+        }
+    )
+    if (
+        not isinstance(resumed, dict)
+        or set(resumed) != {"request_id", "human_input_id"}
+        or not isinstance(resumed["request_id"], str)
+        or not resumed["request_id"]
+        or not isinstance(resumed["human_input_id"], str)
+        or not resumed["human_input_id"]
+    ):
+        raise CheckpointDataError("HumanInput Resume Command 结构非法")
+    return {
+        "human_input_request_id": resumed["request_id"],
+        "human_input_id": resumed["human_input_id"],
+    }
+
+
+def _outline_route(state: ReviewGraphState) -> str:
+    action = state.get("outline_action")
+    if action == "feedback":
+        return "feedback"
+    if action in {"approve", "edit"}:
+        return "approved"
+    raise CheckpointDataError("持久 HumanInput action 非法")
+
+
+async def _outline_boundary(_state: ReviewGraphState) -> dict:
+    """切片 8 接入章节写作前的安全占位边界。"""
+    return {"outline_boundary_reached": True}
+
+
 class ReviewGraphFactory:
     """构建 ``review.v1`` 固定图的可演进骨架。
 
@@ -62,15 +110,48 @@ class ReviewGraphFactory:
     Outline 和 HITL 节点由后续切片按固定顺序替换。本工厂尚不注册到生产 Worker。
     """
 
-    def __init__(self, slice_node: ReviewGraphNode) -> None:
+    def __init__(
+        self,
+        slice_node: ReviewGraphNode | None = None,
+        *,
+        outline_entry_node: ReviewGraphNode | None = None,
+        outline_decision_node: ReviewGraphNode | None = None,
+    ) -> None:
         self._slice_node = slice_node
+        self._outline_entry_node = outline_entry_node
+        self._outline_decision_node = outline_decision_node
+        if slice_node is None and (outline_entry_node is None or outline_decision_node is None):
+            raise ValueError("必须提供 slice_node 或完整 Outline 节点")
+        if slice_node is not None and (
+            outline_entry_node is not None or outline_decision_node is not None
+        ):
+            raise ValueError("切片骨架与 Outline 图不能同时配置")
 
     def compile(self, checkpointer: BaseCheckpointSaver):
         """使用调用方持有生命周期的持久 Checkpointer 编译图。"""
         graph = StateGraph(ReviewGraphState)
-        graph.add_node("slice_boundary", RunnableLambda(self._slice_node))
-        graph.add_edge(START, "slice_boundary")
-        graph.add_edge("slice_boundary", END)
+        if self._slice_node is not None:
+            graph.add_node("slice_boundary", RunnableLambda(self._slice_node))
+            graph.add_edge(START, "slice_boundary")
+            graph.add_edge("slice_boundary", END)
+            return graph.compile(checkpointer=checkpointer)
+        outline_entry_node = self._outline_entry_node
+        outline_decision_node = self._outline_decision_node
+        if outline_entry_node is None or outline_decision_node is None:  # pragma: no cover
+            raise ValueError("Outline 图节点配置不完整")
+        graph.add_node("propose_outline", RunnableLambda(outline_entry_node))
+        graph.add_node("review_outline", _review_outline_interrupt)
+        graph.add_node("apply_outline_decision", RunnableLambda(outline_decision_node))
+        graph.add_node("outline_boundary", RunnableLambda(_outline_boundary))
+        graph.add_edge(START, "propose_outline")
+        graph.add_edge("propose_outline", "review_outline")
+        graph.add_edge("review_outline", "apply_outline_decision")
+        graph.add_conditional_edges(
+            "apply_outline_decision",
+            _outline_route,
+            {"feedback": "propose_outline", "approved": "outline_boundary"},
+        )
+        graph.add_edge("outline_boundary", END)
         return graph.compile(checkpointer=checkpointer)
 
 
@@ -90,9 +171,29 @@ class ReviewWorkflowRuntime:
         """从同一 Thread 的 pending checkpoint 恢复，不创建新一轮图输入。"""
         return await self._invoke(None, review_run_id)
 
+    async def resume_human_input(
+        self,
+        review_run_id: str,
+        *,
+        request_id: str,
+        human_input_id: str,
+    ) -> ReviewGraphState:
+        """用已持久化 HumanInput 的稳定 ID 恢复同一 Interrupt。"""
+        if not request_id or not human_input_id:
+            raise CheckpointDataError("HumanInput Resume 缺少稳定 ID")
+        return await self._invoke(
+            Command(
+                resume={
+                    "request_id": request_id,
+                    "human_input_id": human_input_id,
+                }
+            ),
+            review_run_id,
+        )
+
     async def _invoke(
         self,
-        state: ReviewGraphState | None,
+        state: ReviewGraphState | Command | None,
         review_run_id: str,
     ) -> ReviewGraphState:
         """调用 LangGraph 并归一化 checkpoint 读写错误。"""
