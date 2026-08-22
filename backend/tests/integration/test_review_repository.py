@@ -16,7 +16,9 @@ from literature_agent.domain.review import (
     HumanInputAction,
     ReviewDependencyType,
     ReviewOutputType,
+    ReviewStage,
     ReviewStepKey,
+    ReviewStepStatus,
     create_artifact,
     create_human_input,
     create_human_input_request,
@@ -451,6 +453,14 @@ async def test_review_creation_transaction_and_idempotency(db_engine) -> None:
         outbox = await SqlalchemyOutboxRepository(session).get_by_run_id(first.run_id)
     assert run is not None and run.run_type == RunType.REVIEW.value
     assert review is not None
+    assert review.current_stage is ReviewStage.FORMULATE_SEARCH_STRATEGY
+    async with factory() as session:
+        steps = await SqlalchemyReviewRepository(session).list_steps_scoped(
+            first.run_id, project.project_id, "user-1"
+        )
+    assert [(item.step_key, item.status) for item in steps] == [
+        (ReviewStepKey.VALIDATE_REQUEST, ReviewStepStatus.SUCCEEDED)
+    ]
     assert [x.event_type for x in events] == ["review_run_created"]
     assert outbox is not None and outbox.status is OutboxStatus.PENDING
 

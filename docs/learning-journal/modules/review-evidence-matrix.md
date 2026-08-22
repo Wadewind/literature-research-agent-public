@@ -111,12 +111,13 @@ JSON、Schema 或引用首次非法时，只在原提取消息后附加截断的
 
 ## 已知限制
 
-- 尚无生产 Review Executor/Graph 节点接线；切片 7 需先形成 Search Strategy → Matrix → Outline
-  interrupt 的真实图边界；
+- 生产 Review Executor 已在切片 9 接线：Matrix 完成事务同时保存聚合 Output、成功 Step、Event，并把
+  Stage 推进到 `PROPOSE_OUTLINE`，随后进入 Outline interrupt；
 - `estimated tokens` 沿用 Chunk 的 `token_count`，阈值、top K 和上下文预算仍需 Fake/真实小样本校准；
 - Validator 验证结构与引用闭包，不自动证明 finding 在语义上被 Evidence 完全蕴含；
 - 当前 per-paper 失败有独立 ReviewOutput，但没有独立 per-paper Step/Event；
-- 模型调用后的取消安全点、Usage 汇总和完整 API/SSE 展示留给后续生产执行闭环。
+- 模型调用后的取消安全点、Usage 聚合与 API/SSE 已由生产执行闭环补齐；Provider 返回后、Output 提交
+  前崩溃仍可能重复外部模型调用，但持久 Output/Event 通过稳定键收敛。
 
 ## 60 秒面试说明
 
@@ -125,4 +126,5 @@ JSON、Schema 或引用首次非法时，只在原提取消息后附加截断的
 模型前固化成当前 Review Run 的 Evidence，所以模型只能输出真实、后续可回查的 evidence_id。一个
 确定性 Validator 再检查 Schema、完整维度、状态组合和 Run/Project/Paper/Version 闭包；失败只修复
 一次。Evidence 和 Output 用唯一键收敛并发，最终 Output、Step 和 Event 同事务，checkpoint 前崩溃
-重放不会重复模型或 Event。由于 Outline interrupt 还没实现，我刻意没有把半成品图注册到 Worker。”
+重放不会重复模型或 Event。生产 Executor 只把依赖等待留在图外，Matrix 完成后进入唯一的 Outline
+interrupt，因此等待释放 Worker 与 LangGraph HITL 的语义不会混在一起。”

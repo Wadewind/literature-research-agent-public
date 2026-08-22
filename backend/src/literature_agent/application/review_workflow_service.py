@@ -28,7 +28,13 @@ from literature_agent.domain.exceptions import (
     RunNotFoundError,
 )
 from literature_agent.domain.queue_outbox import create_outbox_entry
-from literature_agent.domain.review import create_review_run
+from literature_agent.domain.review import (
+    ReviewStage,
+    ReviewStepKey,
+    ReviewStepStatus,
+    create_review_run,
+    create_run_step,
+)
 from literature_agent.domain.run import RunType, create_run
 
 TSession = TypeVar("TSession", bound=Session)
@@ -163,6 +169,25 @@ class ReviewWorkflowService:
                 prompt_versions=PROMPT_VERSIONS,
                 config_snapshot=DEFAULT_CONFIG_SNAPSHOT,
             )
+            review_run = replace(
+                review_run,
+                current_stage=ReviewStage.FORMULATE_SEARCH_STRATEGY,
+                updated_at=review_run.created_at,
+            )
+            validate_step = create_run_step(
+                run_id=run.run_id,
+                step_key=ReviewStepKey.VALIDATE_REQUEST,
+                sequence=1,
+                idempotency_key=f"{run.run_id}:validate-request:review.v1",
+                input_refs={"workflow_version": WORKFLOW_VERSION},
+            )
+            validate_step = replace(
+                validate_step,
+                status=ReviewStepStatus.SUCCEEDED,
+                output_refs={"validated": True},
+                started_at=validate_step.created_at,
+                completed_at=validate_step.created_at,
+            )
             created_event = create_event(
                 run_id=run.run_id,
                 sequence=1,
@@ -172,6 +197,7 @@ class ReviewWorkflowService:
                 payload={
                     "status": run.status.value,
                     "workflow_version": WORKFLOW_VERSION,
+                    "current_stage": review_run.current_stage.value,
                 },
             )
             persisted_run = replace(run, event_sequence=2)
@@ -181,6 +207,7 @@ class ReviewWorkflowService:
             await run_repo.add(persisted_run)
             await session.flush()
             await review_repo.add_review_run(review_run)
+            await review_repo.add_step(validate_step)
             await self._event_repo_factory(session).add(created_event)
             await self._outbox_repo_factory(session).add(create_outbox_entry(run.run_id))
             await idempotency_repo.add(

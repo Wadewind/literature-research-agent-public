@@ -116,10 +116,10 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 ## 已知限制
 
 - Queue Outbox、ARQ Worker 与 Attempt/lease 对账已接入（见 `queue-outbox.md`）。
-- Phase 3 已为固定 Review Workflow 建立 `run_steps` 契约，但 Worker 尚未写入和推进 Step；
-  具体节点执行属于后续切片。
-- 两种等待状态和恢复事务已可复用，Review Run 依赖对账已接入 Worker 周期循环；HumanInput
-  提交/恢复调用方仍属于 Phase 3 后续切片。
+- Phase 3 固定 Review Workflow 已由 Worker 推进完整 Step；图外 Strategy、Search、Import、Wait、
+  Matrix 的 Stage 与 Step/Event 同事务提交，图内继续推进 Outline、Section、Export 和 Finalize；
+- 两种等待状态均已有真实调用方：Dependency Reconciler 与 HumanInput 服务分别把原因事实、Run
+  重新排队、Event 和 Outbox 重置原子提交；
 - Run 已提交等待/终态后、Attempt 关闭前的崩溃间隙已由 Phase 3 切片 5 残留 Attempt Reconciler
   补偿；分类使用 Attempt 时间区间内的 Event，不以当前 Run 类型猜测历史执行结果。
 - 当前取消优先协作式：RUNNING 状态写入 CANCEL_REQUESTED 后由 Worker 在检查点响应；若 Worker

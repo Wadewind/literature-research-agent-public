@@ -11,7 +11,7 @@ from literature_agent.application.review_search_strategy_service import (
 )
 from literature_agent.domain.exceptions import RunNotFoundError
 from literature_agent.domain.model_types import ChatResult, ModelUsage
-from literature_agent.domain.review import create_review_run
+from literature_agent.domain.review import ReviewStage, create_review_run
 from literature_agent.domain.review_search_strategy import SearchStrategyValidationError
 from literature_agent.domain.run import RunStatus, RunType, create_run
 from tests.fakes.fake_event_repository import FakeEventRepository
@@ -104,6 +104,7 @@ async def test_valid_strategy_is_persisted_and_replay_skips_model() -> None:
     assert (first.model_invocations, second.model_invocations) == (1, 0)
     assert model.calls == 1
     assert repo.steps[0].status.value == "succeeded"
+    assert repo.review_runs["review-1"].current_stage is ReviewStage.SEARCH_ARXIV
     assert [item.event_type for item in await events.list_by_run("review-1")] == [
         "search_strategy_completed"
     ]

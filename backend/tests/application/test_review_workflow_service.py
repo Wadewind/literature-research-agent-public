@@ -13,6 +13,7 @@ from literature_agent.domain.exceptions import (
     ProjectNotFoundError,
 )
 from literature_agent.domain.project import create_project
+from literature_agent.domain.review import ReviewStage, ReviewStepKey, ReviewStepStatus
 from literature_agent.domain.run import RunStatus, RunType
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_idempotency_repository import FakeIdempotencyRepository
@@ -69,6 +70,7 @@ async def test_create_review_run_is_atomic_business_bundle() -> None:
     assert run is not None and run.run_type == RunType.REVIEW.value
     assert run.status is RunStatus.QUEUED and run.event_sequence == 2
     assert review is not None and review.research_question == "LangGraph 如何可靠恢复？"
+    assert review.current_stage is ReviewStage.FORMULATE_SEARCH_STRATEGY
     assert review.prompt_versions["evidence_extract"] == "review-evidence-extraction.v1"
     assert review.config_snapshot["section_output_token_limit"] == 4_000
     assert review.config_snapshot["consistency_output_token_limit"] == 2_000
@@ -76,7 +78,11 @@ async def test_create_review_run_is_atomic_business_bundle() -> None:
     assert event_rows[0].payload == {
         "status": "queued",
         "workflow_version": "review.v1",
+        "current_stage": "formulate_search_strategy",
     }
+    assert len(reviews.steps) == 1
+    assert reviews.steps[0].step_key is ReviewStepKey.VALIDATE_REQUEST
+    assert reviews.steps[0].status is ReviewStepStatus.SUCCEEDED
     assert outbox is not None and outbox.run_id == result.run_id
 
 

@@ -15,6 +15,7 @@ Phase 3 的固定 Workflow 需要在 LangGraph 尚未接入前，先明确哪些
   → 校验 owner / Project 归档状态
   → 创建 Run(type=review, status=queued)
   → 创建 review_runs 扩展记录和版本/配置快照
+  → 保存已成功的 VALIDATE_REQUEST Step，Stage=FORMULATE_SEARCH_STRATEGY
   → 创建 review_run_created Event
   → 创建 PENDING Outbox
   → 保存 IdempotencyKey
@@ -112,14 +113,17 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 
 ## 已知限制与扩展路径
 
-- 尚无 Review HTTP API 和前端页面，`Idempotency-Key` 只在应用服务契约中生效；
-- arXiv 导入已追加来源与依赖，切片 4 已实现 Source/Dependency 对账、失败收敛和正常恢复；其他
-  Step 的节点推进仍由后续 LangGraph 切片实现；
-- Request 的数据库约束可以阻止第二条 Input，但切片 7 仍必须用行锁和条件更新原子解决 Request；
+- Review HTTP API、生产 Executor 和强制 `Idempotency-Key` 已在切片 9 接入；Review 专用前端页面归入
+  Phase 4 产品闭环；
+- 固定 Step 已贯穿图外 Strategy/arXiv/import/wait、Matrix、Outline、Section、Export 和 Finalize；
+  `current_stage` 与对应 Step/Event 在短事务中推进，并用预期前置值防止重放倒退；
+- HumanInput 已使用请求行锁和条件更新，把 Input、Request resolve、Run 重新排队、Event 与 Outbox
+  重置原子提交；
 - 数据库只保证目标存在和主要唯一性，不自动保证跨聚合归属：ReviewRun 当前 Output/Artifact、
   ReviewSource 的 Paper/PaperVersion 配对、Request 的 resolved Input、Artifact 的
-  Project/owner/来源 Output，都必须由后续写服务同事务校验并补跨 Run/Project/owner 拒绝测试；
-- Artifact Storage 文件写入、内容哈希后提交和重复文件对账留到切片 9。
+  Project/owner/来源 Output，均已由对应写服务复核并有跨 Run/Project/owner 拒绝测试；
+- Artifact 已按内容哈希先写 Storage，再以稳定幂等键提交元数据；孤立缓存清理与保留策略仍待
+  Phase 4 运维闭环。
 
 ## 60 秒面试说明
 

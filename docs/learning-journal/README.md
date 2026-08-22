@@ -24,4 +24,10 @@ learning-journal/
 
 [Phase 0：项目基线与技术验证](phases/phase-00-project-baseline.md)、[Phase 1：Project、个人文献库与可靠异步导入](phases/phase-01-project-library-ingestion.md)和 [Phase 2：有引用的 RAG 问答](phases/phase-02-cited-rag-qa.md)已经完成。Phase 2 已通过固定 14 题管线评测、可靠性证据审计、Phase 1–2 Playwright E2E、真实 Docling 以及真实 Embedding/结构化 Chat 显式 Smoke；Fake 评测只证明工程闭环，真实 Provider 只证明最小调用契约，均不宣称生产模型质量。
 
-[Phase 3：可暂停恢复的固定文献综述 Workflow](phases/phase-03-review-workflow.md)正在按切片开发，目前已完成切片 1–9：等待/恢复基础、Review Workflow 数据契约、受限 arXiv 检索与幂等项目导入、论文依赖对账恢复闭环、持久 LangGraph checkpoint/crash recovery、固定 Evidence Matrix、Outline HITL、[综述章节写作、引用校验与一致性报告](modules/review-section-citation-consistency.md)，以及[综述 Artifact 生成与生产执行闭环](modules/review-artifact-generation.md)。生产 Review Executor、固定图终态、Project-scoped API、Artifact 下载与通用 SSE 重放均已接通；阶段仍需切片 10 做最终完成审计，当前不宣称 Phase 3 已完成。
+[Phase 3：可暂停恢复的固定文献综述 Workflow](phases/phase-03-review-workflow.md)已于 2026-08-23
+完成切片 1–10：等待/恢复基础、Review Workflow 数据契约、受限 arXiv 检索与幂等项目导入、论文依赖
+对账恢复闭环、持久 LangGraph checkpoint/crash recovery、固定 Evidence Matrix、Outline HITL、
+[综述章节写作、引用校验与一致性报告](modules/review-section-citation-consistency.md)，以及
+[综述 Artifact 生成与生产执行闭环](modules/review-artifact-generation.md)。生产 Review Executor、固定图
+终态、Project-scoped API、Artifact 下载、通用 SSE 重放和图外阶段可观察性均已通过最终审计；真实参数
+校准和 Review 专用前端归入 Phase 4 产品闭环。

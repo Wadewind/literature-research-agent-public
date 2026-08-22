@@ -128,8 +128,8 @@ Version、ChunkSet ID、稳定失败码和数量，不保存 PDF、Chunk 文本�
 
 ## 已知限制与扩展路径
 
-- 切片 5 已建立持久 LangGraph Runtime 骨架，但 Evidence 等真实节点尚未完成，因而仍未把 Review
-  Executor 注册到生产 Worker；`pause()` 会在后续固定图导入节点接线时调用；
+- 生产 Review Executor 已在切片 9 注册；图外导入遇到未就绪 Source 时调用 `pause()`，恢复后先复用
+  Strategy/arXiv/Matrix 持久事实，再进入 Outline 的持久 LangGraph；
 - Reconciler 与 lease 对账复用同一个 30 秒配置间隔和批次大小，真实规模下再基于等待延迟和数据库
   压力决定是否拆分配置；
 - 候选扫描未使用 `SKIP LOCKED` 认领；并发正确性由逐 Run 行锁保证，但多 Worker 可能重复扫描候选；
@@ -139,8 +139,10 @@ Version、ChunkSet ID、稳定失败码和数量，不保存 PDF、Chunk 文本�
 ## 60 秒面试说明
 
 “Review 导入论文后不会占住 Worker 轮询，而是把父 Run 和等待 Event 同事务提交为
-WAITING_DEPENDENCY，当前 Attempt 正常 PAUSED。独立 Reconciler 只读取 PostgreSQL，锁定父 Run 后
+WAITING_DEPENDENCY，同时把 Wait Step 和 Stage 置为 PAUSED/WAIT_FOR_INGESTION，当前 Attempt 正常
+PAUSED。独立 Reconciler 只读取 PostgreSQL，锁定父 Run 后
 校验 Paper、Version、Project 和子 Run，最终以 ready ChunkSet 判断论文可检索。它等待所有来源终态
 来固定 Evidence 集；至少一篇可用时把依赖结果、父 Run 重新排队、完成 Event 和 Outbox
-schedule_again 放在同一事务，全部不可用则稳定失败。并发扫描靠父行锁和条件状态只产生一次效果，
+schedule_again、Wait Step 完成和下一 Matrix Stage 放在同一事务，全部不可用则稳定失败。并发扫描靠
+父行锁和条件状态只产生一次效果，
 投递重置失败会回滚全部业务变化，因此实现的是可解释的 effectively once，而不是依赖队列状态。”

@@ -3,7 +3,8 @@
 import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Protocol, TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
@@ -22,6 +23,7 @@ from literature_agent.domain.model_types import ChatMessage, ChatResult
 from literature_agent.domain.review import (
     ReviewOutput,
     ReviewOutputType,
+    ReviewStage,
     ReviewStepKey,
     ReviewStepStatus,
     create_review_output,
@@ -207,6 +209,20 @@ class ReviewSearchStrategyService[TSession: Session]:
                         },
                     )
                 )
+                if review.current_stage in {
+                    ReviewStage.VALIDATE_REQUEST,
+                    ReviewStage.FORMULATE_SEARCH_STRATEGY,
+                }:
+                    advanced = replace(
+                        review,
+                        current_stage=ReviewStage.SEARCH_ARXIV,
+                        updated_at=datetime.now(UTC),
+                    )
+                    if not await repo.advance_review_stage(
+                        advanced,
+                        expected_stage=review.current_stage.value,
+                    ):
+                        raise RunConcurrentModificationError(run.run_id)
                 emitted = True
             elif step.status is not ReviewStepStatus.SUCCEEDED or step.output_refs != refs:
                 raise IdempotencyConflictError(step.idempotency_key)

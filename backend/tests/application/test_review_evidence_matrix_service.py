@@ -23,6 +23,7 @@ from literature_agent.domain.parse_revision import create_parse_revision
 from literature_agent.domain.review import (
     ReviewOutputType,
     ReviewSourceStatus,
+    ReviewStage,
     create_review_output,
     create_review_run,
     create_review_source,
@@ -295,6 +296,20 @@ async def test_short_paper_uses_all_ordered_chunks_once_and_replay_reuses_output
     assert data["review_repo"].steps[0].status.value == "succeeded"
     events = await data["event_repo"].list_by_run("review-1")
     assert [item.event_type for item in events] == ["evidence_matrix_completed"]
+    assert data["review_repo"].review_runs["review-1"].current_stage is ReviewStage.PROPOSE_OUTLINE
+
+    current = data["review_repo"].review_runs["review-1"]
+    data["review_repo"].review_runs["review-1"] = replace(
+        current, current_stage=ReviewStage.DRAFT_SECTIONS
+    )
+    await service.build(
+        run_id="review-1",
+        project_id="project-1",
+        owner_id="user-1",
+        search_strategy_output_id=data["strategy"].output_id,
+        correlation_id="corr-2",
+    )
+    assert data["review_repo"].review_runs["review-1"].current_stage is ReviewStage.DRAFT_SECTIONS
 
 
 async def test_long_paper_retrieves_each_dimension_and_rejects_wrong_version() -> None:

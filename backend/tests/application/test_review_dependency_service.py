@@ -18,6 +18,9 @@ from literature_agent.domain.review import (
     ReviewDependencyStatus,
     ReviewDependencyType,
     ReviewSourceStatus,
+    ReviewStage,
+    ReviewStepKey,
+    ReviewStepStatus,
     create_review_dependency,
     create_review_run,
     create_review_source,
@@ -192,6 +195,12 @@ async def test_pause_enters_waiting_without_resetting_outbox() -> None:
 
     assert waiting.status is RunStatus.WAITING_DEPENDENCY
     assert [event.event_type for event in h.events._events] == ["dependency_wait_started"]
+    review = h.reviews.review_runs[run_id]
+    assert review.current_stage is ReviewStage.WAIT_FOR_INGESTION
+    wait_step = next(
+        item for item in h.reviews.steps if item.step_key is ReviewStepKey.WAIT_FOR_INGESTION
+    )
+    assert wait_step.status is ReviewStepStatus.PAUSED
     outbox = await h.outbox.get_by_run_id(run_id)
     assert outbox is not None and outbox.status is OutboxStatus.DISPATCHED
 
@@ -239,6 +248,20 @@ async def test_ready_chunk_set_updates_source_dependencies_and_resumes() -> None
     outbox = await h.outbox.get_by_run_id(run_id)
     assert outbox is not None and outbox.status is OutboxStatus.PENDING
     assert outbox.attempt_count == 0
+    assert h.reviews.review_runs[run_id].current_stage is ReviewStage.BUILD_EVIDENCE_MATRIX
+    wait_step = next(
+        item for item in h.reviews.steps if item.step_key is ReviewStepKey.WAIT_FOR_INGESTION
+    )
+    assert wait_step.status is ReviewStepStatus.SUCCEEDED
+
+    later = replace(
+        h.reviews.review_runs[run_id], current_stage=ReviewStage.PROPOSE_OUTLINE
+    )
+    h.reviews.review_runs[run_id] = later
+    await h.reconciler()._complete_wait_step_and_advance_stage(
+        h.reviews, later, ready_count=1, failed_count=0
+    )
+    assert h.reviews.review_runs[run_id].current_stage is ReviewStage.PROPOSE_OUTLINE
 
 
 async def test_partial_failure_waits_for_all_sources_then_resumes() -> None:

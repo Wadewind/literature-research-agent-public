@@ -3,7 +3,8 @@
 import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Protocol
 
 from literature_agent.application.event_notification import notify_run_event
@@ -34,6 +35,7 @@ from literature_agent.domain.review import (
     ReviewOutputType,
     ReviewSource,
     ReviewSourceStatus,
+    ReviewStage,
     ReviewStepKey,
     ReviewStepStatus,
     create_review_output,
@@ -807,15 +809,15 @@ class ReviewEvidenceMatrixService[TSession: Session]:
             run_repo = self._run_repo_factory(session)
             run = await run_repo.get_by_id_for_update(output.review_run_id, owner_id)
             repository = self._review_repo_factory(session)
+            review = await repository.get_review_run_scoped_for_update(
+                output.review_run_id, project_id, owner_id
+            )
             if (
                 run is None
                 or run.project_id != project_id
                 or run.run_type != RunType.REVIEW.value
                 or run.status is not RunStatus.RUNNING
-                or await repository.get_review_run_scoped(
-                    output.review_run_id, project_id, owner_id
-                )
-                is None
+                or review is None
             ):
                 raise RunNotFoundError(output.review_run_id)
             existing_outputs = await repository.list_outputs_scoped(
@@ -855,6 +857,23 @@ class ReviewEvidenceMatrixService[TSession: Session]:
                     raise EvidenceMatrixScopeError("Matrix Step 完成发生竞争")
             elif step.status is not ReviewStepStatus.SUCCEEDED or step.output_refs != refs:
                 raise IdempotencyConflictError(step.idempotency_key)
+            if existing is None and review.current_stage in {
+                ReviewStage.VALIDATE_REQUEST,
+                ReviewStage.FORMULATE_SEARCH_STRATEGY,
+                ReviewStage.SEARCH_ARXIV,
+                ReviewStage.IMPORT_ARXIV_PAPERS,
+                ReviewStage.WAIT_FOR_INGESTION,
+                ReviewStage.BUILD_EVIDENCE_MATRIX,
+            }:
+                advanced = replace(
+                    review,
+                    current_stage=ReviewStage.PROPOSE_OUTLINE,
+                    updated_at=datetime.now(UTC),
+                )
+                if not await repository.advance_review_stage(
+                    advanced, expected_stage=review.current_stage.value
+                ):
+                    raise EvidenceMatrixScopeError("Matrix Stage 完成发生竞争")
             if existing is None:
                 if not await run_repo.update_status(
                     run.run_id,

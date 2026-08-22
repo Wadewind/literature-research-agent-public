@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1–9 已完成，等待切片 10 阶段收尾审计）
+- 当前状态：已完成（2026-08-23，切片 1–10 已通过阶段收尾审计）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -295,6 +295,12 @@ Run 创建时保存 Workflow、Prompt、Model Profile 版本及生效配置快�
 
 保存研究问题、Workflow/Profile 版本、配置快照、当前阶段、当前 Output/Artifact 引用和统计摘要；生命周期仍复用通用 Run 表。
 
+`current_stage` 表示下一个正在执行或等待的固定业务阶段，不是只在 LangGraph 内更新的装饰字段。创建
+事务已经完成请求校验，因此同时保存成功的 `VALIDATE_REQUEST` Step，并把 Stage 置为
+`FORMULATE_SEARCH_STRATEGY`。图外 Strategy、arXiv search/import、依赖等待/恢复和 Matrix 服务分别
+在其 Step 与对应 Event 的同一短事务中推进 Stage；重放只复用既有事实，不允许把 Outline/Section 等
+后期 Stage 倒退。详情 API 因而可以在 LangGraph 启动前持续展示真实进度。
+
 ### 9.2 `run_steps`
 
 记录稳定 Step key、状态、开始/结束时间、输入输出引用、错误码和幂等键，用于观察节点进度及重放时复用结果。
@@ -531,6 +537,7 @@ GET    /projects/{project_id}/reviews/{run_id}/events
 - `search_strategy_completed`
 - `arxiv_search_completed`
 - `review_source_import_started`
+- `review_source_import_completed`
 - `review_source_ready`
 - `review_source_failed`
 - `dependency_wait_started`
@@ -586,7 +593,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 7. [x] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
 8. [x] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
 9. [x] 导出 Markdown Artifact，并补齐 API、SSE、取消和端到端测试；
-10. [ ] 根据实际代码更新模块学习笔记与阶段完成状态。
+10. [x] 根据实际代码更新模块学习笔记与阶段完成状态。
 
 每个切片遵循：契约/失败测试 → 最小实现 → 集成测试 → 文档更新。
 
@@ -948,6 +955,32 @@ PostgreSQL/Valkey/Testcontainers 集成回归 `112 passed`；
 实现和取舍详见
 [综述 Artifact 生成与生产执行闭环](../modules/review-artifact-generation.md)。
 
+### 18.10 切片 10 完成记录（2026-08-23）
+
+- 逐条复核阶段完成条件、生产 Worker 组装、Project-scoped API、Event/SSE、数据库事实、LangGraph
+  checkpoint/interrupt/resume、Artifact、取消、错误分类、幂等与 owner/Project 隔离；切片 1–9 的
+  垂直闭环和测试证据均存在，没有以文档勾选替代实现；
+- 收尾审计发现详情 API 暴露的 `ReviewRun.current_stage` 在图外阶段缺少推进：新建 Run 可能在
+  Strategy、arXiv search/import、依赖等待和 Matrix 期间长期显示 `validate_request`。修复后创建事务
+  同时保存成功的 `VALIDATE_REQUEST` Step，并把 Stage 置为 `FORMULATE_SEARCH_STRATEGY`；Strategy、
+  Search、Import、Wait/Reconcile 和 Matrix 分别在其 Step/Event 短事务中推进到下一个真实阶段；
+- arXiv 导入增加稳定 `IMPORT_ARXIV_PAPERS` Step 和 `review_source_import_completed` Event。无需等待的
+  READY fast path 原子进入 `BUILD_EVIDENCE_MATRIX`；需要子 Run 的路径以 PAUSED Wait Step 进入
+  `WAIT_FOR_INGESTION`，Reconciler 在 `dependency_wait_completed` 恢复事务内完成 Step 并进入 Matrix；
+  Matrix Output、Step、`evidence_matrix_completed` 与 `PROPOSE_OUTLINE` Stage 同事务提交；
+- Stage 推进使用预期前置值条件更新。Strategy/arXiv/Matrix 重放复用持久结果；已进入
+  `PROPOSE_OUTLINE`、Section 或更晚阶段时，Import/Wait/Matrix 不能把 Stage 倒退。新增 Fake 与
+  PostgreSQL 断言覆盖初始校验 Step、fast path、等待恢复、Matrix 完成和后期 Stage 重放；
+- 最终文档统一为实际行为：Run Summary 的模型调用与 token 从 `model_invocations` 审计事实聚合；
+  Final Output 只保存引用计数和六类 Artifact manifest，完整引用映射只保存在 Bibliography Artifact
+  及 Claim/Citation/Evidence 事实中；早期模块笔记中已完成的“后续切片”限制不再冒充当前状态；
+- 本阶段仍保留真实小样本参数校准、前端 Review 专用页面、Checkpoint/缓存保留清理和更强语义
+  Groundedness 评测。这些不破坏后端固定 Workflow 的完成条件，归入 Phase 4 产品闭环与评测。
+
+最终验证：Backend 完整回归 `708 passed, 4 skipped`；单独重跑 PostgreSQL/Valkey/Testcontainers
+集成目录 `112 passed`；Ruff 与 Pyright 均通过，`git diff --check` 通过。普通测试全程使用 Fake
+Provider/HTTP Mock，不访问真实 arXiv 或付费模型。
+
 ## 19. 重点测试
 
 - Run 和 Attempt 的合法/非法等待状态转换；
@@ -967,15 +1000,15 @@ PostgreSQL/Valkey/Testcontainers 集成回归 `112 passed`；
 
 ## 20. 阶段完成条件
 
-- 用户能创建 Review Run，并观察 arXiv 搜索、导入和分析进度；
-- Review Run 能等待 Ingestion/Indexing 后自动恢复，不占用 Worker；
-- 大纲阶段真实触发 LangGraph interrupt，进程重启后仍可 approve/edit/feedback 并恢复；
-- Evidence Matrix 和每个重要 Claim 都能回查到当前 Run 可见 Evidence；
-- 最终生成可下载的带数字引用 Markdown Artifact；
-- 重复投递、失败重试、取消、部分来源失败和 SSE 重放具有自动测试；
-- 普通测试不访问真实 arXiv 和付费模型；
-- 阶段 Spec、ADR、总体指南和实际实现保持一致；
-- 对实际完成的核心模块补充学习笔记和 60 秒面试说明。
+- [x] 用户能创建 Review Run，并观察 arXiv 搜索、导入和分析进度；
+- [x] Review Run 能等待 Ingestion/Indexing 后自动恢复，不占用 Worker；
+- [x] 大纲阶段真实触发 LangGraph interrupt，进程重启后仍可 approve/edit/feedback 并恢复；
+- [x] Evidence Matrix 和每个重要 Claim 都能回查到当前 Run 可见 Evidence；
+- [x] 最终生成可下载的带数字引用 Markdown Artifact；
+- [x] 重复投递、失败重试、取消、部分来源失败和 SSE 重放具有自动测试；
+- [x] 普通测试不访问真实 arXiv 和付费模型；
+- [x] 阶段 Spec、ADR、总体指南和实际实现保持一致；
+- [x] 对实际完成的核心模块补充学习笔记和 60 秒面试说明。
 
 ## 21. 已确认与待校准项
 

@@ -41,6 +41,10 @@ Search Strategy 使用 `search_strategy.v1` Prompt、`search-strategy.v1` Schema
 snake_case 维度；非法输出不 repair。模型调用在事务外，返回后持锁复核 owner/Project/RUNNING
 Review，再以稳定 Step/Output/Event 提交。
 
+详情 API 的 `current_stage` 由持久业务服务推进：创建时成功固化 Validate Step 并进入 Strategy；
+Strategy/Search/Import/Wait/Reconcile/Matrix 在各自 Step/Event 事务中进入下一阶段，固定图继续推进
+Outline 到 Finalize。条件更新只接受预期前置 Stage，重放不会把后期 Stage 倒退。
+
 导出前重新加载并验证：成功的 Consistency Step 输入引用、Section Output、ClaimSet/Claim/Citation、
 Evidence 和 READY ReviewSource/PaperVersion 闭包。导出成功事务同时保存/复用 Final Review Output、
 六条 Artifact 元数据、Review Stage、Export Step 和 `review_artifact_created` Event。Finalize 事务
@@ -131,7 +135,7 @@ PostgreSQL/Valkey/Testcontainers 集成回归 `112 passed`；
 - 只支持 arXiv、固定前 10 篇默认预算和 Markdown；不支持人工筛选或其他引用格式；
 - `review-default.v1` 当前总下载预算由单文件上限乘固定来源数得到，仍需真实小规模试验校准；
 - 一致性报告不是事实 Judge；引用闭包证明引用存在且范围正确，不证明 Claim 一定被 Evidence 语义蕴含；
-- 当前切片完成后仍需切片 10 做 Phase 3 最终验收、阶段状态和整体演示审计；
+- Phase 3 切片 10 已完成阶段验收，并补齐图外 `current_stage` 的 Step/Event 原子推进；
 - 前端 Review Run 页面属于后续产品闭环，本切片只完成后端 API。
 
 ## 60 秒面试说明

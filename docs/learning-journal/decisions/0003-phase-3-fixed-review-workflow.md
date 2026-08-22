@@ -89,6 +89,19 @@ ParseRevision 和 Evidence 的闭包。
 - Review API 按 owner+Project+Run 隔离。Project-scoped Event 列表用于游标读取，实时 SSE 复用通用
   Run Event Stream 与 `Last-Event-ID`，不另建一套 Review 通知事实来源。
 
+## 决策七：业务阶段与导出摘要都来自持久事实
+
+- `ReviewRun.current_stage` 是详情 API 的当前/下一业务阶段，不由 Executor 或 Checkpoint 裸更新；
+- 创建事务完成请求校验，原子保存成功的 `VALIDATE_REQUEST` Step、`review_run_created` Event，并把
+  Stage 置为 `FORMULATE_SEARCH_STRATEGY`；图外 Strategy、arXiv Search/Import、Wait/Reconcile 与
+  Matrix 分别在对应 Step/Event 事务中继续推进；
+- 阶段写入必须以预期前置 Stage 做条件更新。节点重放和 HumanInput 恢复不得把 Outline、Section、
+  Export 等后期 Stage 倒退到图外阶段；
+- Run Summary 的模型调用数与 token 只从 `model_invocations` 审计事实聚合，来源计数只从
+  ReviewSource 聚合；不在各节点维护第二套易漂移计数；
+- Final Output 只保存统计、引用数量和六类 Artifact manifest。完整引用映射只保存于 Bibliography
+  Artifact 及 Claim/Citation/Evidence 事实，避免复制进有 256 KiB 上限的 ReviewOutput。
+
 ## 后果
 
 正面影响：Phase 3 能集中验证 LangGraph HITL、可靠等待恢复和 Evidence-first 生成；外部下载面更小；模型成本和章节上下文更可控；Run、Event、Attempt、Outbox 与 Checkpoint 的职责明确。

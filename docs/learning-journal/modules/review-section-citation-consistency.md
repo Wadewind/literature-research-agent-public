@@ -144,4 +144,4 @@ Phase 2 ClaimSet，但增加 PostgreSQL get-or-add：并发赢家的 Claim ID �
 同时比较完整语义防止唯一键掩盖冲突。Citation Validator 除了零引用、伪造和跨 Run，还逐条核对
 Matrix Paper 到 READY Source、Version、Revision 和 Evidence 的闭包。最后一致性模型只报告术语、
 矛盾和冗余 issue，不自动重写或决定事实正确性。所有业务正文留在 Output/Claim 表，Graph State 只
-放 ID；Artifact 未完成前图停在安全边界。”
+放 ID；后续导出器再从已验证的 Claim/Citation/Evidence 事实确定性渲染 Markdown 与引用映射。”

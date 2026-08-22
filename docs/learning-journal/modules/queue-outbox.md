@@ -133,8 +133,7 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 - 执行体已接入真实 Docling + pypdf 降级组合（切片 7，见 document-parsing 笔记）。
 - 单实例派发与对账循环；多实例依赖 Job ID 去重和条件更新，未使用 SKIP LOCKED 认领。
 - Outbox `failed` 终态（投递层）与 Run `failed`（预算耗尽）暂无自动告警和人工重放入口。
-- `schedule_again` 已由 Review Dependency Reconciler 在同事务正常恢复中调用；Human Input 入口仍
-  属于 Phase 3 后续切片。
+- `schedule_again` 已由 Review Dependency Reconciler 与 HumanInput 服务在各自正常恢复事务中调用；
 - Run 已提交等待/终态后、Attempt best-effort 关闭前的崩溃已由 Phase 3 切片 5 补偿；无法从业务
   Event 确定旧 Attempt 原因时会安全保留并等待诊断，不进行猜测性关闭。
 - 协作式取消不保证立即终止已进入 Parser 的底层计算。
@@ -142,9 +141,9 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 
 ## 60 秒面试说明
 
-"可靠投递模块用一条可重置 Outbox 跨越数据库提交与 ARQ 投递间隙。失败重试通过
+“可靠投递模块用一条可重置 Outbox 跨越数据库提交与 ARQ 投递间隙。失败重试通过
 `reset_for_retry` 累计计数和退避；等待输入或依赖时，Attempt 以 `PAUSED` 正常释放 Worker，
 恢复则通过 `schedule_again` 立即重投且不占失败预算。恢复时 Run、原因 Event 和 Outbox 在同一
 事务更新；执行侧再用稳定 Job ID、Run 条件认领、Attempt lease 和对账收回处理重复投递，以及
 Run 仍为 RUNNING 时的 Worker 崩溃，实现业务上的 Effectively Once。等待/终态提交后的 Attempt
-关闭崩溃间隙仍需后续修复。"
+关闭崩溃间隙由残留 Attempt Reconciler 根据持久 Event 收敛。”

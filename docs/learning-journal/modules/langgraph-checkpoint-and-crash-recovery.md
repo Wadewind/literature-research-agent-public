@@ -32,8 +32,8 @@ Worker 崩溃
 
 `ReviewGraphFactory` 保留可注入单切片的 crash-recovery 测试骨架，并在切片 7 增加真实
 `propose_outline → review_outline interrupt → apply_outline_decision` 边界。feedback 路由回到
-proposal 并再次 interrupt；approve/edit 只到达切片 8 的安全占位节点。章节、引用和 Artifact 尚未
-完成，因此仍未把 Review Executor 注册到生产 `RunDispatcher`，避免占位节点令 Run 虚假成功。
+proposal 并再次 interrupt；切片 8–9 已继续接通 Section、Citation、Consistency、Artifact 与
+Finalize，并把 Review Executor 注册到生产 `RunDispatcher`。
 
 ## 状态、数据与生命周期
 
@@ -111,11 +111,11 @@ Outbox。
 
 ## 已知限制
 
-- 固定图已具备 Outline interrupt/feedback loop，但尚未接线生产 Review Executor；切片 8 完成章节、
-  引用、一致性和 Artifact 后再形成安全终态；
+- 固定图与生产 Review Executor 已接通 Outline interrupt/feedback、章节、引用、一致性、Artifact 和
+  Finalize；损坏 checkpoint 仍稳定失败，不会被当作首次 start 覆盖；
 - Checkpoint 尚无按删除 Project/Run 的清理和保留策略；
 - Attempt 分类依赖业务 Event 完整性；无法确定原因时安全保留记录，后续可增加告警；
-- 每个显式 Context 使用一个 psycopg 连接；生产接线时由 Worker 生命周期持有，尚未引入连接池。
+- 每个显式 Context 使用一个 psycopg 连接；当前由 Worker Checkpoint 生命周期管理，尚未引入连接池。
 
 ## 60 秒面试说明
 

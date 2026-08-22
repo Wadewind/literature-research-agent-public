@@ -23,6 +23,8 @@ from literature_agent.domain.review import (
     ReviewDependencyStatus,
     ReviewDependencyType,
     ReviewSourceStatus,
+    ReviewStage,
+    ReviewStepKey,
     create_review_run,
 )
 from literature_agent.domain.run import RunType, create_run
@@ -182,6 +184,10 @@ async def test_search_persists_deterministic_sources_and_replays() -> None:
     assert ctx["gateway"].search_calls == 1
     events = await ctx["events"].list_by_run(ctx["run"].run_id)
     assert [event.event_type for event in events] == ["arxiv_search_completed"]
+    assert (
+        ctx["reviews"].review_runs[ctx["run"].run_id].current_stage
+        is ReviewStage.IMPORT_ARXIV_PAPERS
+    )
 
 
 @pytest.mark.asyncio
@@ -265,6 +271,10 @@ async def test_import_registers_ingestion_bundle_dependencies_and_is_idempotent(
         ReviewDependencyType.PAPER_VERSION,
     }
     assert len(ctx["gateway"].download_calls) == 1
+    assert [item.step_key for item in ctx["reviews"].steps][-1] is ReviewStepKey.IMPORT_ARXIV_PAPERS
+    assert [item.event_type for item in await ctx["events"].list_by_run(ctx["run"].run_id)][
+        -1
+    ] == "review_source_import_completed"
     assert next(iter(ctx["storage"]._objects)).startswith(
         "owner-1/arxiv-cache/sha256/"
     )
@@ -368,6 +378,10 @@ async def test_existing_ready_chunk_set_is_reused_with_verified_version_dependen
     )
 
     assert summary.ready == 1
+    assert (
+        ctx["reviews"].review_runs[ctx["run"].run_id].current_stage
+        is ReviewStage.BUILD_EVIDENCE_MATRIX
+    )
     source = ctx["reviews"].sources[0]
     assert source.status is ReviewSourceStatus.READY
     assert source.paper_version_id == version.version_id

@@ -836,7 +836,8 @@ Schema 失败稳定结束 Step，模型调用和范围错误交给既有 Worker 
 首次引用顺序分配的 `[1]` 编号，同一论文复用编号；完整引用映射保存 Paper/PaperVersion、Source、
 arXiv version、Claim、Evidence 和 PDF 定位。固定生成 Markdown、Search Strategy、Source Manifest、
 Evidence Matrix、Bibliography 映射、Run Summary 六类 Artifact。文件正文只进入 Storage，数据库只
-保存元数据、SHA-256、大小、MIME、来源 Output 和稳定幂等键。
+保存元数据、SHA-256、大小、MIME、来源 Output 和稳定幂等键。完整引用映射只写 Bibliography
+Artifact；有 256 KiB 上限的 Final Output 只保存引用计数与六类 Artifact manifest。
 
 Artifact Storage 写入在事务外，key 由 owner/Run/content hash 稳定组成；提交前持锁复核 RUNNING
 owner/Project Review。取消后不得新增 Artifact/Event/Stage；文件写入后数据库提交前崩溃只留下可
@@ -1300,6 +1301,13 @@ literature-agent/
 - 最终综述每个主要 Claim 可追溯到 Evidence；
 - 输出包含 arXiv 检索、成功导入和失败文献清单；
 - 学习笔记能解释 Checkpoint 为什么不等同于业务 Run 数据。
+
+Phase 3 实际实现把 `ReviewRun.current_stage` 固定为详情 API 可观察的当前/下一业务阶段：创建事务已完成
+请求校验，因此保存成功的 `VALIDATE_REQUEST` Step 后进入 `FORMULATE_SEARCH_STRATEGY`；图外
+Strategy、arXiv Search/Import、Wait/Reconcile 和 Matrix 各自在 Step/Event 同一短事务中继续推进。
+阶段条件更新拒绝节点重放把 Outline/Section 等后期 Stage 倒退。最终 Run Summary 的模型调用与 token
+从 `model_invocations` 聚合；Final Output 只保存统计、引用数量和 Artifact manifest，完整引用映射只在
+Bibliography Artifact 与 Claim/Citation/Evidence 事实中保存。
 
 ### Phase 4：Core Research Backend 产品闭环、可靠性与评测
 

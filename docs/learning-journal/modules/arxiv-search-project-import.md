@@ -102,13 +102,14 @@ diff check 通过。
 
 ## 已知限制
 
-- Service 尚未接入 Review Worker/LangGraph/API；切片 4 已接入独立依赖对账循环并完成父 Run
-  等待/恢复，具体 Review Executor 由切片 5 接线；
+- Service 已由生产 Review Executor 调用，Project-scoped API 创建的 Run 经 Worker 进入本流程；arXiv
+  仍保持图外执行，依赖等待由独立 Reconciler 恢复，不伪装成 LangGraph Interrupt；
 - 当前只顺序下载，不实现多来源、任意 URL、候选人工筛选或用户可调并发；
 - 事务失败可能留下未引用缓存，尚无孤立缓存清理器；删除前必须先做引用对账；
 - Phase 1 上传入口仍沿用既有事务内 `Storage.write()`；本切片没有静默改变其 storage key/API。Phase 3
   arXiv 路径已满足文件写入不在数据库事务内，Phase 1 重构应是独立可靠性变更；
-- Adapter 参数尚未接入 Worker 依赖组装，后续接线从 Review Profile 快照传入。
+- Worker 已装配官方 Host、50 MiB 单文件上限和固定总预算；超时、并发与总预算仍需真实小样本校准，
+  校准值应继续进入 Review Profile 快照。
 
 ## 60 秒面试说明
 

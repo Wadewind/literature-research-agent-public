@@ -25,8 +25,10 @@ from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.arxiv import ArxivError, ArxivPaper, ArxivSearchQuery, DownloadedPdf
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import (
+    IdempotencyConflictError,
     ProjectArchivedError,
     ProjectNotFoundError,
+    RunConcurrentModificationError,
     RunNotFoundError,
 )
 from literature_agent.domain.paper import create_paper
@@ -38,6 +40,7 @@ from literature_agent.domain.review import (
     ReviewDependencyType,
     ReviewSource,
     ReviewSourceStatus,
+    ReviewStage,
     ReviewStepKey,
     ReviewStepStatus,
     create_review_dependency,
@@ -171,6 +174,25 @@ class ArxivProjectImportService[TSession: Session]:
                     completed_at=now,
                 )
             )
+            review = await review_repo.get_review_run_scoped_for_update(
+                review_run_id, project_id, actor.owner_id
+            )
+            if review is None:
+                raise RunNotFoundError(review_run_id)
+            if review.current_stage in {
+                ReviewStage.VALIDATE_REQUEST,
+                ReviewStage.FORMULATE_SEARCH_STRATEGY,
+                ReviewStage.SEARCH_ARXIV,
+            }:
+                advanced = replace(
+                    review,
+                    current_stage=ReviewStage.IMPORT_ARXIV_PAPERS,
+                    updated_at=datetime.now(UTC),
+                )
+                if not await review_repo.advance_review_stage(
+                    advanced, expected_stage=review.current_stage.value
+                ):
+                    raise RunConcurrentModificationError(review_run_id)
             await self._append_parent_event(
                 session,
                 run,
@@ -260,13 +282,107 @@ class ArxivProjectImportService[TSession: Session]:
                     correlation_id,
                 )
                 failed += 1
-        return ArxivImportSummary(
+        summary = ArxivImportSummary(
             discovered=len(sources),
             imported=imported,
             ready=ready,
             failed=failed,
             downloaded_bytes=downloaded_bytes,
         )
+        if await self._complete_import(
+            actor=actor,
+            project_id=project_id,
+            review_run_id=review_run_id,
+            summary=summary,
+            correlation_id=correlation_id,
+        ):
+            await notify_run_event(self._event_notifier, review_run_id)
+        return summary
+
+    async def _complete_import(
+        self,
+        *,
+        actor: ActorContext,
+        project_id: str,
+        review_run_id: str,
+        summary: ArxivImportSummary,
+        correlation_id: str,
+    ) -> bool:
+        """原子固化导入批次 Step、阶段与小型完成 Event。"""
+        async with self._session_factory() as session:
+            parent_run, review_repo = await self._lock_review_scope(
+                session, actor, project_id, review_run_id
+            )
+            sources = await review_repo.list_sources_scoped(
+                review_run_id, project_id, actor.owner_id
+            )
+            source_ids = [item.source_id for item in sources]
+            proposed = create_run_step(
+                run_id=review_run_id,
+                step_key=ReviewStepKey.IMPORT_ARXIV_PAPERS,
+                sequence=4,
+                idempotency_key=f"{review_run_id}:import-arxiv-papers:arxiv.v1",
+                input_refs={"source_ids": source_ids},
+            )
+            step = await review_repo.get_or_add_step(proposed)
+            if (
+                step.step_key is not proposed.step_key
+                or step.sequence != proposed.sequence
+                or step.input_refs != proposed.input_refs
+            ):
+                raise IdempotencyConflictError(proposed.idempotency_key)
+            event_payload = {
+                "discovered": summary.discovered,
+                "imported": summary.imported,
+                "ready": summary.ready,
+                "failed": summary.failed,
+            }
+            refs = {"source_ids": source_ids}
+            emitted = False
+            if step.status is ReviewStepStatus.PENDING:
+                running = step.start()
+                if not await review_repo.advance_step(
+                    running, ReviewStepStatus.PENDING.value
+                ) or not await review_repo.advance_step(
+                    running.succeed(refs), ReviewStepStatus.RUNNING.value
+                ):
+                    raise RunConcurrentModificationError(review_run_id)
+                review = await review_repo.get_review_run_scoped_for_update(
+                    review_run_id, project_id, actor.owner_id
+                )
+                if review is None:
+                    raise RunNotFoundError(review_run_id)
+                all_terminal = all(
+                    item.status in {ReviewSourceStatus.READY, ReviewSourceStatus.FAILED}
+                    for item in sources
+                )
+                if (
+                    all_terminal
+                    and summary.ready > 0
+                    and review.current_stage is ReviewStage.IMPORT_ARXIV_PAPERS
+                ):
+                    advanced = replace(
+                        review,
+                        current_stage=ReviewStage.BUILD_EVIDENCE_MATRIX,
+                        updated_at=datetime.now(UTC),
+                    )
+                    if not await review_repo.advance_review_stage(
+                        advanced,
+                        expected_stage=ReviewStage.IMPORT_ARXIV_PAPERS.value,
+                    ):
+                        raise RunConcurrentModificationError(review_run_id)
+                await self._append_parent_event(
+                    session,
+                    parent_run,
+                    "review_source_import_completed",
+                    correlation_id,
+                    event_payload,
+                )
+                emitted = True
+            elif step.status is not ReviewStepStatus.SUCCEEDED or step.output_refs != refs:
+                raise IdempotencyConflictError(proposed.idempotency_key)
+            await session.commit()
+        return emitted
 
     async def _register_download(
         self,

@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
@@ -34,7 +35,11 @@ from literature_agent.domain.review import (
     ReviewRun,
     ReviewSource,
     ReviewSourceStatus,
+    ReviewStage,
+    ReviewStepKey,
+    ReviewStepStatus,
     create_review_dependency,
+    create_run_step,
 )
 from literature_agent.domain.run import Run, RunStatus, RunType
 
@@ -82,7 +87,8 @@ class ReviewDependencyWaitService[TSession: Session]:
             try:
                 run_repo = self._run_repo_factory(session)
                 run = await run_repo.get_by_id_for_update(run_id, owner_id)
-                review = await self._review_repo_factory(session).get_review_run_scoped(
+                review_repo = self._review_repo_factory(session)
+                review = await review_repo.get_review_run_scoped_for_update(
                     run_id, project_id, owner_id
                 )
                 if (
@@ -92,6 +98,41 @@ class ReviewDependencyWaitService[TSession: Session]:
                     or review is None
                 ):
                     raise RunNotFoundError(run_id)
+                step = await review_repo.get_or_add_step(
+                    create_run_step(
+                        run_id=run_id,
+                        step_key=ReviewStepKey.WAIT_FOR_INGESTION,
+                        sequence=5,
+                        idempotency_key=f"{run_id}:wait-for-ingestion:review.v1",
+                    )
+                )
+                if step.status is ReviewStepStatus.PENDING:
+                    running_step = step.start()
+                    if not await review_repo.advance_step(
+                        running_step, ReviewStepStatus.PENDING.value
+                    ) or not await review_repo.advance_step(
+                        running_step.pause({"waiting": True}),
+                        ReviewStepStatus.RUNNING.value,
+                    ):
+                        raise RunConcurrentModificationError(run.run_id)
+                elif step.status is not ReviewStepStatus.PAUSED:
+                    raise RunConcurrentModificationError(run.run_id)
+                if review.current_stage in {
+                    ReviewStage.VALIDATE_REQUEST,
+                    ReviewStage.SEARCH_ARXIV,
+                    ReviewStage.IMPORT_ARXIV_PAPERS,
+                }:
+                    advanced_review = replace(
+                        review,
+                        current_stage=ReviewStage.WAIT_FOR_INGESTION,
+                        updated_at=datetime.now(UTC),
+                    )
+                    if not await review_repo.advance_review_stage(
+                        advanced_review, expected_stage=review.current_stage.value
+                    ):
+                        raise RunConcurrentModificationError(run.run_id)
+                elif review.current_stage is not ReviewStage.WAIT_FOR_INGESTION:
+                    raise RunConcurrentModificationError(run.run_id)
                 waiting = run.transition_to(RunStatus.WAITING_DEPENDENCY)
                 if not await run_repo.update_status(
                     run.run_id,
@@ -278,6 +319,9 @@ class ReviewDependencyReconciler[TSession: Session]:
                 )
                 minimum = self._minimum_ready_papers(review)
                 if ready_count >= minimum:
+                    await self._complete_wait_step_and_advance_stage(
+                        review_repo, review, ready_count, len(sources) - ready_count
+                    )
                     await self._waiting_resume_service.resume_in_session(
                         session=session,
                         run_id=run.run_id,
@@ -327,6 +371,63 @@ class ReviewDependencyReconciler[TSession: Session]:
                 raise
         await notify_run_event(self._event_notifier, run_id)
         return True
+
+    async def _complete_wait_step_and_advance_stage(
+        self,
+        review_repo: ReviewRepository,
+        review: ReviewRun,
+        ready_count: int,
+        failed_count: int,
+    ) -> None:
+        """在依赖恢复事务内完成等待 Step，并把下一阶段固定为 Matrix。"""
+        step = await review_repo.get_or_add_step(
+            create_run_step(
+                run_id=review.run_id,
+                step_key=ReviewStepKey.WAIT_FOR_INGESTION,
+                sequence=5,
+                idempotency_key=f"{review.run_id}:wait-for-ingestion:review.v1",
+            )
+        )
+        if step.status is ReviewStepStatus.PENDING:
+            running = step.start()
+            if not await review_repo.advance_step(
+                running, ReviewStepStatus.PENDING.value
+            ):
+                raise RunConcurrentModificationError(review.run_id)
+            step = running.pause({"waiting": True})
+            if not await review_repo.advance_step(
+                step, ReviewStepStatus.RUNNING.value
+            ):
+                raise RunConcurrentModificationError(review.run_id)
+        refs = {
+            "ready_source_count": ready_count,
+            "failed_source_count": failed_count,
+        }
+        if step.status is ReviewStepStatus.PAUSED:
+            running = step.resume()
+            if not await review_repo.advance_step(
+                running, ReviewStepStatus.PAUSED.value
+            ) or not await review_repo.advance_step(
+                running.succeed(refs),
+                ReviewStepStatus.RUNNING.value,
+            ):
+                raise RunConcurrentModificationError(review.run_id)
+        elif step.status is not ReviewStepStatus.SUCCEEDED or step.output_refs != refs:
+            raise RunConcurrentModificationError(review.run_id)
+        if review.current_stage in {
+            ReviewStage.VALIDATE_REQUEST,
+            ReviewStage.IMPORT_ARXIV_PAPERS,
+            ReviewStage.WAIT_FOR_INGESTION,
+        }:
+            advanced = replace(
+                review,
+                current_stage=ReviewStage.BUILD_EVIDENCE_MATRIX,
+                updated_at=datetime.now(UTC),
+            )
+            if not await review_repo.advance_review_stage(
+                advanced, expected_stage=review.current_stage.value
+            ):
+                raise RunConcurrentModificationError(review.run_id)
 
     @staticmethod
     def _minimum_ready_papers(review: ReviewRun) -> int:
