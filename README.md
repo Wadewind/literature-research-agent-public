@@ -50,7 +50,7 @@ chmod 600 .env
 ./scripts/dev.sh --real
 ```
 
-脚本会启动 PostgreSQL/Valkey、执行 Alembic 迁移，再并行启动 API、Worker 和 Web。按 `Ctrl-C` 停止三个宿主进程；数据库和 Valkey 容器继续运行。脚本不会安装依赖、删除数据卷或打印 API Key；Fake 模式也不会读取 `.env`。
+脚本会启动 PostgreSQL/Valkey、执行 Alembic 迁移，再并行启动 API、Worker 和 Web。按 `Ctrl-C` 停止 API、Worker、npm 及其 Vite 子进程；数据库和 Valkey 容器继续运行。脚本不会安装依赖、删除数据卷或打印 API Key；Fake 模式也不会读取 `.env`。
 
 访问地址：
 
@@ -88,7 +88,7 @@ AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false
 - 不支持 `response_format=json_schema` 的 Chat Provider 必须设置 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false`，业务输出仍会经过 Pydantic Schema 和 Citation Validator。
 - Docling 主路径失败时只对结构性 PDF 错误降级到 pypdf；OCR 默认关闭。
 - Docling 首次运行需要下载模型。缓存准备后可在 `.env` 设置 `HF_HUB_OFFLINE=1`；缓存缺失时不要设置。
-- 若本机 `ALL_PROXY` 是 SOCKS 且未安装 `socksio`，可在启动前清除相关代理变量，或配置可用的 HTTP 代理。
+- 若真实模式检测到 SOCKS 代理但虚拟环境未安装 `socksio`，一键脚本会明确告警，并仅为本次启动清除无法使用的 SOCKS 代理变量；不会修改系统设置。若网络必须经过 SOCKS，需要显式安装并锁定 `socksio`。手动启动 Worker 时则需自行处理代理环境。
 
 真实 Provider 只在 Worker 内调用。API 与 Worker 必须使用同一 `AGENT_STORAGE_ROOT`；推荐都从 `backend/` 目录启动。
 
