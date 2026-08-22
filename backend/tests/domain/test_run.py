@@ -111,3 +111,13 @@ def test_waiting_states_are_active() -> None:
     """等待中的 Run 仍属活跃业务，不能随 Project 一起归档。"""
     assert RunStatus.WAITING_INPUT in ACTIVE_RUN_STATUSES
     assert RunStatus.WAITING_DEPENDENCY in ACTIVE_RUN_STATUSES
+
+
+def test_waiting_dependency_can_fail_when_all_sources_are_terminal() -> None:
+    """依赖对账确认无可用论文后允许直接结束父 Run。"""
+    run = create_run(project_id="p1", owner_id="u1", run_type="review")
+    waiting = run.transition_to(RunStatus.RUNNING).transition_to(
+        RunStatus.WAITING_DEPENDENCY
+    )
+
+    assert waiting.transition_to(RunStatus.FAILED).status == RunStatus.FAILED

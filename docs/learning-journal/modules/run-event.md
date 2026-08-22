@@ -33,7 +33,7 @@ SSE (GET /runs/{run_id}/events/stream)
               ├→ FAILED
               ├→ RETRY_WAIT → QUEUED
               ├→ WAITING_INPUT → QUEUED
-              ├→ WAITING_DEPENDENCY → QUEUED
+              ├→ WAITING_DEPENDENCY → QUEUED | FAILED
               └→ CANCEL_REQUESTED → CANCELLED
   QUEUED → CANCELLED
   RETRY_WAIT / WAITING_INPUT / WAITING_DEPENDENCY → CANCELLED
@@ -59,6 +59,9 @@ SSE (GET /runs/{run_id}/events/stream)
   和等待原因；`resume_in_session()` 允许后续服务在同一 session 保存 HumanInput/Dependency，
   再把等待 Run 重新排队、写原因 Event 与重置 Outbox，由最外层统一提交。Checkpoint 或队列状态
   都不能代替业务记录与 Event。
+- **依赖耗尽可以从等待态失败**（Phase 3 切片 4）：只有 Dependency Reconciler 在全部 Source 已终态
+  且可用论文不足时使用 `WAITING_DEPENDENCY → FAILED`；这是业务终止，不调用带 Attempt/重试预算的
+  `apply_run_failure()`。
 
 ## 失败、重试、重复和取消行为
 
@@ -92,6 +95,8 @@ SSE (GET /runs/{run_id}/events/stream)
 - `tests/integration/test_event_notifier.py`：Valkey Pub/Sub 发布订阅回环（channel 按 run_id 隔离）。
 - `tests/application/test_waiting_run_resume_service.py`：受限原因、所有权、重复恢复和 Outbox 前置条件。
 - `tests/integration/test_waiting_run_resume_transaction.py`：Run/Event/Outbox 原子提交及异常回滚。
+- `tests/integration/test_review_dependency_reconciler.py`：来源/依赖/恢复同事务、并发单效果与
+  `schedule_again` 异常整体回滚。
 
 切片 9 完成时的历史快照：`uv run pytest -q` 159 passed + 2 skipped（跳过项为显式启用的 Docling 真实解析组）。当前测试基线以 Phase 1 进度记录为准。
 
@@ -113,8 +118,8 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 - Queue Outbox、ARQ Worker 与 Attempt/lease 对账已接入（见 `queue-outbox.md`）。
 - Phase 3 已为固定 Review Workflow 建立 `run_steps` 契约，但 Worker 尚未写入和推进 Step；
   具体节点执行属于后续切片。
-- 两种等待状态和恢复事务已可复用，Review Run 创建闭环与依赖/HumanInput 数据契约已经建立；
-  Dependency Reconciler 和 HumanInput 提交/恢复调用方仍属于 Phase 3 后续切片。
+- 两种等待状态和恢复事务已可复用，Review Run 依赖对账已接入 Worker 周期循环；HumanInput
+  提交/恢复调用方仍属于 Phase 3 后续切片。
 - Run 已提交等待/终态后、Attempt 关闭前仍有崩溃间隙；现有 Reconciler 只关联仍为 RUNNING 的
   Run，无法清理这种残留 Attempt，需在 Phase 3 crash recovery 切片解决。
 - 当前取消为协作式：RUNNING 状态写入 CANCEL_REQUESTED 后，需 Worker 在检查点响应。

@@ -672,7 +672,7 @@ QUEUED → RUNNING → SUCCEEDED
               ├→ FAILED
               ├→ RETRY_WAIT → QUEUED
               ├→ WAITING_INPUT → QUEUED
-              ├→ WAITING_DEPENDENCY → QUEUED
+              ├→ WAITING_DEPENDENCY → QUEUED | FAILED
               └→ CANCEL_REQUESTED → CANCELLED
 
 QUEUED → CANCELLED
@@ -683,6 +683,10 @@ WAITING_DEPENDENCY → CANCELLED
 最终状态为 `SUCCEEDED`、`FAILED`、`CANCELLED`。详细合法转换、并发优先级和数据库实现必须在 Run Control 阶段 Spec 中确定。
 
 等待人工输入或子依赖时，当前 Worker Attempt 以 `PAUSED` 正常结束并释放执行资源。恢复会创建新的 Attempt。Outbox 沿用“一条 Run 一条可重置投递记录”：正常 Resume 使用 `schedule_again()` 将 `DISPATCHED` 重置为 `PENDING`，不增加失败重试计数；业务 Run 转为 `QUEUED`、原因 Event 和 Outbox 重置在同一事务提交。Event 记录业务时间线，Attempt 记录 Worker 执行历史，本阶段不增加完整队列投递历史表。
+
+Review 论文依赖由独立的数据库 Reconciler 汇总：指定 PaperVersion 存在 ready ChunkSet 才算可用，
+并等待全部来源进入就绪或失败终态后再固定 Evidence 集。部分失败可继续；全部不可用以
+`no_reviewable_papers` 终止。该业务终止不消耗 Worker 失败重试预算。
 
 ### 10.2 Event 类别
 

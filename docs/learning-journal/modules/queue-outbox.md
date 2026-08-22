@@ -20,6 +20,9 @@ Worker 进程（python -m literature_agent.worker）│
   ├─ 对账循环（RunReconcileService，周期 30s）
   │    → 收回 lease 过期（600s 无心跳）的 RUNNING Run
   │    → 关闭旧 Attempt（worker_crashed）→ 按失败策略重投或 FAILED
+  ├─ Review 依赖对账循环（ReviewDependencyReconciler，周期 30s）
+  │    → 汇总 PaperVersion 的 ready ChunkSet/终态失败
+  │    → 同事务恢复父 Run + Event + schedule_again，或以稳定业务错误终止
   └─ ARQ Job execute_run(run_id)
        → RunExecutionService.execute
             → 条件认领 QUEUED → RUNNING，同事务创建 Attempt（+ run_started Event）
@@ -128,8 +131,8 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 - 执行体已接入真实 Docling + pypdf 降级组合（切片 7，见 document-parsing 笔记）。
 - 单实例派发与对账循环；多实例依赖 Job ID 去重和条件更新，未使用 SKIP LOCKED 认领。
 - Outbox `failed` 终态（投递层）与 Run `failed`（预算耗尽）暂无自动告警和人工重放入口。
-- `schedule_again` 与正常恢复事务已实现，但依赖 Reconciler 和 Human Input 入口要在 Phase 3
-  后续切片才会调用它。
+- `schedule_again` 已由 Review Dependency Reconciler 在同事务正常恢复中调用；Human Input 入口仍
+  属于 Phase 3 后续切片。
 - Run 已提交等待/终态后、Attempt best-effort 关闭前的崩溃不会被当前 Reconciler 发现；
   Phase 3 crash recovery 切片必须补偿这类残留 Attempt。
 - 协作式取消不保证立即终止已进入 Parser 的底层计算。

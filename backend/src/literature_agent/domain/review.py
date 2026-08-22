@@ -245,6 +245,28 @@ class ReviewDependency:
     created_at: datetime
     satisfied_at: datetime | None
 
+    def mark_satisfied(self) -> "ReviewDependency":
+        """将 pending 依赖一次性推进为 satisfied。"""
+        if self.status is not ReviewDependencyStatus.PENDING:
+            raise ValueError("只有 pending 依赖可以完成")
+        return replace(
+            self,
+            status=ReviewDependencyStatus.SATISFIED,
+            failure_code=None,
+            satisfied_at=datetime.now(UTC),
+        )
+
+    def mark_failed(self, failure_code: str) -> "ReviewDependency":
+        """将 pending 依赖一次性推进为 failed。"""
+        if self.status is not ReviewDependencyStatus.PENDING or not failure_code:
+            raise ValueError("只有 pending 依赖可以记录失败")
+        return replace(
+            self,
+            status=ReviewDependencyStatus.FAILED,
+            failure_code=failure_code,
+            satisfied_at=None,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewOutput:

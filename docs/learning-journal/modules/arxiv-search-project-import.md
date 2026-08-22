@@ -102,7 +102,8 @@ diff check 通过。
 
 ## 已知限制
 
-- Service 尚未接入 Review Worker/LangGraph/API；父 Run 等待与恢复属于切片 4；
+- Service 尚未接入 Review Worker/LangGraph/API；切片 4 已接入独立依赖对账循环并完成父 Run
+  等待/恢复，具体 Review Executor 由切片 5 接线；
 - 当前只顺序下载，不实现多来源、任意 URL、候选人工筛选或用户可调并发；
 - 事务失败可能留下未引用缓存，尚无孤立缓存清理器；删除前必须先做引用对账；
 - Phase 1 上传入口仍沿用既有事务内 `Storage.write()`；本切片没有静默改变其 storage key/API。Phase 3

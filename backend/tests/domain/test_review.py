@@ -167,6 +167,28 @@ def test_dependency_requires_exact_matching_target(
         )
 
 
+def test_review_dependency_only_advances_once_to_terminal_status() -> None:
+    """依赖只能从 pending 单向进入 satisfied/failed。"""
+    dependency = create_review_dependency(
+        parent_run_id="review-1",
+        dependency_type=ReviewDependencyType.PAPER_VERSION,
+        target_paper_version_id="version-1",
+    )
+
+    satisfied = dependency.mark_satisfied()
+    assert satisfied.status is ReviewDependencyStatus.SATISFIED
+    assert satisfied.satisfied_at is not None
+    assert satisfied.failure_code is None
+
+    failed = dependency.mark_failed("indexing_failed")
+    assert failed.status is ReviewDependencyStatus.FAILED
+    assert failed.failure_code == "indexing_failed"
+    assert failed.satisfied_at is None
+
+    with pytest.raises(ValueError, match="pending"):
+        satisfied.mark_failed("late_failure")
+
+
 def test_human_input_request_can_only_resolve_once() -> None:
     """同一请求只能从 OPEN 解决一次，动作必须在允许集合内。"""
     request = create_human_input_request(

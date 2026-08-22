@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1–2 已确认，切片 3 已完成并等待确认）
+- 当前状态：开发中（切片 1–3 已确认，切片 4 已完成并等待确认）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -155,7 +155,7 @@ LangGraph Checkpoint  interrupt/crash 后恢复图执行的位置
 ```text
 QUEUED → RUNNING
 RUNNING → WAITING_DEPENDENCY
-WAITING_DEPENDENCY → QUEUED
+WAITING_DEPENDENCY → QUEUED | FAILED
 RUNNING → WAITING_INPUT
 WAITING_INPUT → QUEUED
 RUNNING → SUCCEEDED | RETRY_WAIT | FAILED | CANCELLED
@@ -545,7 +545,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 1. [x] 更新状态机、Attempt/Outbox 语义和迁移，先完成等待/恢复事务测试；
 2. [x] 建立 Review Run、Step、Source、Dependency、Output、Human Input 数据契约；
 3. [x] 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
-4. [ ] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
+4. [x] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
 5. [ ] 接入 LangGraph checkpoint，验证 crash recovery；
 6. [ ] 实现 Evidence Matrix 固定提取策略与 Validator；
 7. [ ] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
@@ -658,6 +658,44 @@ PostgreSQL/Testcontainers integration `95 passed`；`ruff check src tests`、`py
 实现和取舍详见
 [arXiv 检索与项目导入](../modules/arxiv-search-project-import.md)。
 
+### 18.4 切片 4 完成记录（2026-08-22）
+
+- 新增 `ReviewDependencyWaitService`：持锁校验 owner、Project、Review 类型和扩展记录后，在一个短事务
+  中提交 `RUNNING → WAITING_DEPENDENCY` 与 `dependency_wait_started` Event；Outbox 保持
+  `DISPATCHED`，现有 `RunExecutionService` 因而把当前 Attempt 正常关闭为 `PAUSED`；
+- `ReviewDependency` 增加单向 `PENDING → SATISFIED | FAILED` 领域转换；Run 状态机最小增加
+  `WAITING_DEPENDENCY → FAILED`，用于依赖已经全部终态却无法继续时的正常业务终止，不复用包含
+  Attempt 计数与失败重试语义的 `apply_run_failure()`；
+- 新增有界 `ReviewDependencyReconciler`。Worker 独立周期循环先扫描等待父 Run，再逐个锁定父 Run
+  二次检查；两个 Reconciler 命中同一 Run 时由行锁与状态条件串行化，重复轮次不会重复 Source
+  Event、恢复或 Outbox 重置；单候选异常回滚后不阻塞同批其他候选，该循环与现有 lease Reconciler
+  分开捕获异常和关闭；
+- 来源是否 ready 只以其 PaperVersion 下真实 `READY` ChunkSet 为准。对账同时校验 Paper、Version、
+  ProjectPaper、owner 和 Revision 归属；同 Project 的 RUN 依赖只接受匹配 owner/Project 的
+  Ingestion Run，跨 Project 复用 Version 按切片 3 契约只观察 PaperVersion/ChunkSet，不要求 RUN
+  依赖；
+- Ingestion/Indexing 仍活跃时继续等待；终态失败会把 Source 和对应 Dependency 推进为 FAILED；
+  Ingestion 成功却缺 Revision、Indexing Run，或 Indexing 成功却没有 ready ChunkSet，均转成稳定的
+  单篇不变量错误，不让父 Run 永久悬挂；
+- Evidence 集采用“全部 Source 都成为 `READY`/`FAILED` 后才决定”的固定边界，不因第一篇成功提前
+  恢复。默认 `minimum_ready_papers=1`；至少一篇 ready 时在同一事务中保存 Source/Dependency、
+  追加 `review_source_*` Event，再调用 `resume_in_session(DEPENDENCY_COMPLETED)` 完成
+  `WAITING_DEPENDENCY → QUEUED`、`dependency_wait_completed` 与
+  `schedule_again(DISPATCHED → PENDING)`；全部不可用以 `no_reviewable_papers` 终止。快照若显式
+  配置更高最小值且最终不足，则使用 `insufficient_reviewable_papers`；
+- 中间轮次若只确认部分来源失败/就绪，会提交对应 Event 并在 commit 后发送轻量 SSE 通知，但返回
+  计数仍只统计本轮恢复或终止的父 Run；通知失败仍由既有轮询兜底；
+- PostgreSQL 集成测试确认两个并发 Reconciler 只有一次恢复；`schedule_again()` 抛错时 Source、
+  Dependency、Event、Run 与 Outbox 整体回滚；未新增表、列或 Alembic migration。
+
+验证结果：切片 4 领域/应用/Worker 定向测试 `33 passed`，定向 PostgreSQL 事务/并发/回滚测试
+`3 passed`；Backend 完整非集成测试 `457 passed, 4 skipped`，完整
+PostgreSQL/Valkey/Testcontainers integration `98 passed`；`ruff check src tests`、`pyright` 与
+`git diff --check` 通过。本切片没有前端改动，因此未重复运行 Web 测试与构建。
+
+实现和取舍详见
+[Review 论文依赖等待与恢复](../modules/review-dependency-reconciliation.md)。
+
 ## 19. 重点测试
 
 - Run 和 Attempt 的合法/非法等待状态转换；
@@ -716,6 +754,7 @@ PostgreSQL/Testcontainers integration `95 passed`；`ruff check src tests`、`py
 模块实际完成后再创建：
 
 - 已完成：`docs/learning-journal/modules/arxiv-search-project-import.md`（已从预计列表移出）；
+- 已完成：`docs/learning-journal/modules/review-dependency-reconciliation.md`；
 - 后续预计：
   - `docs/learning-journal/modules/langgraph-checkpoint-and-resume.md`
   - `docs/learning-journal/modules/human-outline-review.md`

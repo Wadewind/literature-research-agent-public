@@ -47,7 +47,11 @@ _TRANSITIONS: dict[RunStatus, set[RunStatus]] = {
     },
     RunStatus.RETRY_WAIT: {RunStatus.QUEUED, RunStatus.CANCELLED},
     RunStatus.WAITING_INPUT: {RunStatus.QUEUED, RunStatus.CANCELLED},
-    RunStatus.WAITING_DEPENDENCY: {RunStatus.QUEUED, RunStatus.CANCELLED},
+    RunStatus.WAITING_DEPENDENCY: {
+        RunStatus.QUEUED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    },
     RunStatus.CANCEL_REQUESTED: {RunStatus.CANCELLED},
 }
 

@@ -30,9 +30,13 @@ from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.ports.embedding_model import EmbeddingModel
 from literature_agent.application.rag_answer_executor import RagAnswerExecutor
 from literature_agent.application.retriever import Retriever
+from literature_agent.application.review_dependency_service import (
+    ReviewDependencyReconciler,
+)
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.application.run_reconcile_service import RunReconcileService
+from literature_agent.application.waiting_run_resume_service import WaitingRunResumeService
 from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
@@ -88,11 +92,20 @@ from literature_agent.infrastructure.persistence.model_invocation_repository imp
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
 )
+from literature_agent.infrastructure.persistence.paper_repository import (
+    SqlalchemyPaperRepository,
+)
 from literature_agent.infrastructure.persistence.paper_version_repository import (
     SqlalchemyPaperVersionRepository,
 )
 from literature_agent.infrastructure.persistence.parse_revision_repository import (
     SqlalchemyParseRevisionRepository,
+)
+from literature_agent.infrastructure.persistence.project_paper_repository import (
+    SqlalchemyProjectPaperRepository,
+)
+from literature_agent.infrastructure.persistence.review_repository import (
+    SqlalchemyReviewRepository,
 )
 from literature_agent.infrastructure.persistence.run_repository import (
     SqlalchemyRunRepository,
@@ -258,6 +271,23 @@ async def _reconcile_loop(ctx: dict[str, Any]) -> None:
         await asyncio.sleep(settings.worker_reconcile_interval_seconds)
 
 
+async def _dependency_reconcile_loop(ctx: dict[str, Any]) -> None:
+    """周期性对账 Review Run 的论文解析与索引依赖。"""
+    service: ReviewDependencyReconciler = ctx["review_dependency_reconciler"]
+    settings: Settings = ctx["settings"]
+    while True:
+        try:
+            completed = await service.reconcile_waiting()
+            if completed:
+                logger.info("依赖对账恢复或终止 %d 个 Review Run", completed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # 与 lease Reconciler 隔离：本循环单轮失败不影响 Worker 崩溃恢复。
+            logger.exception("Review 依赖对账循环出错")
+        await asyncio.sleep(settings.worker_reconcile_interval_seconds)
+
+
 async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
     """Worker 启动：建立数据库、队列依赖并启动派发与对账循环。"""
     engine = create_engine(settings)
@@ -378,13 +408,37 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         max_run_attempts=settings.max_run_attempts,
         batch_size=settings.outbox_dispatch_batch_size,
     )
+    waiting_resume_service = WaitingRunResumeService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        event_notifier=event_notifier,
+    )
+    ctx["review_dependency_reconciler"] = ReviewDependencyReconciler(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        review_repo_factory=SqlalchemyReviewRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        waiting_resume_service=waiting_resume_service,
+        batch_size=settings.outbox_dispatch_batch_size,
+        event_notifier=event_notifier,
+    )
     ctx["dispatch_task"] = asyncio.create_task(_dispatch_loop(ctx))
     ctx["reconcile_task"] = asyncio.create_task(_reconcile_loop(ctx))
+    ctx["dependency_reconcile_task"] = asyncio.create_task(
+        _dependency_reconcile_loop(ctx)
+    )
 
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
     """Worker 关闭：取消后台循环并释放连接资源。"""
-    for key in ("dispatch_task", "reconcile_task"):
+    for key in ("dispatch_task", "reconcile_task", "dependency_reconcile_task"):
         task: asyncio.Task | None = ctx.get(key)
         if task is not None:
             task.cancel()

@@ -75,8 +75,9 @@ owner 命名空间，这与现有上传和 RAG 提问行为一致。
 - 同键同请求返回原 Review Run，不产生第二个 Event 或 Outbox；同键不同请求抛幂等冲突；
 - Project 不存在、跨 owner 或已归档时不创建任何记录；
 - 重复 Step、Source、Dependency、Output、HumanInput 和 Artifact 由对应唯一约束兜底；
-- 本切片只保存这些状态所需的数据，不推进依赖或人工输入状态；
-- 取消仍由通用 Run 状态机负责；依赖恢复属于切片 4，HITL 提交与恢复属于切片 7。
+- 依赖状态已由切片 4 的 `ReviewDependencyReconciler` 持父 Run 行锁后单向推进；人工输入状态仍留给
+  切片 7；
+- 取消仍由通用 Run 状态机负责；依赖对账不会恢复已取消或已离开等待状态的 Run。
 
 ## 安全和可观测性
 
@@ -112,8 +113,8 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 ## 已知限制与扩展路径
 
 - 尚无 Review HTTP API 和前端页面，`Idempotency-Key` 只在应用服务契约中生效；
-- arXiv 导入切片已为 Source 增加 scoped 行锁与受控状态保存，并能追加检索 Step 和导入依赖；其他
-  Step、Dependency 对账和状态推进仍由后续切片实现；
+- arXiv 导入已追加来源与依赖，切片 4 已实现 Source/Dependency 对账、失败收敛和正常恢复；其他
+  Step 的节点推进仍由后续 LangGraph 切片实现；
 - Request 的数据库约束可以阻止第二条 Input，但切片 7 仍必须用行锁和条件更新原子解决 Request；
 - 数据库只保证目标存在和主要唯一性，不自动保证跨聚合归属：ReviewRun 当前 Output/Artifact、
   ReviewSource 的 Paper/PaperVersion 配对、Request 的 resolved Input、Artifact 的

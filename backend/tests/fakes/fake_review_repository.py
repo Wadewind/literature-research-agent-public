@@ -46,6 +46,10 @@ class FakeReviewRepository(ReviewRepository):
             return None
         return self.review_runs.get(run_id)
 
+    async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
+        # 父 Run 的真实状态由 Service 持锁后二次校验；Fake 只提供候选。
+        return list(self.review_runs)[:limit]
+
     async def add_step(self, step: RunStep) -> RunStep:
         self.steps.append(step)
         return step
@@ -101,6 +105,13 @@ class FakeReviewRepository(ReviewRepository):
         if not self._visible(run_id, project_id, owner_id):
             return []
         return [x for x in self.dependencies if x.parent_run_id == run_id]
+
+    async def save_dependency(self, dependency: ReviewDependency) -> None:
+        for index, current in enumerate(self.dependencies):
+            if current.dependency_id == dependency.dependency_id:
+                self.dependencies[index] = dependency
+                return
+        raise KeyError(dependency.dependency_id)
 
     async def add_output(self, output: ReviewOutput) -> ReviewOutput:
         self.outputs.append(output)

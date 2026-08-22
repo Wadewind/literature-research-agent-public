@@ -24,6 +24,7 @@ from literature_agent.domain.review import (
     ReviewStepStatus,
     RunStep,
 )
+from literature_agent.domain.run import RunStatus, RunType
 from literature_agent.infrastructure.persistence.models import (
     ArtifactORM,
     HumanInputORM,
@@ -196,6 +197,20 @@ class SqlalchemyReviewRepository(ReviewRepository):
         row = result.scalar_one_or_none()
         return _review_run_to_domain(row) if row else None
 
+    async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
+        """按创建顺序有界列出等待依赖的 Review Run。"""
+        result = await self._session.execute(
+            select(ReviewRunORM.run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                RunORM.run_type == RunType.REVIEW.value,
+                RunORM.status == RunStatus.WAITING_DEPENDENCY.value,
+            )
+            .order_by(RunORM.created_at, RunORM.run_id)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def add_step(self, step: RunStep) -> RunStep:
         self._session.add(
             RunStepORM(
@@ -312,6 +327,17 @@ class SqlalchemyReviewRepository(ReviewRepository):
             .order_by(RunDependencyORM.created_at)
         )
         return [_dependency_to_domain(x) for x in result.scalars().all()]
+
+    async def save_dependency(self, dependency: ReviewDependency) -> None:
+        result = await self._session.execute(
+            select(RunDependencyORM).where(
+                RunDependencyORM.dependency_id == dependency.dependency_id
+            )
+        )
+        row = result.scalar_one()
+        row.status = dependency.status.value
+        row.failure_code = dependency.failure_code
+        row.satisfied_at = dependency.satisfied_at
 
     async def add_output(self, output: ReviewOutput) -> ReviewOutput:
         self._session.add(

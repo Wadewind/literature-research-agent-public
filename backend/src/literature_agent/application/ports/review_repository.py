@@ -32,6 +32,10 @@ class ReviewRepository(Protocol):
         """按 Run、Project、owner 查询 ReviewRun。"""
         ...
 
+    async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
+        """有界列出等待论文依赖的 Review Run ID，供内部对账使用。"""
+        ...
+
     async def add_step(self, step: RunStep) -> RunStep:
         """追加一个 RunStep。"""
         ...
@@ -68,6 +72,10 @@ class ReviewRepository(Protocol):
         self, run_id: str, project_id: str, owner_id: str
     ) -> list[ReviewDependency]:
         """列出有权访问的父 Run 依赖。"""
+        ...
+
+    async def save_dependency(self, dependency: ReviewDependency) -> None:
+        """保存依赖的单向状态推进。"""
         ...
 
     async def add_output(self, output: ReviewOutput) -> ReviewOutput:
