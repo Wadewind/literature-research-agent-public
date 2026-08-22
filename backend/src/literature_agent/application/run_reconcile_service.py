@@ -13,7 +13,6 @@ import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
-from typing import TypeVar
 
 from literature_agent.application.failure_policy import apply_run_failure
 from literature_agent.application.ports.attempt_repository import AttemptRepository
@@ -21,18 +20,18 @@ from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.outbox_repository import OutboxRepository
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
+from literature_agent.domain.event import create_event
+from literature_agent.domain.exceptions import RunConcurrentModificationError
 from literature_agent.domain.run import RunStatus
 from literature_agent.domain.run_attempt import AttemptStatus
-
-TSession = TypeVar("TSession", bound=Session)
 
 logger = logging.getLogger(__name__)
 
 _WORKER_CRASHED_ERROR = {"type": "worker_crashed", "message": "Worker lease 过期，执行被收回"}
 
 
-class RunReconcileService:
-    """收回 lease 过期的 RUNNING Run 并重新调度。"""
+class RunReconcileService[TSession: Session]:
+    """收回过期 Run，并收敛业务状态提交后的残留 Attempt。"""
 
     def __init__(
         self,
@@ -80,6 +79,100 @@ class RunReconcileService:
                 recovered += 1
         return recovered
 
+    async def reconcile_orphaned_attempts(self, now: datetime | None = None) -> int:
+        """有界、幂等关闭 Run 已离开执行边界的残留 RUNNING Attempt。"""
+        now = now or datetime.now(UTC)
+        async with self._session_factory() as session:
+            candidates = await self._attempt_repo_factory(session).list_orphaned_running(
+                self._batch_size
+            )
+
+        closed = 0
+        for candidate in candidates:
+            if await self._close_orphan(candidate.run_id, candidate.attempt_id, now):
+                closed += 1
+        return closed
+
+    async def _close_orphan(self, run_id: str, attempt_id: str, now: datetime) -> bool:
+        """锁定 Run 后二次校验，不能关闭当前最新合法 Attempt。"""
+        async with self._session_factory() as session:
+            run_repo = self._run_repo_factory(session)
+            attempt_repo = self._attempt_repo_factory(session)
+            owner = await run_repo.get_by_id(run_id)
+            if owner is None:
+                return False
+            run = await run_repo.get_by_id_for_update(run_id, owner.owner_id)
+            if run is None:
+                await session.rollback()
+                return False
+            latest = await attempt_repo.get_latest_by_run(run_id)
+            if (
+                latest is None
+                or (
+                    latest.attempt_id == attempt_id
+                    and run.status in {RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED}
+                )
+            ):
+                await session.rollback()
+                return False
+
+            status = await self._orphan_terminal_status(
+                session, run_id, attempt_id, run.status
+            )
+            if status is None:
+                await session.rollback()
+                return False
+            changed = await attempt_repo.finish_if_running(attempt_id, status, now)
+            if not changed:
+                await session.rollback()
+                return False
+            await session.commit()
+            return True
+
+    async def _orphan_terminal_status(
+        self,
+        session: TSession,
+        run_id: str,
+        attempt_id: str,
+        run_status: RunStatus,
+    ) -> AttemptStatus | None:
+        """用 Attempt 时间区间内的持久 Event 区分正常暂停与失败重试。"""
+        attempt_repo = self._attempt_repo_factory(session)
+        attempts = await attempt_repo.list_by_run(run_id)
+        candidate = next((item for item in attempts if item.attempt_id == attempt_id), None)
+        if candidate is None:
+            return None
+        next_started_at = min(
+            (
+                item.started_at
+                for item in attempts
+                if item.attempt_number > candidate.attempt_number
+            ),
+            default=None,
+        )
+        events = await self._event_repo_factory(session).list_by_run(run_id)
+        event_types = {
+            event.event_type
+            for event in events
+            if event.occurred_at >= candidate.started_at
+            and (next_started_at is None or event.occurred_at < next_started_at)
+        }
+        if event_types & {"dependency_wait_started", "human_input_requested"}:
+            return AttemptStatus.PAUSED
+        if event_types & {"run_retry_scheduled", "run_failed"}:
+            return AttemptStatus.FAILED
+        if "run_cancelled" in event_types:
+            return AttemptStatus.CANCELLED
+        if run_status == RunStatus.SUCCEEDED:
+            return AttemptStatus.SUCCEEDED
+        if run_status == RunStatus.FAILED:
+            return AttemptStatus.FAILED
+        if run_status == RunStatus.CANCELLED:
+            return AttemptStatus.CANCELLED
+        if run_status in {RunStatus.WAITING_INPUT, RunStatus.WAITING_DEPENDENCY}:
+            return AttemptStatus.PAUSED
+        return None
+
     async def _recover(
         self,
         run_id: str,
@@ -92,11 +185,12 @@ class RunReconcileService:
             run_repo = self._run_repo_factory(session)
             attempt_repo = self._attempt_repo_factory(session)
 
+            recoverable_statuses = {RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED}
             run = await run_repo.get_by_id(run_id)
-            if run is None or run.status != RunStatus.RUNNING:
+            if run is None or run.status not in recoverable_statuses:
                 return False
             run_row = await run_repo.get_by_id_for_update(run_id, run.owner_id)
-            if run_row is None or run_row.status != RunStatus.RUNNING:
+            if run_row is None or run_row.status not in recoverable_statuses:
                 await session.rollback()
                 return False
             latest = await attempt_repo.get_latest_by_run(run_id)
@@ -108,6 +202,40 @@ class RunReconcileService:
             ):
                 await session.rollback()
                 return False
+
+            if run_row.status == RunStatus.CANCEL_REQUESTED:
+                changed = await attempt_repo.finish_if_running(
+                    attempt_id, AttemptStatus.CANCELLED, now
+                )
+                if not changed:
+                    await session.rollback()
+                    return False
+                run_row.transition_to(RunStatus.CANCELLED)
+                updated = await run_repo.update_status(
+                    run_id=run_id,
+                    expected_status=RunStatus.CANCEL_REQUESTED,
+                    new_status=RunStatus.CANCELLED,
+                    new_event_sequence=run_row.event_sequence + 1,
+                )
+                if not updated:
+                    raise RunConcurrentModificationError(run_id)
+                await self._event_repo_factory(session).add(
+                    create_event(
+                        run_id=run_id,
+                        sequence=run_row.event_sequence,
+                        event_type="run_cancelled",
+                        actor_type="system",
+                        correlation_id=f"reconcile:{attempt_id}",
+                        payload={},
+                    )
+                )
+                await session.commit()
+                logger.info(
+                    "收敛取消后崩溃的 Run: run_id=%s attempt_id=%s",
+                    run_id,
+                    attempt_id,
+                )
+                return True
 
             await attempt_repo.finish_if_running(
                 attempt_id, AttemptStatus.FAILED, now, _WORKER_CRASHED_ERROR

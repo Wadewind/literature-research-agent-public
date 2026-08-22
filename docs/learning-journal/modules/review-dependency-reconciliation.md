@@ -128,12 +128,12 @@ Version、ChunkSet ID、稳定失败码和数量，不保存 PDF、Chunk 文本�
 
 ## 已知限制与扩展路径
 
-- 本切片没有 Review LangGraph/Executor，`pause()` 将由切片 5 的固定图在导入节点完成后调用；Worker
-  当前只接入对账循环，尚不能执行 `RunType.REVIEW`；
+- 切片 5 已建立持久 LangGraph Runtime 骨架，但 Evidence 等真实节点尚未完成，因而仍未把 Review
+  Executor 注册到生产 Worker；`pause()` 会在后续固定图导入节点接线时调用；
 - Reconciler 与 lease 对账复用同一个 30 秒配置间隔和批次大小，真实规模下再基于等待延迟和数据库
   压力决定是否拆分配置；
 - 候选扫描未使用 `SKIP LOCKED` 认领；并发正确性由逐 Run 行锁保证，但多 Worker 可能重复扫描候选；
-- Run 已提交等待/终态、Attempt 关闭前的 crash gap 仍未解决，明确留给切片 5；
+- Run 已提交等待/终态、Attempt 关闭前的 crash gap 已由切片 5 残留 Attempt Reconciler 收敛；
 - 当前不会自动清理不再被使用的跨 Project 子 Run或 arXiv 下载缓存。
 
 ## 60 秒面试说明

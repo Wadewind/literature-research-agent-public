@@ -646,6 +646,11 @@ LangGraph Checkpoint 保存：
 - Node/Task 已完成结果；
 - Interrupt 和 Resume 所需数据。
 
+固定 Review Workflow 使用 `review.v1:review-run:{review_run_id}` 作为稳定、版本化 Thread 映射；
+LangGraph 根图的空 checkpoint namespace 保留给其子图内部命名。首次执行提交完整小型 State；崩溃恢复对同一 Thread 调用
+`ainvoke(None)`，不能再次提交完整输入开启新一轮执行。PostgreSQL checkpoint schema 由 Alembic
+管理，Runtime 不在 Worker 启动时隐式建表；反序列化禁止 pickle 和任意模块 allowlist。
+
 PDF、图片、全文、表格、大型工具输出和最终文档必须存储在业务数据库或 Artifact Storage 中，Graph State 只保存引用。
 
 ### 9.3 Valkey
@@ -687,6 +692,10 @@ WAITING_DEPENDENCY → CANCELLED
 Review 论文依赖由独立的数据库 Reconciler 汇总：指定 PaperVersion 存在 ready ChunkSet 才算可用，
 并等待全部来源进入就绪或失败终态后再固定 Evidence 集。部分失败可继续；全部不可用以
 `no_reviewable_papers` 终止。该业务终止不消耗 Worker 失败重试预算。
+
+`CANCEL_REQUESTED` 优先由存活 Worker 协作收尾；若 Worker 随后崩溃，最新 Attempt lease 过期后，
+Reconciler 在同一持锁事务将 Run/Attempt 收敛为 `CANCELLED` 并写 `run_cancelled`。取消恢复不进入
+失败预算，也不重置 Outbox。
 
 ### 10.2 Event 类别
 

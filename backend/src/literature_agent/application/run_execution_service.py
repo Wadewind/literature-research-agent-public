@@ -227,8 +227,8 @@ class RunExecutionService:
     ) -> None:
         """按 Run 结束状态 best-effort 关闭 Attempt。
 
-        Run 已先提交等待或终态、但进程在关闭 Attempt 前崩溃时，现有对账查询
-        不会处理这条 RUNNING Attempt；该间隙留给 Phase 3 crash recovery 切片修复。
+        Run 已先提交等待或终态、但进程在关闭 Attempt 前崩溃时，周期 Reconciler
+        会按业务 Run 当前事实幂等收敛这条残留 RUNNING Attempt。
         """
         mapping = {
             RunStatus.SUCCEEDED: AttemptStatus.SUCCEEDED,

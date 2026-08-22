@@ -54,6 +54,21 @@ class FakeReviewRepository(ReviewRepository):
         self.steps.append(step)
         return step
 
+    async def get_or_add_step(self, step: RunStep) -> RunStep:
+        """按幂等键返回既有 Step。"""
+        existing = next(
+            (
+                item
+                for item in self.steps
+                if item.run_id == step.run_id
+                and item.idempotency_key == step.idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        return await self.add_step(step)
+
     async def list_steps_scoped(
         self, run_id: str, project_id: str, owner_id: str
     ) -> list[RunStep]:

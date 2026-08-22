@@ -12,6 +12,7 @@ class FakeAttemptRepository(AttemptRepository):
 
     def __init__(self) -> None:
         self._attempts: dict[str, RunAttempt] = {}
+        self._orphaned_candidates: list[RunAttempt] = []
 
     async def add(self, attempt: RunAttempt) -> RunAttempt:
         """将 Attempt 存入内存。"""
@@ -28,6 +29,13 @@ class FakeAttemptRepository(AttemptRepository):
         if not candidates:
             return None
         return max(candidates, key=lambda a: a.attempt_number)
+
+    async def list_by_run(self, run_id: str) -> list[RunAttempt]:
+        """按序返回该 Run 的全部 Attempt。"""
+        return sorted(
+            (a for a in self._attempts.values() if a.run_id == run_id),
+            key=lambda a: a.attempt_number,
+        )
 
     async def record_heartbeat(self, attempt_id: str, now: datetime) -> bool:
         """仅 RUNNING 状态的 Attempt 可更新心跳。"""
@@ -61,10 +69,18 @@ class FakeAttemptRepository(AttemptRepository):
         expired.sort(key=lambda a: a.heartbeat_at)
         return expired[:limit]
 
+    async def list_orphaned_running(self, limit: int) -> list[RunAttempt]:
+        """Fake 无 Run Repository 视图；测试可显式指定残留候选。"""
+        return list(self._orphaned_candidates[:limit])
+
     # 测试辅助：直接操纵内部状态
     def seed(self, attempt: RunAttempt) -> None:
         """直接写入一条 Attempt（测试准备用）。"""
         self._attempts[attempt.attempt_id] = attempt
+
+    def set_orphaned_candidates(self, attempts: list[RunAttempt]) -> None:
+        """设置残留 Attempt 候选（测试辅助）。"""
+        self._orphaned_candidates = list(attempts)
 
     def get(self, attempt_id: str) -> RunAttempt | None:
         """按 ID 返回 Attempt（测试断言用）。"""

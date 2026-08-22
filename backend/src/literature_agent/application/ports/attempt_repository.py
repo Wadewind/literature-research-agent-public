@@ -21,6 +21,10 @@ class AttemptRepository(Protocol):
         """查询一个 Run 最新（attempt_number 最大）的 Attempt。"""
         ...
 
+    async def list_by_run(self, run_id: str) -> list[RunAttempt]:
+        """按 attempt_number 升序列出一个 Run 的 Attempt。"""
+        ...
+
     async def record_heartbeat(self, attempt_id: str, now: datetime) -> bool:
         """条件更新心跳时间；仅 RUNNING 状态的 Attempt 可更新。"""
         ...
@@ -40,5 +44,13 @@ class AttemptRepository(Protocol):
 
         返回关联 Run 仍处于 RUNNING、且 ``heartbeat_at < cutoff`` 的
         RUNNING Attempt，按心跳时间升序。
+        """
+        ...
+
+    async def list_orphaned_running(self, limit: int) -> list[RunAttempt]:
+        """查询业务 Run 已离开该 Attempt 执行边界的残留 RUNNING Attempt。
+
+        Run 仍为 RUNNING 时只返回非最新 Attempt，避免误关当前合法租约；其他状态
+        的 RUNNING Attempt 均为 best-effort 关闭崩溃后留下的运维记录。
         """
         ...

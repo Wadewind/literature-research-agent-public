@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：开发中（切片 1–3 已确认，切片 4 已完成并等待确认）
+- 当前状态：开发中（切片 1–4 已确认，切片 5 已完成并等待确认）
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
@@ -546,7 +546,7 @@ Artifact 写入使用内容哈希和稳定幂等键。Worker 重试不能生成�
 2. [x] 建立 Review Run、Step、Source、Dependency、Output、Human Input 数据契约；
 3. [x] 实现 arXiv 检索与幂等项目导入，复用 Ingestion/Indexing；
 4. [x] 实现依赖等待、Reconciler 和 `schedule_again()` 闭环；
-5. [ ] 接入 LangGraph checkpoint，验证 crash recovery；
+5. [x] 接入 LangGraph checkpoint，验证 crash recovery；
 6. [ ] 实现 Evidence Matrix 固定提取策略与 Validator；
 7. [ ] 实现 Outline interrupt、approve/edit/feedback 和 Resume；
 8. [ ] 实现章节写作、ClaimSet、Citation Validator 和一致性检查；
@@ -696,6 +696,34 @@ PostgreSQL/Valkey/Testcontainers integration `98 passed`；`ruff check src tests
 实现和取舍详见
 [Review 论文依赖等待与恢复](../modules/review-dependency-reconciliation.md)。
 
+### 18.5 切片 5 完成记录（2026-08-22）
+
+- 固定 `review.v1` Thread 为 `review.v1:review-run:{review_run_id}`；LangGraph 1.2.10 根图实际使用
+  空 `checkpoint_ns`（该字段保留给子图），因此版本通过 Thread 前缀和 metadata 隔离；Graph State
+  只允许小型结构和稳定业务 ID；
+- `ReviewWorkflowRuntime` 严格区分首次 `start(initial_state)` 与 `resume(review_run_id)`；恢复使用
+  `ainvoke(None)`，已完成 Thread 重复恢复不会开启新一轮节点；
+- 固定官方 `langgraph-checkpoint-postgres==3.1.1`；连接使用 `autocommit=True`、`dict_row` 和显式
+  生命周期，Serializer 禁止 pickle 并使用严格 allowlist，运行时不调用 `setup()`；
+- Alembic 创建与官方 migrations 0–9 对齐的 checkpoint 表和索引；真实 PostgreSQL 测试用两个全新
+  连接、Checkpointer 和 Runtime 证明 pending task 跨实例恢复、Thread 隔离及副作用重放幂等；
+- `RunReconcileService` 新增残留 Attempt 收敛：保护 `RUNNING`/`CANCEL_REQUESTED` 最新 Attempt，
+  按候选 Attempt 时间区间内的持久 Event 区分 PAUSED/FAILED，不根据 Run 类型猜测；并发和重复
+  Reconciler 只有一次效果。`CANCEL_REQUESTED` 在心跳新鲜时继续等待 Worker，lease 过期则在同一
+  事务将 Run/Attempt 收敛为 CANCELLED 并写 Event，不进入失败重试或重置 Outbox；
+- checkpoint 数据库故障映射为临时错误，版本/缺失恢复状态映射为永久数据错误；节点业务
+  `ValueError`/`TypeError` 保持原样，避免错误分类越过 Runtime 边界；
+- 本切片未把 Review Executor 注册进生产 Worker：Evidence、Outline、Artifact 尚未实现，现在接线会
+  无输出地虚假成功。切片 6 完成首个真实节点后再评估；`interrupt()`/HumanInput 保留给切片 7。
+
+验证结果：Backend 完整非集成测试 `475 passed, 4 skipped`；完整 PostgreSQL/Valkey integration
+`102 passed`；Alembic 实际执行 `upgrade head → downgrade -1 → upgrade head`，随后 `alembic check`
+确认无新 upgrade 操作；`ruff check`（`src`、`tests`、迁移环境与本切片 revision）、`pyright` 和
+`git diff --check` 均通过。普通测试未调用真实模型或 arXiv。
+
+实现和取舍详见
+[LangGraph Checkpoint 与崩溃恢复](../modules/langgraph-checkpoint-and-crash-recovery.md)。
+
 ## 19. 重点测试
 
 - Run 和 Attempt 的合法/非法等待状态转换；
@@ -755,8 +783,8 @@ PostgreSQL/Valkey/Testcontainers integration `98 passed`；`ruff check src tests
 
 - 已完成：`docs/learning-journal/modules/arxiv-search-project-import.md`（已从预计列表移出）；
 - 已完成：`docs/learning-journal/modules/review-dependency-reconciliation.md`；
+- 已完成：`docs/learning-journal/modules/langgraph-checkpoint-and-crash-recovery.md`；
 - 后续预计：
-  - `docs/learning-journal/modules/langgraph-checkpoint-and-resume.md`
   - `docs/learning-journal/modules/human-outline-review.md`
   - `docs/learning-journal/modules/review-evidence-matrix.md`
   - `docs/learning-journal/modules/review-artifact-generation.md`

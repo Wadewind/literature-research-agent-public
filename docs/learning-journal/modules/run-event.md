@@ -120,9 +120,11 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
   具体节点执行属于后续切片。
 - 两种等待状态和恢复事务已可复用，Review Run 依赖对账已接入 Worker 周期循环；HumanInput
   提交/恢复调用方仍属于 Phase 3 后续切片。
-- Run 已提交等待/终态后、Attempt 关闭前仍有崩溃间隙；现有 Reconciler 只关联仍为 RUNNING 的
-  Run，无法清理这种残留 Attempt，需在 Phase 3 crash recovery 切片解决。
-- 当前取消为协作式：RUNNING 状态写入 CANCEL_REQUESTED 后，需 Worker 在检查点响应。
+- Run 已提交等待/终态后、Attempt 关闭前的崩溃间隙已由 Phase 3 切片 5 残留 Attempt Reconciler
+  补偿；分类使用 Attempt 时间区间内的 Event，不以当前 Run 类型猜测历史执行结果。
+- 当前取消优先协作式：RUNNING 状态写入 CANCEL_REQUESTED 后由 Worker 在检查点响应；若 Worker
+  随后崩溃，最新 Attempt lease 过期时 Reconciler 将 Run/Attempt 收敛为 CANCELLED 并写
+  `run_cancelled`，不走失败重试或重置 Outbox。
 - SSE 单连接每秒一次轮询查询，连接数大时需再评估（读扩散）。
 
 ## 60 秒面试说明

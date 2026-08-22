@@ -64,6 +64,14 @@ class IdempotencyConflictError(Exception):
         super().__init__(f"Idempotency-Key {idempotency_key} 已用于不同请求")
 
 
+class CheckpointUnavailableError(RuntimeError):
+    """Checkpoint 数据库临时不可用，可交给 Run 级失败策略重试。"""
+
+
+class CheckpointDataError(RuntimeError):
+    """Checkpoint 状态无效或不能安全反序列化，重复执行无法自愈。"""
+
+
 class PaperVersionNotFoundError(Exception):
     """Paper Version 不存在或不属于当前 actor 可见范围。"""
 

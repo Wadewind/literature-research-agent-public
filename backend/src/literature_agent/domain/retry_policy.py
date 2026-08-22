@@ -5,6 +5,7 @@
 """
 
 from literature_agent.domain.exceptions import (
+    CheckpointDataError,
     EvidenceScopeError,
     FileValidationError,
     IndexingInputError,
@@ -30,6 +31,7 @@ _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     ModelAuthError,
     ModelInvalidRequestError,
     ModelResponseError,
+    CheckpointDataError,
 )
 
 # 临时错误类型示例：超时与资源类，其余未知异常也按临时处理

@@ -68,9 +68,9 @@ Worker 进程（python -m literature_agent.worker）│
 - **错误分类最小两类**（2026-08-20 定稿）：永久错误（`InvalidPdfInputError`/`FileValidationError` 输入类）直接 FAILED；临时错误（`parser_timeout`、资源类、未知异常）预算内 RETRY_WAIT 重试，预算 `max_run_attempts` 默认 3（含首次），退避沿用 Outbox 参数。分类表集中在领域函数 `is_permanent_error`。
 - **Outbox 不可重置时降级 FAILED**：重试前提是 Outbox 记录仍可重置；记录缺失或状态异常时无法保证重新投递，直接 FAILED，避免 Run 滞留 RETRY_WAIT。
 - **对账循环放在 Worker 进程**：不单独部署 Reconciler；多实例并发对账由持锁二次校验 + 条件更新兜底。
-- **Attempt 关闭是 best effort**：不要求 Attempt 状态与 Run 等待/终态同事务。现有对账查询只
-  处理 Run 仍为 `RUNNING` 的过期 Attempt；若 Run 状态已提交而 Worker 在关闭 Attempt 前崩溃，
-  会留下残留 `RUNNING` Attempt，这是已知 crash gap，不宣称已有兜底。
+- **Attempt 关闭是 best effort，并由对账兜底**：不要求 Attempt 与 Run 等待/终态同事务。切片 5
+  增加残留 Attempt 对账：保护当前最新合法 Attempt，并按其时间区间内的持久 Event 区分正常暂停与
+  失败重试；条件关闭和 Run 行锁保证重复/并发单效果。
 - **PAUSED 表示正常释放 Worker**（Phase 3 切片 1）：Run 进入等待输入或依赖后，当前 Attempt
   以 `paused` 结束，不进入失败预算；Outbox 保持 `dispatched`，直到正常恢复事务调用
   `schedule_again`。
@@ -84,6 +84,8 @@ Worker 进程（python -m literature_agent.worker）│
 - 执行体抛错（切片 8 起按错误分类）：永久错误 → FAILED + `run_failed`；临时错误且预算内 → RETRY_WAIT + `run_retry_scheduled` + Outbox 重置，派发循环到点重投；预算耗尽 → FAILED。Event 只记录错误类型和截断消息，不记录堆栈。
 - Worker 在 Run 仍为 RUNNING 时崩溃：Attempt 停止心跳，lease 过期（600s）后对账循环收回——
   Attempt 置 `failed`（worker_crashed），Run 按失败策略 RETRY_WAIT 重投或 FAILED。
+- Worker 在 `CANCEL_REQUESTED` 后崩溃：心跳新鲜时继续等待协作取消；最新 Attempt lease 过期后，
+  对账将 Attempt/Run 收敛为 `cancelled` 并写 Event，不重置 Outbox、不进入失败预算。
 - 复活的原 Worker 提交结果时条件更新失败（Run 已非 RUNNING 或已被收回），不产生第二个终态。
 - 执行期间并发取消：完成时条件更新失败，返回 SKIPPED，不产生第二个终态。
 - 正常恢复重复调用：第一次将 Run 改为 QUEUED 后，后续调用被条件状态拒绝，不重复写 Event；
@@ -133,8 +135,8 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 - Outbox `failed` 终态（投递层）与 Run `failed`（预算耗尽）暂无自动告警和人工重放入口。
 - `schedule_again` 已由 Review Dependency Reconciler 在同事务正常恢复中调用；Human Input 入口仍
   属于 Phase 3 后续切片。
-- Run 已提交等待/终态后、Attempt best-effort 关闭前的崩溃不会被当前 Reconciler 发现；
-  Phase 3 crash recovery 切片必须补偿这类残留 Attempt。
+- Run 已提交等待/终态后、Attempt best-effort 关闭前的崩溃已由 Phase 3 切片 5 补偿；无法从业务
+  Event 确定旧 Attempt 原因时会安全保留并等待诊断，不进行猜测性关闭。
 - 协作式取消不保证立即终止已进入 Parser 的底层计算。
 - SSE 实时通知在切片 9 接入（见 run-event 笔记）。
 

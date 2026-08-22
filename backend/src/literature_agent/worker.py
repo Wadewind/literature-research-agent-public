@@ -262,8 +262,11 @@ async def _reconcile_loop(ctx: dict[str, Any]) -> None:
     while True:
         try:
             recovered = await service.reconcile_expired()
+            orphaned = await service.reconcile_orphaned_attempts()
             if recovered:
                 logger.info("对账收回 %d 个过期 Run", recovered)
+            if orphaned:
+                logger.info("对账关闭 %d 个残留 Attempt", orphaned)
         except asyncio.CancelledError:
             raise
         except Exception:

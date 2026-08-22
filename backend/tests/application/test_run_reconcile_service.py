@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from literature_agent.application.run_reconcile_service import RunReconcileService
+from literature_agent.domain.event import create_event
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import RunStatus, create_run
 from literature_agent.domain.run_attempt import AttemptStatus, create_run_attempt
@@ -179,3 +180,131 @@ async def test_budget_exhausted_run_fails(
     entry = await outbox_repo.get_by_run_id(run_id)
     assert entry is not None
     assert entry.status == OutboxStatus.DISPATCHED  # 不再重投
+
+
+async def test_orphaned_paused_attempt_is_closed_without_touching_new_attempt(
+    run_repo, event_repo, attempt_repo, outbox_repo
+) -> None:
+    """等待恢复并创建新 Attempt 后，旧残留收敛为 PAUSED，新 Attempt 保持 RUNNING。"""
+    run = replace(
+        create_run(project_id="p-1", owner_id="u-1", run_type="review"),
+        status=RunStatus.RUNNING,
+        event_sequence=4,
+    )
+    await run_repo.add(run)
+    old = replace(create_run_attempt(run.run_id, 1, "old"), started_at=_NOW)
+    new = replace(
+        create_run_attempt(run.run_id, 2, "new"),
+        started_at=_NOW + timedelta(seconds=20),
+        heartbeat_at=_NOW + timedelta(seconds=20),
+    )
+    await attempt_repo.add(old)
+    await attempt_repo.add(new)
+    attempt_repo.set_orphaned_candidates([old])
+    event_repo._events.append(
+        replace(
+            create_event(run.run_id, 2, "dependency_wait_started", "system", "c", {}),
+            occurred_at=_NOW + timedelta(seconds=10),
+        )
+    )
+    service = _make_service(run_repo, event_repo, attempt_repo, outbox_repo)
+
+    assert await service.reconcile_orphaned_attempts(_NOW + timedelta(seconds=30)) == 1
+    assert attempt_repo.get(old.attempt_id).status == AttemptStatus.PAUSED
+    assert attempt_repo.get(new.attempt_id).status == AttemptStatus.RUNNING
+    assert await service.reconcile_orphaned_attempts(_NOW + timedelta(seconds=31)) == 0
+
+
+async def test_orphaned_retry_attempt_uses_event_fact_not_run_type(
+    run_repo, event_repo, attempt_repo, outbox_repo
+) -> None:
+    """Review 失败重试后的旧 Attempt 必须 FAILED，不能因 run_type 猜成 PAUSED。"""
+    run = replace(
+        create_run(project_id="p-1", owner_id="u-1", run_type="review"),
+        status=RunStatus.QUEUED,
+        event_sequence=3,
+    )
+    await run_repo.add(run)
+    old = replace(create_run_attempt(run.run_id, 1, "old"), started_at=_NOW)
+    await attempt_repo.add(old)
+    attempt_repo.set_orphaned_candidates([old])
+    event_repo._events.append(
+        replace(
+            create_event(run.run_id, 2, "run_retry_scheduled", "system", "c", {}),
+            occurred_at=_NOW + timedelta(seconds=10),
+        )
+    )
+    service = _make_service(run_repo, event_repo, attempt_repo, outbox_repo)
+
+    assert await service.reconcile_orphaned_attempts(_NOW + timedelta(seconds=30)) == 1
+    assert attempt_repo.get(old.attempt_id).status == AttemptStatus.FAILED
+
+
+async def test_latest_cancel_requested_attempt_remains_running(
+    run_repo, event_repo, attempt_repo, outbox_repo
+) -> None:
+    """CANCEL_REQUESTED 仍由当前 Worker 协作收尾，不能提前关闭最新 Attempt。"""
+    run = replace(
+        create_run(project_id="p-1", owner_id="u-1", run_type="review"),
+        status=RunStatus.CANCEL_REQUESTED,
+        event_sequence=3,
+    )
+    await run_repo.add(run)
+    current = replace(create_run_attempt(run.run_id, 1, "worker"), started_at=_NOW)
+    await attempt_repo.add(current)
+    attempt_repo.set_orphaned_candidates([current])
+    service = _make_service(run_repo, event_repo, attempt_repo, outbox_repo)
+
+    assert await service.reconcile_orphaned_attempts(_NOW + timedelta(seconds=30)) == 0
+    assert attempt_repo.get(current.attempt_id).status == AttemptStatus.RUNNING
+
+
+async def test_expired_cancel_requested_run_is_cancelled_without_retry(
+    run_repo, event_repo, attempt_repo, outbox_repo
+) -> None:
+    """协作取消期间 Worker 崩溃后，过期 lease 直接收敛取消且不重置 Outbox。"""
+    stale = _NOW - timedelta(seconds=_LEASE_SECONDS + 1)
+    run_id, attempt_id = await _seed_running_run(
+        run_repo, attempt_repo, outbox_repo, heartbeat_at=stale
+    )
+    run = await run_repo.get_by_id(run_id)
+    assert run is not None
+    await run_repo.update_status(
+        run_id, RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED, run.event_sequence + 1
+    )
+    service = _make_service(run_repo, event_repo, attempt_repo, outbox_repo)
+
+    assert await service.reconcile_expired(_NOW) == 1
+
+    attempt = attempt_repo.get(attempt_id)
+    assert attempt is not None
+    assert attempt.status == AttemptStatus.CANCELLED
+    run = await run_repo.get_by_id(run_id)
+    assert run is not None
+    assert run.status == RunStatus.CANCELLED
+    assert [event.event_type for event in event_repo._events] == ["run_cancelled"]
+    entry = await outbox_repo.get_by_run_id(run_id)
+    assert entry is not None
+    assert entry.status == OutboxStatus.DISPATCHED
+
+
+async def test_fresh_cancel_requested_attempt_waits_for_worker(
+    run_repo, event_repo, attempt_repo, outbox_repo
+) -> None:
+    """最新心跳仍新鲜时，CANCEL_REQUESTED 继续等待 Worker 协作收尾。"""
+    run_id, attempt_id = await _seed_running_run(
+        run_repo, attempt_repo, outbox_repo, heartbeat_at=_NOW
+    )
+    run = await run_repo.get_by_id(run_id)
+    assert run is not None
+    await run_repo.update_status(
+        run_id, RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED, run.event_sequence + 1
+    )
+    service = _make_service(run_repo, event_repo, attempt_repo, outbox_repo)
+
+    assert await service.reconcile_expired(_NOW) == 0
+    assert attempt_repo.get(attempt_id).status == AttemptStatus.RUNNING
+    run = await run_repo.get_by_id(run_id)
+    assert run is not None
+    assert run.status == RunStatus.CANCEL_REQUESTED
+    assert event_repo._events == []

@@ -40,6 +40,10 @@ class ReviewRepository(Protocol):
         """追加一个 RunStep。"""
         ...
 
+    async def get_or_add_step(self, step: RunStep) -> RunStep:
+        """按 ``(run_id, idempotency_key)`` 原子创建或返回既有 Step。"""
+        ...
+
     async def list_steps_scoped(self, run_id: str, project_id: str, owner_id: str) -> list[RunStep]:
         """按执行顺序列出有权访问的 RunStep。"""
         ...

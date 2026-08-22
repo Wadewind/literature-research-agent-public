@@ -1,6 +1,8 @@
 """错误分类与重试退避策略测试。"""
 
 from literature_agent.domain.exceptions import (
+    CheckpointDataError,
+    CheckpointUnavailableError,
     FileValidationError,
     InvalidPdfInputError,
     ParserResourceError,
@@ -15,6 +17,7 @@ def test_permanent_input_errors() -> None:
     """输入类错误判定为永久错误。"""
     assert is_permanent_error(InvalidPdfInputError("损坏"))
     assert is_permanent_error(FileValidationError("类型不支持"))
+    assert is_permanent_error(CheckpointDataError("checkpoint 无效"))
 
 
 def test_temporary_errors() -> None:
@@ -23,6 +26,7 @@ def test_temporary_errors() -> None:
     assert not is_permanent_error(ParserResourceError("内存不足"))
     assert not is_permanent_error(ValueError("未知"))
     assert not is_permanent_error(ConnectionError("网络断开"))
+    assert not is_permanent_error(CheckpointUnavailableError("数据库暂不可用"))
 
 
 def test_retry_backoff_exponential_with_cap() -> None:

@@ -1,6 +1,7 @@
 """Review Workflow 聚合的 PostgreSQL Repository。"""
 
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.review_repository import ReviewRepository
@@ -229,6 +230,35 @@ class SqlalchemyReviewRepository(ReviewRepository):
             )
         )
         return step
+
+    async def get_or_add_step(self, step: RunStep) -> RunStep:
+        """用 PostgreSQL 唯一键保证节点重放只产生一条 Step。"""
+        values = {
+            "step_id": step.step_id,
+            "run_id": step.run_id,
+            "step_key": step.step_key.value,
+            "sequence": step.sequence,
+            "status": step.status.value,
+            "idempotency_key": step.idempotency_key,
+            "input_refs": step.input_refs,
+            "output_refs": step.output_refs,
+            "error_code": step.error_code,
+            "started_at": step.started_at,
+            "completed_at": step.completed_at,
+            "created_at": step.created_at,
+        }
+        await self._session.execute(
+            postgresql.insert(RunStepORM)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=[RunStepORM.run_id, RunStepORM.idempotency_key])
+        )
+        result = await self._session.execute(
+            select(RunStepORM).where(
+                RunStepORM.run_id == step.run_id,
+                RunStepORM.idempotency_key == step.idempotency_key,
+            )
+        )
+        return _step_to_domain(result.scalar_one())
 
     async def list_steps_scoped(self, run_id: str, project_id: str, owner_id: str) -> list[RunStep]:
         result = await self._session.execute(
