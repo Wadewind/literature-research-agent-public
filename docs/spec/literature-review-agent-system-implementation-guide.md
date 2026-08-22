@@ -70,12 +70,12 @@
 完成后的项目应该能演示以下完整链路：
 
 ```text
-上传或检索文献
+上传或从 arXiv 检索文献
   → 异步解析与索引
   → 有引用的文献问答
   → 创建长时间综述任务
   → 查看步骤、事件、失败与重试
-  → 人工确认文献或大纲
+  → 人工确认大纲
   → 恢复工作流
   → 生成带引用的 Markdown/DOCX 和图表
 ```
@@ -90,7 +90,7 @@ Core Research Backend v1 需要完成：
 
 - Research Project 和文献库；
 - PDF 上传、解析、切分和向量化；
-- OpenAlex 文献检索和 Crossref DOI 元数据校验；
+- Phase 3 使用 arXiv API 检索、下载并自动导入论文；
 - 基于项目文献库的 RAG 对话；
 - Evidence 和 Citation 可追溯；
 - 固定的文献综述 LangGraph Workflow；
@@ -238,8 +238,8 @@ Core v1 采用单仓库、单节点、少量进程的模块化单体：
                ▼                        ▼
 ┌──────────────────────────┐   ┌───────────────────────────┐
 │ PostgreSQL + pgvector    │   │ External Adapters         │
-│ business state / events │   │ LLM / OpenAlex / Crossref │
-│ vectors / checkpoints   │   │ parser / model / academic │
+│ business state / events │   │ LLM / arXiv / parser      │
+│ vectors / checkpoints   │   │ model / academic API      │
 └──────────────────────────┘   └───────────────────────────┘
                │
                ▼
@@ -464,12 +464,10 @@ Valkey 通知可以丢失，PostgreSQL Event 不可以丢失。
 ```text
 定义研究问题
   → 制定检索策略
-  → 搜索文献
-  → 元数据归一化与去重
-  → 人工确认纳入/排除
-  → 获取并解析全文
-  → 提取 Evidence
-  → 主题组织与大纲
+  → 从 arXiv 搜索并自动导入前 N 篇
+  → 等待全文解析与索引
+  → 提取 Evidence Matrix
+  → 生成结构化大纲
   → 人工确认大纲
   → 分章节撰写
   → 引用和一致性校验
@@ -673,14 +671,18 @@ Valkey 保存：
 QUEUED → RUNNING → SUCCEEDED
               ├→ FAILED
               ├→ RETRY_WAIT → QUEUED
-              ├→ WAITING_INPUT → QUEUED/RUNNING
+              ├→ WAITING_INPUT → QUEUED
+              ├→ WAITING_DEPENDENCY → QUEUED
               └→ CANCEL_REQUESTED → CANCELLED
 
 QUEUED → CANCELLED
 WAITING_INPUT → CANCELLED
+WAITING_DEPENDENCY → CANCELLED
 ```
 
 最终状态为 `SUCCEEDED`、`FAILED`、`CANCELLED`。详细合法转换、并发优先级和数据库实现必须在 Run Control 阶段 Spec 中确定。
+
+等待人工输入或子依赖时，当前 Worker Attempt 以 `PAUSED` 正常结束并释放执行资源。恢复会创建新的 Attempt。Outbox 沿用“一条 Run 一条可重置投递记录”：正常 Resume 使用 `schedule_again()` 将 `DISPATCHED` 重置为 `PENDING`，不增加失败重试计数；业务 Run 转为 `QUEUED`、原因 Event 和 Outbox 重置在同一事务提交。Event 记录业务时间线，Attempt 记录 Worker 执行历史，本阶段不增加完整队列投递历史表。
 
 ### 10.2 Event 类别
 
@@ -694,7 +696,7 @@ WAITING_INPUT → CANCELLED
 - Retrieval 摘要；
 - Agent 扩展的 Runtime/Tool Call 生命周期；
 - Artifact 创建；
-- 等待和完成人工输入；
+- 等待和完成人工输入或子依赖；
 - 重试、取消和错误。
 
 Event Payload 只保存前端和审计需要的信息，不保存完整 Prompt、密钥、PDF 全文或敏感 Tool 参数。
@@ -765,7 +767,7 @@ Paper
   → Citation Validation
 ```
 
-不要直接把所有 Chunk 拼成上下文后要求模型一次性生成完整综述。
+不要直接把所有 Chunk 拼成上下文后要求模型一次性生成完整综述。Phase 3 对短论文按序提供全部 Chunk；长论文按分析维度检索后合并、去重并限额，每篇论文一次调用提取全部维度。章节写作只读取当前章节对应的 Matrix 行及其 Evidence。
 
 ### 11.3 评测维度
 
@@ -1193,7 +1195,7 @@ literature-agent/
 #### 主要模块
 
 - Review Workflow；
-- OpenAlex/Crossref Adapter；
+- arXiv Search/Download Adapter；
 - Run Step；
 - Human Input；
 - Evidence Matrix；
@@ -1204,11 +1206,10 @@ literature-agent/
 ```text
 研究问题
   → 检索策略
-  → 文献搜索/去重
-  → 人工筛选
-  → 全文准备
-  → Evidence 提取
-  → 主题与大纲
+  → arXiv 搜索并自动导入前 N 篇
+  → 等待 Ingestion/Indexing
+  → Evidence Matrix 提取
+  → 结构化大纲
   → 人工确认大纲
   → 分节撰写
   → 引用/一致性校验
@@ -1217,13 +1218,13 @@ literature-agent/
 
 #### 阶段出口
 
-- Workflow 可以在两个明确节点等待人工输入；
+- Workflow 可以等待论文依赖，并在大纲节点等待人工输入；
 - Worker 重启后能从持久 Checkpoint 恢复；
 - 恢复不会重复创建 Paper、Evidence 或 Artifact；
 - 每个业务阶段在 Run Detail 中可观察；
 - 失败节点提供稳定错误码和可重试判断；
 - 最终综述每个主要 Claim 可追溯到 Evidence；
-- 输出包含检索和纳入文献清单；
+- 输出包含 arXiv 检索、成功导入和失败文献清单；
 - 学习笔记能解释 Checkpoint 为什么不等同于业务 Run 数据。
 
 ### Phase 4：Core Research Backend 产品闭环、可靠性与评测
@@ -1462,8 +1463,8 @@ Agent Extension 另需覆盖：
 - Hybrid Retrieval 的权重和 Top-K；
 - LangGraph 的精确 State 与 Node 列表；
 - Prompt 文本；
-- 人工筛选和大纲确认的 UI；
-- Citation Style 和 DOCX 模板；
+- 大纲确认的 UI 细节；
+- DOCX 模板；Phase 3 Markdown 已固定为 `[1]` 数字引用；
 - Metrics Bucket 和告警阈值。
 
 以下实现决策明确推迟到 Phase 5/6，而不是在 Core v1 中预先固定：
@@ -1565,7 +1566,6 @@ Research Agent Extension 完成后，可以追加：
 - [pgvector](https://github.com/pgvector/pgvector)
 - [Valkey](https://valkey.io/)
 - [Docling](https://github.com/docling-project/docling)
-- [OpenAlex API](https://developers.openalex.org/api-reference/introduction)
-- [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/)
+- [arXiv API User's Manual](https://info.arxiv.org/help/api/user-manual.html)
 - [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Sandboxes](https://docs.langchain.com/oss/python/deepagents/sandboxes)
