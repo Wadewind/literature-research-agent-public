@@ -23,6 +23,7 @@ from literature_agent.application.ports.session import Session
 from literature_agent.domain.event import create_event
 from literature_agent.domain.queue_outbox import QueueOutbox
 from literature_agent.domain.run import RunStatus
+from literature_agent.observability import log_event
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -91,17 +92,28 @@ class OutboxDispatchService:
                 continue
             try:
                 await self._queue.enqueue_run(entry.run_id)
-            except Exception:
-                logger.warning(
-                    "Outbox 投递失败: outbox_id=%s run_id=%s",
-                    entry.outbox_id,
-                    entry.run_id,
-                    exc_info=True,
+            except Exception as exc:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "outbox_dispatch_failed",
+                    exc=exc,
+                    outbox_id=entry.outbox_id,
+                    run_id=entry.run_id,
+                    error_code=type(exc).__name__,
                 )
                 await self._record_failure(entry, now)
                 continue
             if await self._mark_dispatched(entry.outbox_id, now):
                 dispatched += 1
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "outbox_dispatch_completed",
+                    outbox_id=entry.outbox_id,
+                    run_id=entry.run_id,
+                    status="dispatched",
+                )
         return dispatched
 
     async def _prepare_run(self, entry: QueueOutbox, now: datetime) -> bool:

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：切片 1–4 已完成，待推进切片 5
+- 当前状态：切片 1–5 已完成，待推进切片 6
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -277,6 +277,21 @@ LLM-as-a-Judge。
   `618 passed, 4 skipped`，PostgreSQL/Valkey integration 全量 `114 passed`；`ruff check src tests`
   与 `pyright` 通过。普通测试没有访问实时 arXiv 或付费 Provider。本切片未启动 dev server，未声称
   浏览器视觉/console 验证；完整 Review Playwright 旅程仍属于切片 9。
+- 切片 5「结构化日志与 Correlation ID」：已完成。新增标准库 JSON Formatter 与 contextvars 上下文，
+  每行固定包含 UTC `timestamp/level/event/service/correlation_id`，其余字段使用显式 allowlist；任意 extra、
+  旧自由文本 message、异常正文和 traceback 不会序列化。API 接受 1–128 个安全字符的
+  `X-Correlation-ID`，缺失或非法时生成 UUID，响应（含安全 500）回显并在请求结束 reset。Run
+  create/cancel、上传、Conversation message、Review create/cancel/outline-input 使用同一请求 ID 写入
+  既有 Event/应用调用，不修改 HTTP body schema 或事务。
+- Worker 仍只接收 `run_id`，以 job_id/run_id 摘要建立自己的有界 correlation；Run 认领并创建 Attempt
+  后，执行上下文来自 PostgreSQL 的 Project/Run type/Attempt 事实。Run outcome、Worker loops、Outbox、
+  Event notification、ModelGateway 和 Retrieval 摘要已迁移为固定结构化事件；Model 日志只含
+  capability/provider/model/status/duration/error type，不含 Prompt、结果或 Provider 错误正文。日志不替代
+  Event/Attempt/ModelInvocation，也未引入 Trace、日志平台或 Metrics。
+- 切片 5 实际验证：最终定向 API/Application/Worker/日志测试 `103 passed`；Backend 完整非集成
+  （安全修复前一轮，生产路径随后仅收紧日志序列化）`637 passed, 4 skipped`；相关 PostgreSQL/Valkey Run、Outbox、Worker、Event notifier、
+  ModelInvocation 与 Retrieval 集成 `41 passed`；`ruff check src tests`、`pyright` 通过。普通测试未访问
+  实时 arXiv 或付费 Provider。
 
 ## 11. 测试方式
 

@@ -14,7 +14,7 @@ from fastapi import (
     status,
 )
 
-from literature_agent.api.dependencies import ActorDep
+from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
 from literature_agent.application.ingestion_service import IngestionService, UploadResult
 from literature_agent.domain.exceptions import (
     FileValidationError,
@@ -81,6 +81,7 @@ async def upload_paper_file(
     actor: ActorDep,
     service: IngestionServiceDep,
     response: Response,
+    correlation_id: CorrelationIdDep,
     file: Annotated[UploadFile, File(...)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> UploadResult:
@@ -103,7 +104,7 @@ async def upload_paper_file(
             content_type=content_type,
             content=content,
             idempotency_key=idempotency_key,
-            correlation_id="api-upload-paper-file",
+            correlation_id=correlation_id,
         )
         if result.already_added:
             response.status_code = status.HTTP_200_OK

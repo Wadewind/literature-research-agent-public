@@ -26,6 +26,7 @@ from literature_agent.domain.retrieval import (
     apply_token_budget,
     rrf_merge,
 )
+from literature_agent.observability import log_event
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -148,7 +149,10 @@ class Retriever[TSession: Session]:
             )
 
         return self._merge_and_rank(
-            semantic, fts, log_context=f"project_id={project_id}"
+            semantic,
+            fts,
+            project_id=project_id,
+            run_id=run_id,
         )
 
     async def retrieve_for_scope(
@@ -201,14 +205,15 @@ class Retriever[TSession: Session]:
                 version_scope=version_scope,
             )
 
-        return self._merge_and_rank(semantic, fts, log_context=f"run_id={run_id}")
+        return self._merge_and_rank(semantic, fts, run_id=run_id)
 
     def _merge_and_rank(
         self,
         semantic: list[RetrievedChunk],
         fts: list[RetrievedChunk],
         *,
-        log_context: str,
+        project_id: str | None = None,
+        run_id: str | None = None,
     ) -> list[RetrievalResult]:
         """两路候选 RRF 合并、每篇上限与预算截断、重新编号排名。"""
         candidates = rrf_merge(
@@ -247,12 +252,16 @@ class Retriever[TSession: Session]:
             for index, c in enumerate(candidates, start=1)
         ]
         # 日志只记录候选数量摘要，不记录问题文本或 Chunk 内容
-        logger.info(
-            "检索完成: %s semantic=%d fts=%d merged=%d final=%d",
-            log_context,
-            len(semantic),
-            len(fts),
-            merged_count,
-            len(results),
+        log_event(
+            logger,
+            logging.INFO,
+            "retrieval_completed",
+            operation="hybrid",
+            project_id=project_id,
+            run_id=run_id,
+            semantic_count=len(semantic),
+            fulltext_count=len(fts),
+            merged_count=merged_count,
+            evidence_count=len(results),
         )
         return results

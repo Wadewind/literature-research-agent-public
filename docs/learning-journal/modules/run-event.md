@@ -51,6 +51,9 @@ SSE (GET /runs/{run_id}/events/stream)
 - **SSE 以 PostgreSQL 为事实来源**（切片 9）：事件永远从数据库读取，Valkey Pub/Sub 通知只触发"去查库"，丢失通知由 1s 轮询兜底收敛；不追求跨进程 Exactly Once。
 - **SSE id 直接用 sequence 字符串**：`Last-Event-ID` 携带已收到的最大 sequence，重连后重放其后全部历史，不重不漏；不引入全局 event UUID 游标。
 - **通知注入点在应用服务**（切片 9）：写事件的服务在 commit 后调用 `EventNotifier.notify(run_id)`（publish 失败只记日志）；替代方案（Repository 层钩子）会把外部调用带进事务，违反边界。
+- Phase 4 切片 5 后，API mutation 从 `X-Correlation-ID` 中间件依赖获取 correlation 并写入既有 Event；
+  合法值有 128 字符安全边界，缺失/非法值生成 UUID。通知仍发生在 commit 之后，失败只产生脱敏的
+  `event_notification_failed` JSON 日志（run_id + error type），不记录异常正文，也不回滚业务 Event。
 - 状态机在领域对象中实现，而非散落在 Service 或数据库触发器，便于测试和保证不变量。
 - 使用 `event_version` 为 Event 契约预留版本化空间。
 - 用 `RunRepository.update_status` 做条件更新，捕获并发冲突并映射为 `RunConcurrentModificationError`。

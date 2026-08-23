@@ -15,6 +15,7 @@ Attempt 是运维记录（lease/对账依据），业务事实仍以 Run 和 Eve
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, suppress
 from datetime import UTC, datetime
@@ -42,6 +43,7 @@ from literature_agent.domain.run_attempt import (
     RunAttempt,
     create_run_attempt,
 )
+from literature_agent.observability import bind_log_context, log_event
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -115,40 +117,95 @@ class RunExecutionService:
         返回:
             执行结果类别；重复 Job、已终态或并发冲突返回 ``SKIPPED``。
         """
-        started = await self._start(run_id, correlation_id)
-        if started is None:
-            return ExecutionOutcome.MISSING
-        run, attempt = started
-        if run.status != RunStatus.RUNNING or attempt is None:
-            return ExecutionOutcome.SKIPPED
+        clock_started = time.monotonic()
+        with bind_log_context(correlation_id=correlation_id, run_id=run_id):
+            started = await self._start(run_id, correlation_id)
+            if started is None:
+                return self._log_outcome(
+                    ExecutionOutcome.MISSING,
+                    clock_started,
+                    status="missing",
+                )
+            run, attempt = started
+            if run.status != RunStatus.RUNNING or attempt is None:
+                return self._log_outcome(
+                    ExecutionOutcome.SKIPPED, clock_started, status=run.status.value
+                )
 
-        heartbeat = asyncio.create_task(self._heartbeat_loop(attempt.attempt_id))
-        try:
-            await self._executor(run, correlation_id)
-        except Exception as exc:
-            logger.warning("Run 执行失败: run_id=%s", run_id, exc_info=True)
-            outcome = await self._fail(run_id, attempt, exc, correlation_id)
-            return outcome
-        finally:
-            heartbeat.cancel()
-            with suppress(asyncio.CancelledError):
-                await heartbeat
+            with bind_log_context(
+                project_id=run.project_id,
+                attempt_id=attempt.attempt_id,
+                run_type=getattr(run.run_type, "value", run.run_type),
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "run_execution_started",
+                    status=run.status.value,
+                )
+                heartbeat = asyncio.create_task(
+                    self._heartbeat_loop(attempt.attempt_id)
+                )
+                try:
+                    await self._executor(run, correlation_id)
+                except Exception as exc:
+                    outcome = await self._fail(run_id, attempt, exc, correlation_id)
+                    return self._log_outcome(
+                        outcome,
+                        clock_started,
+                        error_code=type(exc).__name__,
+                    )
+                finally:
+                    heartbeat.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await heartbeat
 
-        final_status = await self._get_status(run_id)
-        await self._close_attempt(attempt.attempt_id, final_status)
-        if final_status == RunStatus.SUCCEEDED:
-            return ExecutionOutcome.COMPLETED
-        if final_status == RunStatus.FAILED:
-            return ExecutionOutcome.FAILED
-        if final_status == RunStatus.RETRY_WAIT:
-            return ExecutionOutcome.RETRY_SCHEDULED
-        if final_status in {
-            RunStatus.WAITING_INPUT,
-            RunStatus.WAITING_DEPENDENCY,
-        }:
-            return ExecutionOutcome.PAUSED
-        # 执行期间被并发取消，或执行器没有推进到已知结束状态
-        return ExecutionOutcome.SKIPPED
+                final_status = await self._get_status(run_id)
+                await self._close_attempt(attempt.attempt_id, final_status)
+                if final_status == RunStatus.SUCCEEDED:
+                    outcome = ExecutionOutcome.COMPLETED
+                elif final_status == RunStatus.FAILED:
+                    outcome = ExecutionOutcome.FAILED
+                elif final_status == RunStatus.RETRY_WAIT:
+                    outcome = ExecutionOutcome.RETRY_SCHEDULED
+                elif final_status in {
+                    RunStatus.WAITING_INPUT,
+                    RunStatus.WAITING_DEPENDENCY,
+                }:
+                    outcome = ExecutionOutcome.PAUSED
+                else:
+                    # 执行期间被并发取消，或执行器没有推进到已知结束状态
+                    outcome = ExecutionOutcome.SKIPPED
+                return self._log_outcome(
+                    outcome,
+                    clock_started,
+                    status=final_status.value if final_status else "missing",
+                )
+
+    @staticmethod
+    def _log_outcome(
+        outcome: ExecutionOutcome,
+        started: float,
+        *,
+        status: str | None = None,
+        error_code: str | None = None,
+    ) -> ExecutionOutcome:
+        event = {
+            ExecutionOutcome.COMPLETED: "run_execution_completed",
+            ExecutionOutcome.FAILED: "run_execution_failed",
+            ExecutionOutcome.RETRY_SCHEDULED: "run_execution_retry",
+            ExecutionOutcome.PAUSED: "run_execution_paused",
+        }.get(outcome, "run_execution_skipped")
+        log_event(
+            logger,
+            logging.INFO if outcome not in {ExecutionOutcome.FAILED} else logging.WARNING,
+            event,
+            status=status or outcome.value,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_code=error_code,
+            exception_type=error_code,
+        )
+        return outcome
 
     async def _start(
         self,
@@ -217,8 +274,15 @@ class RunExecutionService:
                     await session.commit()
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.warning("Attempt 心跳失败: attempt_id=%s", attempt_id, exc_info=True)
+            except Exception as exc:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "attempt_heartbeat_failed",
+                    exc=exc,
+                    attempt_id=attempt_id,
+                    error_code=type(exc).__name__,
+                )
 
     async def _close_attempt(
         self,
@@ -248,8 +312,15 @@ class RunExecutionService:
                     attempt_id, attempt_status, datetime.now(UTC)
                 )
                 await session.commit()
-        except Exception:
-            logger.warning("关闭 Attempt 失败: attempt_id=%s", attempt_id, exc_info=True)
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "attempt_close_failed",
+                exc=exc,
+                attempt_id=attempt_id,
+                error_code=type(exc).__name__,
+            )
 
     async def _fail(
         self,
@@ -303,8 +374,15 @@ class RunExecutionService:
                     attempt.attempt_id, attempt_status, datetime.now(UTC), error
                 )
                 await session.commit()
-        except Exception:
-            logger.warning("关闭 Attempt 失败: attempt_id=%s", attempt.attempt_id, exc_info=True)
+        except Exception as close_exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "attempt_close_failed",
+                exc=close_exc,
+                attempt_id=attempt.attempt_id,
+                error_code=type(close_exc).__name__,
+            )
         if outcome == RunFailureOutcome.RETRY_SCHEDULED:
             return ExecutionOutcome.RETRY_SCHEDULED
         if outcome == RunFailureOutcome.FAILED:

@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from literature_agent.application.run_execution_service import ExecutionOutcome
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.config import Settings
+from literature_agent.observability import get_log_context
 from literature_agent.worker import (
     _build_arxiv_gateway,
     _build_model_stack,
@@ -76,3 +78,31 @@ def test_fake_model_stack_uses_offline_tokenizer() -> None:
 
     assert profile.tokenizer == OFFLINE_TOKENIZER
     assert closables == []
+
+
+async def test_execute_run_builds_bounded_worker_context_without_job_payload() -> None:
+    """Worker 从本地 Job 事实构造有界关联标识，退出后不泄漏上下文。"""
+    service = AsyncMock()
+    observed: dict = {}
+
+    async def execute(run_id: str, correlation_id: str):
+        observed.update(get_log_context())
+        observed["argument"] = correlation_id
+        assert run_id == "run-1"
+        return ExecutionOutcome.COMPLETED
+
+    service.execute.side_effect = execute
+    long_job_id = "job-secret-payload-" + "x" * 500
+
+    result = await execute_run(
+        {"run_execution_service": service, "job_id": long_job_id}, "run-1"
+    )
+
+    assert result == "completed"
+    assert observed["service"] == "worker"
+    assert observed["run_id"] == "run-1"
+    assert observed["correlation_id"] == observed["argument"]
+    assert observed["correlation_id"].startswith("worker:")
+    assert len(observed["correlation_id"]) == 31
+    assert long_job_id not in observed["correlation_id"]
+    assert get_log_context() == {}

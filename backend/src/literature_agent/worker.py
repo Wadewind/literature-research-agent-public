@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import socket
@@ -134,6 +135,11 @@ from literature_agent.infrastructure.queue.valkey_event_notifier import (
 )
 from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
 from literature_agent.infrastructure.workflow.postgres_checkpoint import PostgresCheckpointStore
+from literature_agent.observability import (
+    bind_log_context,
+    configure_logging,
+    log_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -264,10 +270,11 @@ async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
     Job 可安全重复执行：RunExecutionService 只在 QUEUED 状态认领 Run。
     """
     service: RunExecutionService = ctx["run_execution_service"]
-    outcome = await service.execute(
-        run_id,
-        correlation_id=f"arq-job:{ctx.get('job_id', run_id)}",
-    )
+    raw_job_id = str(ctx.get("job_id", run_id))
+    digest = hashlib.sha256(f"{run_id}:{raw_job_id}".encode()).hexdigest()[:24]
+    correlation_id = f"worker:{digest}"
+    with bind_log_context(service="worker", correlation_id=correlation_id, run_id=run_id):
+        outcome = await service.execute(run_id, correlation_id=correlation_id)
     return outcome.value
 
 
@@ -280,8 +287,14 @@ async def _dispatch_loop(ctx: dict[str, Any]) -> None:
             await service.dispatch_pending()
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Outbox 派发循环出错")
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "outbox_dispatch_loop_failed",
+                exc=exc,
+                error_code=type(exc).__name__,
+            )
         await asyncio.sleep(settings.outbox_poll_interval_seconds)
 
 
@@ -294,13 +307,24 @@ async def _reconcile_loop(ctx: dict[str, Any]) -> None:
             recovered = await service.reconcile_expired()
             orphaned = await service.reconcile_orphaned_attempts()
             if recovered:
-                logger.info("对账收回 %d 个过期 Run", recovered)
+                log_event(logger, logging.INFO, "run_reconcile_completed", count=recovered)
             if orphaned:
-                logger.info("对账关闭 %d 个残留 Attempt", orphaned)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "attempt_reconcile_completed",
+                    count=orphaned,
+                )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Run 对账循环出错")
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "run_reconcile_loop_failed",
+                exc=exc,
+                error_code=type(exc).__name__,
+            )
         await asyncio.sleep(settings.worker_reconcile_interval_seconds)
 
 
@@ -312,17 +336,29 @@ async def _dependency_reconcile_loop(ctx: dict[str, Any]) -> None:
         try:
             completed = await service.reconcile_waiting()
             if completed:
-                logger.info("依赖对账恢复或终止 %d 个 Review Run", completed)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "review_dependency_reconcile_completed",
+                    count=completed,
+                )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # 与 lease Reconciler 隔离：本循环单轮失败不影响 Worker 崩溃恢复。
-            logger.exception("Review 依赖对账循环出错")
+            log_event(
+                logger,
+                logging.ERROR,
+                "review_dependency_reconcile_loop_failed",
+                exc=exc,
+                error_code=type(exc).__name__,
+            )
         await asyncio.sleep(settings.worker_reconcile_interval_seconds)
 
 
 async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
     """Worker 启动：建立数据库、队列依赖并启动派发与对账循环。"""
+    configure_logging(service="worker")
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     queue = ArqRunQueue(settings.redis_url)
@@ -628,7 +664,7 @@ def make_worker_settings(settings: Settings) -> type:
 
 def main() -> None:
     """Worker 进程入口。"""
-    logging.basicConfig(level=logging.INFO)
+    configure_logging(service="worker")
     settings = Settings.from_env()
     run_worker(make_worker_settings(settings))
 

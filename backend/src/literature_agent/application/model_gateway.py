@@ -29,6 +29,7 @@ from literature_agent.domain.model_types import (
     ChatResult,
     EmbeddingResult,
 )
+from literature_agent.observability import log_event
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -80,24 +81,40 @@ class ModelGateway[TSession: Session]:
         try:
             result = await self._embedding_model.embed(texts)
         except Exception as exc:
+            latency_ms = self._elapsed_ms(started)
             await self._record(
                 run_id=run_id,
                 capability=ModelCapability.EMBEDDING,
                 port=self._embedding_model,
                 status=InvocationStatus.FAILED,
-                latency_ms=self._elapsed_ms(started),
+                latency_ms=latency_ms,
                 error_type=type(exc).__name__,
             )
+            self._log_request(
+                capability=ModelCapability.EMBEDDING,
+                status=InvocationStatus.FAILED,
+                latency_ms=latency_ms,
+                run_id=run_id,
+                error_code=type(exc).__name__,
+            )
             raise
+        latency_ms = self._elapsed_ms(started)
         await self._record(
             run_id=run_id,
             capability=ModelCapability.EMBEDDING,
             port=self._embedding_model,
             status=InvocationStatus.SUCCEEDED,
-            latency_ms=self._elapsed_ms(started),
+            latency_ms=latency_ms,
             model=result.model,
             prompt_tokens=result.usage.prompt_tokens,
             completion_tokens=result.usage.completion_tokens,
+        )
+        self._log_request(
+            capability=ModelCapability.EMBEDDING,
+            status=InvocationStatus.SUCCEEDED,
+            latency_ms=latency_ms,
+            run_id=run_id,
+            model=result.model,
         )
         return result
 
@@ -126,26 +143,71 @@ class ModelGateway[TSession: Session]:
                 messages, json_schema=json_schema, max_tokens=max_tokens
             )
         except Exception as exc:
+            latency_ms = self._elapsed_ms(started)
             await self._record(
                 run_id=run_id,
                 capability=ModelCapability.CHAT,
                 port=self._chat_model,
                 status=InvocationStatus.FAILED,
-                latency_ms=self._elapsed_ms(started),
+                latency_ms=latency_ms,
                 error_type=type(exc).__name__,
             )
+            self._log_request(
+                capability=ModelCapability.CHAT,
+                status=InvocationStatus.FAILED,
+                latency_ms=latency_ms,
+                run_id=run_id,
+                error_code=type(exc).__name__,
+            )
             raise
+        latency_ms = self._elapsed_ms(started)
         await self._record(
             run_id=run_id,
             capability=ModelCapability.CHAT,
             port=self._chat_model,
             status=InvocationStatus.SUCCEEDED,
-            latency_ms=self._elapsed_ms(started),
+            latency_ms=latency_ms,
             model=result.model,
             prompt_tokens=result.usage.prompt_tokens,
             completion_tokens=result.usage.completion_tokens,
         )
+        self._log_request(
+            capability=ModelCapability.CHAT,
+            status=InvocationStatus.SUCCEEDED,
+            latency_ms=latency_ms,
+            run_id=run_id,
+            model=result.model,
+        )
         return result
+
+    def _log_request(
+        self,
+        *,
+        capability: ModelCapability,
+        status: InvocationStatus,
+        latency_ms: int,
+        run_id: str | None,
+        error_code: str | None = None,
+        model: str | None = None,
+    ) -> None:
+        port = (
+            self._embedding_model if capability == ModelCapability.EMBEDDING else self._chat_model
+        )
+        log_event(
+            logger,
+            logging.INFO if status == InvocationStatus.SUCCEEDED else logging.WARNING,
+            "model_request_completed"
+            if status == InvocationStatus.SUCCEEDED
+            else "model_request_failed",
+            operation=capability.value,
+            provider=port.provider,
+            model=model or port.model,
+            status=status.value,
+            duration_ms=latency_ms,
+            run_id=run_id,
+            error_code=error_code,
+            exception_type=error_code,
+        )
 
     @staticmethod
     def _elapsed_ms(started: float) -> int:
@@ -181,10 +243,15 @@ class ModelGateway[TSession: Session]:
             async with self._session_factory() as session:
                 await self._invocation_repo_factory(session).add(invocation)
                 await session.commit()
-        except Exception:
-            logger.warning(
-                "模型调用记录持久化失败: invocation_id=%s capability=%s",
-                invocation.invocation_id,
-                capability.value,
-                exc_info=True,
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "model_invocation_record_failed",
+                exc=exc,
+                operation=capability.value,
+                provider=port.provider,
+                model=model or port.model,
+                run_id=run_id,
+                error_code=type(exc).__name__,
             )

@@ -24,7 +24,7 @@ from tests.fakes.fake_storage import FakeStorage
 
 def _build_fake_service(
     project_repo: FakeProjectRepository,
-) -> tuple[IngestionService, FakePaperRepository]:
+) -> tuple[IngestionService, FakePaperRepository, FakeEventRepository]:
     """基于 Fake Repository 构建 IngestionService，并返回 Paper 仓库便于测试准备。"""
     paper_repo = FakePaperRepository()
     paper_version_repo = FakePaperVersionRepository()
@@ -50,6 +50,7 @@ def _build_fake_service(
             storage=storage,
         ),
         paper_repo,
+        event_repo,
     )
 
 
@@ -60,7 +61,7 @@ async def client():
     project = create_project(owner_id="user-1", name="测试项目", description="")
     await project_repo.add(project)
 
-    service, paper_repo = _build_fake_service(project_repo)
+    service, paper_repo, event_repo = _build_fake_service(project_repo)
 
     app = create_app()
 
@@ -74,7 +75,7 @@ async def client():
     app.dependency_overrides[get_ingestion_service] = service_override
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as test_client:
-        yield test_client, project.project_id, project_repo, paper_repo
+        yield test_client, project.project_id, project_repo, paper_repo, event_repo
 
     app.dependency_overrides.clear()
 
@@ -87,12 +88,15 @@ def _pdf_file() -> tuple[BytesIO, str]:
 
 async def test_upload_paper_file_returns_202(client) -> None:
     """上传合法 PDF 应返回 202 和 run_id。"""
-    test_client, project_id, *_ = client
+    test_client, project_id, *_, event_repo = client
     file_obj, filename = _pdf_file()
 
     response = await test_client.post(
         f"/api/v1/projects/{project_id}/paper-files",
-        headers={"Idempotency-Key": "api-key-1"},
+        headers={
+            "Idempotency-Key": "api-key-1",
+            "X-Correlation-ID": "upload-correlation-1",
+        },
         files={"file": (filename, file_obj, "application/pdf")},
     )
 
@@ -102,6 +106,7 @@ async def test_upload_paper_file_returns_202(client) -> None:
     assert data["run_id"]
     assert data["paper_id"]
     assert data["version_id"]
+    assert event_repo._events[-1].correlation_id == "upload-correlation-1"
 
 
 async def test_upload_missing_idempotency_key_returns_400(client) -> None:
@@ -166,7 +171,7 @@ async def test_upload_idempotent_conflict_returns_409(client) -> None:
 
 async def test_upload_to_archived_project_returns_409(client) -> None:
     """向已归档 Project 上传返回 409 project_archived。"""
-    test_client, project_id, project_repo, _ = client
+    test_client, project_id, project_repo, *_ = client
     project = await project_repo.get_by_id(project_id)
     await project_repo.update(project.archive())
     file_obj, filename = _pdf_file()
@@ -183,7 +188,7 @@ async def test_upload_to_archived_project_returns_409(client) -> None:
 
 async def test_upload_same_hash_of_archived_paper_reuses_with_flag(client) -> None:
     """同 SHA-256 命中已归档 Paper：复用成功并返回 paper_archived=true。"""
-    test_client, project_id, _, paper_repo = client
+    test_client, project_id, _, paper_repo, _ = client
     file_obj, filename = _pdf_file()
 
     first = await test_client.post(

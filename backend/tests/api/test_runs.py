@@ -45,7 +45,7 @@ async def client():
 
 def test_create_run(client) -> None:
     """POST /api/v1/runs 应创建 Run 并返回 201。"""
-    test_client, _, _ = client
+    test_client, _, fake_event_repo = client
 
     response = test_client.post(
         "/api/v1/runs",
@@ -54,6 +54,7 @@ def test_create_run(client) -> None:
             "run_type": "ingestion",
             "input_payload": {"file": "x.pdf"},
         },
+        headers={"X-Correlation-ID": "client-create-1"},
     )
 
     assert response.status_code == 201
@@ -61,6 +62,7 @@ def test_create_run(client) -> None:
     assert data["run_type"] == "ingestion"
     assert data["status"] == "queued"
     assert data["owner_id"] == "user-1"
+    assert fake_event_repo._events[-1].correlation_id == "client-create-1"
 
 
 def test_get_run(client) -> None:
@@ -88,15 +90,19 @@ def test_get_run_not_found(client) -> None:
 
 def test_cancel_run(client) -> None:
     """POST /api/v1/runs/{id}/cancel 返回 202。"""
-    test_client, fake_run_repo, _ = client
+    test_client, fake_run_repo, fake_event_repo = client
     from literature_agent.domain.run import create_run
 
     run = create_run(project_id="p1", owner_id="user-1", run_type="ingestion")
     fake_run_repo._runs[run.run_id] = run
 
-    response = test_client.post(f"/api/v1/runs/{run.run_id}/cancel")
+    response = test_client.post(
+        f"/api/v1/runs/{run.run_id}/cancel",
+        headers={"X-Correlation-ID": "client-cancel-1"},
+    )
 
     assert response.status_code == 202
+    assert fake_event_repo._events[-1].correlation_id == "client-cancel-1"
 
 
 def test_list_events(client) -> None:

@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
-from literature_agent.api.dependencies import ActorDep
+from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
 from literature_agent.application.review_outline_service import HumanOutlineInputService
 from literature_agent.application.review_query_service import ReviewOutputType, ReviewQueryService
 from literature_agent.application.review_workflow_service import ReviewWorkflowService
@@ -122,13 +122,14 @@ async def create_review(
     body: ReviewCreateRequest,
     actor: ActorDep,
     service: ReviewWorkflowDep,
+    correlation_id: CorrelationIdDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> Response:
     if idempotency_key is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 Idempotency-Key 请求头")
     try:
         result = await service.create_review_run(
-            actor, project_id, body.research_question, idempotency_key, "api-create-review"
+            actor, project_id, body.research_question, idempotency_key, correlation_id
         )
     except (ProjectNotFoundError, RunNotFoundError):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project 不存在") from None
@@ -168,10 +169,11 @@ async def cancel_review(
     actor: ActorDep,
     query: ReviewQueryDep,
     service: ReviewRunDep,
+    correlation_id: CorrelationIdDep,
 ) -> dict:
     try:
         await query.detail(actor, project_id, run_id)
-        await service.cancel_run(actor, run_id, "api-cancel-review")
+        await service.cancel_run(actor, run_id, correlation_id)
     except RunNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Review 不存在") from None
     except InvalidRunTransitionError:
@@ -228,6 +230,7 @@ async def submit_outline_input(
     body: OutlineInputRequest,
     actor: ActorDep,
     service: OutlineInputDep,
+    correlation_id: CorrelationIdDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict:
     if idempotency_key is None:
@@ -243,7 +246,7 @@ async def submit_outline_input(
             action=body.action,
             payload=body.payload,
             idempotency_key=idempotency_key,
-            correlation_id="api-outline-input",
+            correlation_id=correlation_id,
         )
     except RunNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Review 不存在") from None

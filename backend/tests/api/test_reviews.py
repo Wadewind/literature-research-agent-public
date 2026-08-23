@@ -26,13 +26,16 @@ from literature_agent.main import create_app
 
 
 class _Workflow:
+    correlation_id = None
+
     async def create_review_run(self, actor, project_id, question, key, correlation_id):
+        self.correlation_id = correlation_id
         assert actor.owner_id == "user-1"
         assert (project_id, question, key, correlation_id) == (
             "project-1",
             "研究问题",
             "create-1",
-            "api-create-review",
+            "review-create-1",
         )
         return CreateReviewRunResult("review-1", "queued")
 
@@ -114,9 +117,11 @@ class _SubmitResult:
 class _RunService:
     def __init__(self) -> None:
         self.cancelled = False
+        self.correlation_id = None
 
     async def cancel_run(self, *_args):
         self.cancelled = True
+        self.correlation_id = _args[-1]
 
     async def list_events(self, actor, run_id, after_sequence, limit):
         assert (actor.owner_id, run_id, after_sequence, limit) == (
@@ -169,12 +174,13 @@ async def client():
     outline = _OutlineInput()
     runs = _RunService()
     app.dependency_overrides[get_actor] = lambda: ActorContext("user-1")
-    app.dependency_overrides[get_review_workflow_service] = lambda: _Workflow()
+    workflow = _Workflow()
+    app.dependency_overrides[get_review_workflow_service] = lambda: workflow
     app.dependency_overrides[get_review_query_service] = lambda: query
     app.dependency_overrides[get_outline_input_service] = lambda: outline
     app.dependency_overrides[get_review_run_service] = lambda: runs
     with TestClient(app) as test_client:
-        yield test_client, query, outline, runs
+        yield test_client, query, outline, runs, workflow
     app.dependency_overrides.clear()
 
 
@@ -188,7 +194,10 @@ def test_create_requires_idempotency_key_and_returns_created(client) -> None:
     response = test_client.post(
         "/api/v1/projects/project-1/reviews",
         json={"research_question": "研究问题"},
-        headers={"Idempotency-Key": "create-1"},
+        headers={
+            "Idempotency-Key": "create-1",
+            "X-Correlation-ID": "review-create-1",
+        },
     )
     assert response.status_code == 202
     assert response.json() == {"run_id": "review-1", "status": "queued", "reused": False}
@@ -224,10 +233,13 @@ def test_matrix_is_project_scoped_and_missing_outline_is_404(client) -> None:
 
 
 def test_outline_input_passes_request_and_output_versions(client) -> None:
-    test_client, _, outline, _ = client
+    test_client, _, outline, _, _ = client
     response = test_client.post(
         "/api/v1/projects/project-1/reviews/review-1/outline-input",
-        headers={"Idempotency-Key": "input-1"},
+        headers={
+            "Idempotency-Key": "input-1",
+            "X-Correlation-ID": "outline-input-1",
+        },
         json={
             "request_id": "request-1",
             "request_version": 1,
@@ -240,10 +252,11 @@ def test_outline_input_passes_request_and_output_versions(client) -> None:
     assert outline.kwargs["outline_output_id"] == "outline-1"
     assert outline.kwargs["owner_id"] == "user-1"
     assert outline.kwargs["idempotency_key"] == "input-1"
+    assert outline.kwargs["correlation_id"] == "outline-input-1"
 
 
 def test_detail_sources_artifacts_download_cancel_and_event_cursor(client) -> None:
-    test_client, _, _, runs = client
+    test_client, _, _, runs, _ = client
     base = "/api/v1/projects/project-1/reviews/review-1"
 
     assert test_client.get(base).json()["run"]["run_id"] == "review-1"
@@ -257,8 +270,14 @@ def test_detail_sources_artifacts_download_cancel_and_event_cursor(client) -> No
     events = test_client.get(f"{base}/events?after_sequence=2&limit=5")
     assert events.json() == [{"sequence": 3, "event_type": "review_artifact_created"}]
     assert test_client.get(f"{base}/events?after_sequence=-1").status_code == 422
-    assert test_client.post(f"{base}/cancel").status_code == 202
+    assert (
+        test_client.post(
+            f"{base}/cancel", headers={"X-Correlation-ID": "review-cancel-1"}
+        ).status_code
+        == 202
+    )
     assert runs.cancelled
+    assert runs.correlation_id == "review-cancel-1"
 
 
 def test_sections_are_project_scoped_and_return_only_structured_outputs(client) -> None:

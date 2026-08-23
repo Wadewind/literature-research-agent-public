@@ -255,7 +255,10 @@ def test_post_message_returns_202(client) -> None:
     response = test_client.post(
         f"/api/v1/conversations/{conversation['conversation_id']}/messages",
         json={"content": "什么是 RAG？"},
-        headers={"Idempotency-Key": "key-1"},
+        headers={
+            "Idempotency-Key": "key-1",
+            "X-Correlation-ID": "message-correlation-1",
+        },
     )
 
     assert response.status_code == 202
@@ -263,6 +266,8 @@ def test_post_message_returns_202(client) -> None:
     assert data["status"] == "queued"
     assert data["user_message_id"]
     assert data["run_id"]
+    event = next(e for e in fakes.event_repo._events if e.run_id == data["run_id"])
+    assert event.correlation_id == "message-correlation-1"
 
 
 def test_post_message_requires_idempotency_key(client) -> None:

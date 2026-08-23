@@ -56,6 +56,12 @@ chmod 600 .env
 
 脚本会启动 PostgreSQL/Valkey、执行 Alembic 迁移，再并行启动 API、Worker 和 Web。按 `Ctrl-C` 停止 API、Worker、npm 及其 Vite 子进程；数据库和 Valkey 容器继续运行。脚本不会安装依赖、删除数据卷或打印 API Key；Fake 模式也不会读取 `.env`。
 
+API 与 Worker 日志以单行 JSON 输出。HTTP 响应会回显 `X-Correlation-ID`；客户端可以提供 1–128 个
+`A-Za-z0-9._:-` 字符的 ID，缺失或非法时由 API 生成 UUID。API mutation 的 ID 会进入对应业务 Event；
+Worker 为每个 Job 建立独立 correlation，并通过同一 `run_id` 与 API/Event 链路关联。日志不包含请求
+query/body/headers、完整 Prompt、模型响应、PDF/Chunk 全文或异常 traceback。当前只提供本地标准输出，
+没有集中日志平台、OpenTelemetry Trace、告警或 SLA。
+
 访问地址：
 
 - Web：<http://localhost:5173>

@@ -1,5 +1,7 @@
 """ModelGateway 应用服务测试（切片 3）。"""
 
+import logging
+
 import pytest
 
 from literature_agent.application.model_gateway import ModelGateway
@@ -109,3 +111,68 @@ async def test_recording_failure_does_not_mask_model_error() -> None:
 
     with pytest.raises(ModelRateLimitError):
         await gateway.generate([ChatMessage(role="user", content="问题")])
+
+
+async def test_model_success_log_has_safe_summary_without_prompt(caplog) -> None:
+    """成功日志只含 Provider 摘要，不包含 message 或模型结果正文。"""
+    repo = FakeModelInvocationRepository()
+    chat = FakeChatModel(responses=['{"private": "model-output"}'])
+    gateway = _make_gateway(repo, chat_model=chat)
+    caplog.set_level(logging.INFO, logger="literature_agent.application.model_gateway")
+
+    await gateway.generate(
+        [ChatMessage(role="user", content="private-user-question")], run_id="run-1"
+    )
+
+    record = next(
+        r for r in caplog.records if getattr(r, "event", None) == "model_request_completed"
+    )
+    assert record.operation == "chat"
+    assert record.provider == "fake"
+    assert record.model == "fake-chat"
+    assert record.run_id == "run-1"
+    assert not hasattr(record, "messages")
+    assert "private-user-question" not in record.getMessage()
+    assert "model-output" not in record.getMessage()
+
+
+async def test_model_failure_log_uses_error_type_without_exception_message(caplog) -> None:
+    """失败日志只记录稳定错误类型，不记录异常正文。"""
+    repo = FakeModelInvocationRepository()
+    chat = FakeChatModel(responses=[ModelRateLimitError("secret-provider-body")])
+    gateway = _make_gateway(repo, chat_model=chat)
+    caplog.set_level(logging.WARNING, logger="literature_agent.application.model_gateway")
+
+    with pytest.raises(ModelRateLimitError):
+        await gateway.generate([ChatMessage(role="user", content="private-question")])
+
+    record = next(r for r in caplog.records if getattr(r, "event", None) == "model_request_failed")
+    assert record.error_code == "ModelRateLimitError"
+    assert record.exception_type == "ModelRateLimitError"
+    assert "secret-provider-body" not in record.getMessage()
+    assert record.exc_info is None
+
+
+async def test_logging_failure_does_not_change_model_result() -> None:
+    """日志 Handler 故障不能把成功模型调用变成业务失败。"""
+
+    class _FailingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            del record
+            raise RuntimeError("logging unavailable")
+
+    repo = FakeModelInvocationRepository()
+    gateway = _make_gateway(repo)
+    logger = logging.getLogger("literature_agent.application.model_gateway")
+    previous_handlers = list(logger.handlers)
+    previous_propagate = logger.propagate
+    logger.handlers = [_FailingHandler()]
+    logger.propagate = False
+    try:
+        result = await gateway.embed(["文本"], run_id="run-log-failure")
+    finally:
+        logger.handlers = previous_handlers
+        logger.propagate = previous_propagate
+
+    assert len(result.vectors) == 1
+    assert repo.all()[0].run_id == "run-log-failure"

@@ -7,6 +7,7 @@
 import logging
 
 from literature_agent.application.ports.event_notifier import EventNotifier
+from literature_agent.observability import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -15,5 +16,12 @@ async def notify_run_event(notifier: EventNotifier, run_id: str) -> None:
     """在事件事务提交后发送通知；失败静默降级为轮询收敛。"""
     try:
         await notifier.notify(run_id)
-    except Exception:
-        logger.warning("事件通知失败: run_id=%s", run_id, exc_info=True)
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "event_notification_failed",
+            exc=exc,
+            run_id=run_id,
+            error_code=type(exc).__name__,
+        )

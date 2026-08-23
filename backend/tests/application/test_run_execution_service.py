@@ -1,5 +1,6 @@
 """RunExecutionService 应用服务测试。"""
 
+import logging
 from datetime import UTC, datetime
 
 import pytest
@@ -13,6 +14,7 @@ from literature_agent.domain.exceptions import InvalidPdfInputError
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import Run, RunStatus, create_run
 from literature_agent.domain.run_attempt import AttemptStatus
+from literature_agent.observability import get_log_context
 from tests.fakes.fake_attempt_repository import FakeAttemptRepository
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_outbox_repository import FakeOutboxRepository
@@ -130,6 +132,29 @@ def _event_types(event_repo: FakeEventRepository, run_id: str) -> list[str]:
     return [e.event_type for e in event_repo._events if e.run_id == run_id]
 
 
+@pytest.mark.parametrize(
+    ("outcome", "event"),
+    [
+        (ExecutionOutcome.COMPLETED, "run_execution_completed"),
+        (ExecutionOutcome.FAILED, "run_execution_failed"),
+        (ExecutionOutcome.RETRY_SCHEDULED, "run_execution_retry"),
+        (ExecutionOutcome.PAUSED, "run_execution_paused"),
+        (ExecutionOutcome.SKIPPED, "run_execution_skipped"),
+        (ExecutionOutcome.MISSING, "run_execution_skipped"),
+    ],
+)
+def test_each_execution_outcome_has_fixed_log_event(outcome, event, caplog) -> None:
+    """每种执行结果都映射到固定、低敏的结构化事件。"""
+    caplog.set_level(logging.INFO, logger="literature_agent.application.run_execution_service")
+
+    assert RunExecutionService._log_outcome(outcome, 0.0) is outcome
+
+    record = caplog.records[-1]
+    assert record.event == event
+    assert record.status == outcome.value
+    assert isinstance(record.duration_ms, int)
+
+
 async def test_execute_queued_run_completes(
     run_repo: FakeRunRepository,
     event_repo: FakeEventRepository,
@@ -156,6 +181,36 @@ async def test_execute_queued_run_completes(
     assert attempt.attempt_number == 1
     assert attempt.worker_id == "test-worker:1"
     assert attempt.status.value == "succeeded"
+
+
+async def test_execute_binds_persisted_run_and_attempt_context_then_restores(
+    run_repo: FakeRunRepository,
+    event_repo: FakeEventRepository,
+    attempt_repo: FakeAttemptRepository,
+    outbox_repo: FakeOutboxRepository,
+) -> None:
+    """执行上下文来自已认领业务事实，并在 heartbeat/执行作用域后恢复。"""
+    run = await _add_run(run_repo)
+    observed: dict = {}
+
+    async def executor(running: Run, correlation_id: str) -> None:
+        observed.update(get_log_context())
+        await _completing_executor(run_repo, event_repo)(running, correlation_id)
+
+    service = _make_service(run_repo, event_repo, attempt_repo, outbox_repo, executor)
+
+    assert await service.execute(run.run_id, "worker:corr") is ExecutionOutcome.COMPLETED
+
+    attempt = await attempt_repo.get_latest_by_run(run.run_id)
+    assert attempt is not None
+    assert observed == {
+        "correlation_id": "worker:corr",
+        "run_id": run.run_id,
+        "project_id": "p-1",
+        "attempt_id": attempt.attempt_id,
+        "run_type": "ingestion",
+    }
+    assert get_log_context() == {}
 
 
 async def test_execute_duplicate_job_is_skipped(

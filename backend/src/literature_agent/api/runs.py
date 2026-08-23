@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from literature_agent.api.dependencies import ActorDep
+from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
 from literature_agent.application.ports.event_notifier import EventNotifier
 from literature_agent.application.run_service import RunService
 from literature_agent.domain.actor import ActorContext
@@ -108,7 +108,7 @@ async def create_run(
     body: RunCreateRequest,
     actor: ActorDep,
     service: RunServiceDep,
-    correlation_id: Annotated[str, Depends(lambda: "api-create-run")],
+    correlation_id: CorrelationIdDep,
 ) -> RunResponse:
     """为当前 actor 创建一个测试/内部 Run。"""
     run = await service.create_run(
@@ -143,7 +143,7 @@ async def cancel_run(
     run_id: str,
     actor: ActorDep,
     service: RunServiceDep,
-    correlation_id: Annotated[str, Depends(lambda: "api-cancel-run")],
+    correlation_id: CorrelationIdDep,
 ) -> dict:
     """请求取消当前 actor 的 Run。"""
     try:

@@ -48,6 +48,9 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 
 - API Key 只来自服务端 Settings（`AGENT_EMBEDDING_API_KEY`/`AGENT_CHAT_API_KEY`），不进入日志、Event、invocation 记录；
 - 日志不记录完整 Prompt 与响应体；invocation 只记 profile/usage/延迟/错误类型；
+- Phase 4 切片 5 起，Gateway 额外输出 `model_request_completed/failed` JSON 事件，只允许
+  operation/provider/model/status/duration/run_id/error type；messages、texts、JSON Schema、模型结果和
+  Provider 异常正文均不进入日志。日志记录失败不改变原有 ModelInvocation 独立短事务与异常传播语义。
 - 真实 Provider 测试默认跳过，`AGENT_RUN_PROVIDER_TESTS=1` 显式启用（仿 `AGENT_RUN_DOCLING_TESTS`）。
 
 ## 重要测试和运行结果

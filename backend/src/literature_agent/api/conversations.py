@@ -26,7 +26,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from literature_agent.api.dependencies import ActorDep
+from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
 from literature_agent.application.conversation_service import (
     ConversationService,
     ConversationView,
@@ -361,6 +361,7 @@ async def post_message(
     body: MessageCreateRequest,
     actor: ActorDep,
     service: ConversationServiceDep,
+    correlation_id: CorrelationIdDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> PostMessageResponse:
     """提交提问：创建 User Message 与 rag_answer Run（后台回答）。"""
@@ -375,7 +376,7 @@ async def post_message(
             conversation_id,
             content=body.content,
             idempotency_key=idempotency_key,
-            correlation_id="api-post-message",
+            correlation_id=correlation_id,
         )
     except ConversationNotFoundError:
         raise HTTPException(
