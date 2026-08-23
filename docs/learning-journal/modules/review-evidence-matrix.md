@@ -25,6 +25,10 @@ RUNNING Review Run + scoped search-strategy.v1 Output
 `ReviewExecutor` 在图外依次调用固定 Search Strategy、arXiv 与本服务，再进入 Outline→Artifact
 持久图；Matrix 不再作为图的 `END` 或成功边界。
 
+Phase 4 切片 4 已通过 Project-scoped Review API 在前端展示聚合 Matrix。页面保留
+`insufficient_evidence` 行，并仅把持久 `evidence_id` 交给现有 Evidence API 获取 Version、页码和摘录；
+Matrix Output 本身不携带 Storage 路径，也不成为 PDF 授权来源。
+
 ## 状态、数据与事务
 
 - 分析维度从当前 owner/Project/Review Run 的 `SEARCH_STRATEGY` ReviewOutput 加载，Schema 固定为

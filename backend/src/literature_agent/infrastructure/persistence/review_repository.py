@@ -2,7 +2,7 @@
 
 from typing import cast
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -594,6 +594,37 @@ class SqlalchemyReviewRepository(ReviewRepository):
             )
         )
         return [_output_to_domain(x) for x in result.scalars().all()]
+
+    async def list_latest_section_outputs_scoped(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> list[ReviewOutput]:
+        """只读取每个章节 key 的最新版本，避免向列表消费者暴露其他 Output。"""
+        latest_versions = (
+            select(
+                ReviewOutputORM.output_key.label("output_key"),
+                func.max(ReviewOutputORM.version).label("version"),
+            )
+            .join(ReviewRunORM, ReviewRunORM.run_id == ReviewOutputORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                *self._scope(run_id, project_id, owner_id),
+                RunORM.run_type == RunType.REVIEW.value,
+                ReviewOutputORM.output_type == ReviewOutputType.SECTION.value,
+            )
+            .group_by(ReviewOutputORM.output_key)
+            .subquery()
+        )
+        result = await self._session.execute(
+            select(ReviewOutputORM)
+            .join(
+                latest_versions,
+                (latest_versions.c.output_key == ReviewOutputORM.output_key)
+                & (latest_versions.c.version == ReviewOutputORM.version),
+            )
+            .where(ReviewOutputORM.review_run_id == run_id)
+            .order_by(ReviewOutputORM.output_key)
+        )
+        return [_output_to_domain(item) for item in result.scalars().all()]
 
     async def add_human_input_request(self, request: HumanInputRequest) -> HumanInputRequest:
         self._session.add(

@@ -75,6 +75,14 @@ class ReviewQueryService[TSession: Session]:
             matches = [item for item in outputs if item.output_type is output_type]
             return max(matches, key=lambda item: item.version) if matches else None
 
+    async def sections(self, actor, project_id, run_id):
+        """返回当前 Review 的最新结构化章节，不暴露其他 Workflow Output。"""
+        await self.detail(actor, project_id, run_id)
+        async with self._session_factory() as session:
+            return await self._review_repo_factory(
+                session
+            ).list_latest_section_outputs_scoped(run_id, project_id, actor.owner_id)
+
     async def artifacts(self, actor, project_id, run_id) -> list[Artifact]:
         await self.detail(actor, project_id, run_id)
         async with self._session_factory() as session:

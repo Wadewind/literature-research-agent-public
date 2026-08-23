@@ -213,6 +213,42 @@ async def test_review_list_is_stably_sorted_and_scoped(session, project: str) ->
     ) == []
 
 
+async def test_latest_sections_are_filtered_versioned_and_scoped(session, project: str) -> None:
+    """章节读模型只返回每个 key 的最新版本，并隐藏其他 Output 与越权范围。"""
+    run, _ = await _seed_review(session, project)
+    repo = SqlalchemyReviewRepository(session)
+    outputs = [
+        create_review_output(
+            review_run_id=run.run_id,
+            output_type=output_type,
+            output_key=output_key,
+            version=version,
+            schema_version=(
+                "section.v1" if output_type is ReviewOutputType.SECTION else "outline.v1"
+            ),
+            payload={"section_key": output_key.removeprefix("section:"), "version": version},
+            idempotency_key=f"{output_key}:{version}",
+        )
+        for output_type, output_key, version in (
+            (ReviewOutputType.SECTION, "section:results", 1),
+            (ReviewOutputType.OUTLINE, "outline", 1),
+            (ReviewOutputType.SECTION, "section:methods", 1),
+            (ReviewOutputType.SECTION, "section:methods", 2),
+        )
+    ]
+    for output in outputs:
+        await repo.add_output(output)
+    await session.commit()
+
+    rows = await repo.list_latest_section_outputs_scoped(run.run_id, project, "user-1")
+
+    assert [(item.output_key, item.version) for item in rows] == [
+        ("section:methods", 2),
+        ("section:results", 1),
+    ]
+    assert await repo.list_latest_section_outputs_scoped(run.run_id, project, "user-2") == []
+
+
 async def test_database_constraints_prevent_duplicate_effects(session, project: str) -> None:
     """Output/Dependency/HumanInput 的唯一约束兜底至少一次执行。"""
     run, _ = await _seed_review(session, project)

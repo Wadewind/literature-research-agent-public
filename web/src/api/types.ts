@@ -246,3 +246,26 @@ export interface CreateReviewResult {
   status: string;
   reused: boolean;
 }
+
+export interface ReviewOutput {
+  output_id: string;
+  review_run_id: string;
+  output_type: string;
+  output_key: string;
+  version: number;
+  schema_version: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ReviewArtifact {
+  artifact_id: string;
+  review_run_id: string;
+  project_id: string;
+  artifact_type: string;
+  content_hash: string;
+  size_bytes: number;
+  media_type: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}

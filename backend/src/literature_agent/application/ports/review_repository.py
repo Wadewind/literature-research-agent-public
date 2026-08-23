@@ -141,6 +141,12 @@ class ReviewRepository(Protocol):
         """列出有权访问的 ReviewOutput。"""
         ...
 
+    async def list_latest_section_outputs_scoped(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> list[ReviewOutput]:
+        """按 section key 稳定列出当前范围内的最新章节 Output。"""
+        ...
+
     async def add_human_input_request(self, request: HumanInputRequest) -> HumanInputRequest:
         """追加人工输入请求。"""
         ...

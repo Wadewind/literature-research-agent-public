@@ -3,9 +3,10 @@
 ## 解决的问题
 
 本模块提供 Phase 1–4 的用户可见闭环：管理 Project 与个人文献资产、导入和定位 PDF，从整个
-Project、单篇或多篇论文进入带引用的 RAG 对话，并创建、追踪和取消固定 Review Workflow；回答可沿
-Citation → Evidence → PDF 页码回溯。Phase 4 切片 3 只完成 Review 的 List/Create/Detail/Stage/
-Sources 基础旅程，结构化 HITL 与结果展示由切片 4 接续。
+Project、单篇或多篇论文进入带引用的 RAG 对话，并创建、追踪和取消固定 Review Workflow；回答与
+Review Claim 均可沿 Citation → Evidence → PDF 页码回溯。Phase 4 切片 3 完成 Review 的 List/
+Create/Detail/Stage/Sources 基础旅程，切片 4 已接入结构化 HITL、Matrix、Section/Citation 与
+Artifact 下载。
 
 ## 边界和执行流程
 
@@ -24,6 +25,16 @@ Sources 基础旅程，结构化 HITL 与结果展示由切片 4 接续。
   `review-sources` Query，真实内容继续从 API 恢复。
 - 固定 Stage rail 编码 `review.v1` 的真实顺序，并将持久 `current_stage` 与 Run 状态确定性映射为完成、
   当前、等待和停止。它不实现浏览器状态机，也不根据 Event 推断业务 Stage。
+- Outline 表单只把标题、目标、分析维度和 feedback 留在 React 交互状态。提交体携带服务端 Request ID/
+  version、Outline Output ID 和 action；相同失败意图复用 `Idempotency-Key`，任一版本或表单语义变化
+  才生成新 Key。成功后由 REST 重载，不在本地假设 Workflow 已推进。
+- 结构化 edit 还支持 section key、添加、删除和上移/下移。客户端复刻 `outline.v1` 的确定性边界来
+  提前解释错误，但后端仍负责最终 Schema、范围、版本和事务校验；Matrix 尚在并行加载时，可选维度
+  使用当前 Outline 与 Matrix 的并集，不会暂时清空。存在本地 dirty edit 时不能 approve 旧版本，
+  feedback 也明确不携带本地编辑。
+- Matrix 与 Section 只渲染版本化 ReviewOutput。Section API 每个 key 只返回最新版本，页面按 Outline
+  顺序重排；Evidence ID 点击后再调用现有 Project-scoped Evidence API 获取 PaperVersion 与页码，
+  PDF 链接使用受限 file endpoint。Artifact 只使用 Project-scoped content endpoint。
 
 - 前端不持有任何业务事实：列表与状态全部来自 PostgreSQL 支撑的 REST API；SSE 事件流由后端从 PostgreSQL 重放/推送（见 `run-event.md`）。
 - `/library` 展示 owner 范围的个人文献资产及其 Project 收录范围；Project 页面并行读取当前收录与个人库，可直接收录已有 PaperVersion。移出 Project 只删除 `ProjectPaper`，不会删除 PDF 或解析结果。
@@ -54,6 +65,9 @@ Sources 基础旅程，结构化 HITL 与结果展示由切片 4 接续。
   `config_snapshot`、Prompt 版本或 Checkpoint 暴露给列表。
 - **Stage rail 是展示映射**：前端保存固定顺序和中文标签，但合法转换仍只属于后端 Domain；刷新、
   SSE 重连或页面直接打开都以 Detail API 的 `current_stage` 为准。
+- **HITL 交互意图不是业务状态**：浏览器可以为同一失败提交保留 Key，但 Request 是否开放、版本是否
+  过期、edit 生成哪个批准 Outline，以及 Run/Outbox 是否恢复都由后端原子事务决定；409 后界面提示
+  刷新，不在客户端自动改写版本。
 - **样式决策**：沿用 Literature Atlas 冷灰纸面、深蓝、朱红、Inter + IBM Plex Mono 和零圆角；唯一
   新签名元素是横向“研究阶段脊柱”，编号与连接线只表达真实 Workflow 顺序。移动端允许 rail 横向
   滚动，键盘 focus、语义 `nav/ol/aria-current` 与 reduced motion 沿用全局约束。
@@ -88,6 +102,11 @@ Sources 基础旅程，结构化 HITL 与结果展示由切片 4 接续。
   收束；`npm run build` 通过。Backend 非集成全量
   `615 passed, 4 skipped`，PostgreSQL/Valkey integration 全量 `113 passed`。本切片未启动 dev server，
   没有声称浏览器视觉检查。
+- Phase 4 切片 4：Vitest 全量 `118 passed`，新增 HumanInput 同语义重试/版本变化/409 刷新判断、
+  Outline 完整结构编辑与 Domain 边界、Matrix/Section/术语结构投影，以及 Project-scoped PDF/
+  Artifact content URL；`npm run build` 通过。Backend 非集成全量
+  `618 passed, 4 skipped`，PostgreSQL/Valkey integration 全量 `114 passed`，包含 Sections 最新版本、
+  类型过滤和 owner/Project 隔离。本切片未启动 dev server，没有声称浏览器视觉/console 检查。
 - 后端非集成回归：`pytest tests -q --ignore=tests/integration`，366 passed、4 skipped（前端改动未改变后端契约）。
 - 手动闭环（本地 postgres/valkey + uvicorn + 本地 Worker，真实 Docling 解析）：上传 `text_two_pages.pdf` → SSE 实时事件 → succeeded → papers 列表 `parse_ready=true` → file 端点字节与原件一致（inline disposition）→ SSE `Last-Event-ID: 2` 正确从 sequence 3 重放；queued 状态取消 → cancelled；终态取消 → 409；Playwright 截图验证 4 个页面与 404 呈现。
 - 切片 11 Playwright E2E（1 passed）：隔离 PostgreSQL/Valkey Compose + 宿主 API/Worker/Web + 共享临时 Storage；用 Fake Parser 验证创建 Project、新 PDF 异步解析、Run 事件与刷新恢复、Element/PDF 预览、跨 Project 哈希复用、移出只删关系、个人库保留和重新收录。失败时保留 screenshot/video/trace，不维护易碎的像素截图基线。
@@ -96,10 +115,11 @@ Sources 基础旅程，结构化 HITL 与结果展示由切片 4 接续。
 ## 代码入口
 
 - 页面：`web/src/pages/`（ProjectsPage、PersonalLibraryPage、LibraryPage、ConversationPage、RunDetailPage、DocumentPage）
-- Review 页面：`web/src/pages/ReviewsPage.tsx`、`ReviewDetailPage.tsx`
+- Review 页面：`web/src/pages/ReviewsPage.tsx`、`ReviewDetailPage.tsx`、
+  `web/src/components/ReviewResults.tsx`
 - Project 工作区导航：`web/src/components/ProjectNav.tsx`
 - Review 纯展示/意图：`web/src/reviews/reviewPresentation.ts`、`reviewIntent.ts`、
-  `reviewListRefresh.ts`
+  `reviewHumanInput.ts`、`reviewResults.ts`、`reviewListRefresh.ts`
 - SSE：`web/src/runs/useRunEvents.ts`、`eventStore.ts`、`runStatus.ts`
 - RAG 交互状态：`web/src/conversations/messageIntent.ts`、`scopeSelection.ts`
 - API 封装：`web/src/api/client.ts`、`types.ts`
@@ -116,8 +136,8 @@ Sources 基础旅程，结构化 HITL 与结果展示由切片 4 接续。
 - 回答在结构化生成与 Citation Validator 成功后一次性显示，不做 token 级流式输出。
 - `index-status` 当前按 Project 文献行独立查询；适合最小 UI 规模，尚无批量状态端点。
 - Phase 2 E2E 使用 Fake Provider 固化工程旅程，不代表真实模型回答质量；
-- Review Detail 当前只展示 Stage、Step、Source 与取消；Outline HITL、Matrix、Section、Citation 和
-  Artifact 的真实展示属于 Phase 4 切片 4，当前后续区域明确说明但不填充假数据；
+- Review Detail 已展示真实 Outline HITL、Matrix、Section/Citation 和 Artifact；当前不提供 Matrix/
+  Section 在线重写、单节点手工重跑或引用样式切换，这些均不属于 Demo-ready Core v1；
 - Review 基础旅程尚未加入 Playwright；Phase 1–4 完整核心旅程在 Phase 4 切片 9 收尾；
 - 仅开发代理（Vite proxy），无生产构建部署与 CORS 配置；切片 11 只验证宿主 API/Worker/Web，不宣称完整容器部署。
 - E2E 使用 Fake Parser 保持确定性；真实 Docling 由独立 opt-in 契约测试和手动 Smoke 覆盖。

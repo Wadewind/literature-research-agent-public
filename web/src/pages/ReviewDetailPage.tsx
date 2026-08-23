@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom";
 import { apiFetch, errorMessage } from "../api/client";
 import type { ReviewDetail, ReviewSource } from "../api/types";
 import ProjectNav from "../components/ProjectNav";
+import ReviewResults from "../components/ReviewResults";
 import {
   reviewStageRail,
   sourcePresentation,
@@ -43,7 +44,7 @@ function stepStatusLabel(status: string): string {
 
 function runNotice(detail: ReviewDetail): { tone: string; title: string; text: string } {
   const { run, review } = detail;
-  if (run.status === "waiting_input") return { tone: "waiting", title: "等待大纲确认", text: "Workflow 已安全暂停，不占用 Worker。结构化大纲操作将在下一切片开放。" };
+  if (run.status === "waiting_input") return { tone: "waiting", title: "等待大纲确认", text: "Workflow 已安全暂停，不占用 Worker。请在下方批准、编辑或提交反馈。" };
   if (run.status === "waiting_dependency") return { tone: "waiting", title: "等待来源就绪", text: "系统正在等待所有已发现来源完成解析、索引或稳定失败后再固定证据边界。" };
   if (run.status === "retry_wait") return { tone: "waiting", title: "等待受限重试", text: "临时错误已记录，后台会按既定策略重新排队。" };
   if (run.status === "failed") {
@@ -51,7 +52,7 @@ function runNotice(detail: ReviewDetail): { tone: string; title: string; text: s
     return { tone: "failed", title: "Review 未完成", text: `稳定错误码：${code}` };
   }
   if (run.status === "cancelled" || run.status === "cancel_requested") return { tone: "stopped", title: run.status === "cancelled" ? "Review 已取消" : "正在安全取消", text: "已保存的来源、步骤和事件会保留；系统不会开始新的外部操作。" };
-  if (run.status === "succeeded") return { tone: "ready", title: "Review 已完成", text: "Workflow 已提交最终业务结果。结构化结果与 Artifact 展示将在下一切片接入。" };
+  if (run.status === "succeeded") return { tone: "ready", title: "Review 已完成", text: "Workflow 已提交结构化章节、引用与可下载 Artifact。" };
   return { tone: "active", title: stageLabel(review.current_stage), text: "后台正在推进当前固定阶段；页面刷新后仍会从 API 恢复最新事实。" };
 }
 
@@ -141,7 +142,16 @@ export default function ReviewDetailPage() {
         </section>
       </div>
 
-      <section className="later-results" aria-label="后续结果区域"><p className="eyebrow">NEXT SLICE</p><h2>结构化结果</h2><p>Outline、Evidence Matrix、Sections、Citations 与 Artifacts 将在下一切片接入真实 API 数据；此处不展示占位结果或示例内容。</p></section>
+      <ReviewResults
+        projectId={projectId}
+        runId={runId}
+        request={detail.open_human_input_request}
+        eventSequence={stream.lastSequence}
+        citationsValidated={steps.some(
+          (step) => step.step_key === "validate_sections" && step.status === "succeeded",
+        )}
+        canSubmitHumanInput={run.status === "waiting_input"}
+      />
 
       {stream.events.length > 0 && <details className="review-event-details"><summary>最近事件（{stream.events.length}）</summary><ol>{stream.events.slice(-8).map((event) => <li key={event.sequence}><span className="mono">#{event.sequence}</span><strong>{event.event_type}</strong><time>{new Date(event.occurred_at).toLocaleTimeString()}</time></li>)}</ol></details>}
     </div>

@@ -46,6 +46,8 @@ Phase 3 后续切片已接入 HTTP Route 与 Worker。Phase 4 切片 3 又补充
 - Review List 必须限制 owner、Project 与 RunType，按 `created_at DESC, run_id DESC` 稳定排序；只暴露
   列表所需生命周期、研究问题和当前 Stage，不暴露配置快照或内部大载荷；
 - ReviewOutput 只能追加新版本，数据库唯一约束拒绝重复版本和重复节点幂等键；
+- 对外 Section 读模型只返回当前 owner/Project/Review Run 的 `SECTION` Output；每个 `output_key` 取最高
+  版本并按 key 稳定排序，不向页面暴露 Search Strategy、内部失败 Output 或旧章节版本；
 - 同一 HumanInputRequest 最多写入一个 HumanInput，Input 必须携带匹配的 request_version；
 - 同一 Review Run 同时最多有一个开放的 HumanInputRequest；
 - Artifact 只保存受控 metadata 与 Storage 引用，大型 Markdown/矩阵不能放进 JSONB；
@@ -120,8 +122,8 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 ## 已知限制与扩展路径
 
 - Review HTTP API、生产 Executor 和强制 `Idempotency-Key` 已在切片 9 接入；Review 专用前端页面归入
-  Phase 4 产品闭环；Phase 4 切片 3 已完成 List/Create/Detail/Stage/Sources/取消，HITL 与结果展示由
-  下一切片接续；
+  Phase 4 产品闭环；Phase 4 切片 3 已完成 List/Create/Detail/Stage/Sources/取消，切片 4 已完成
+  HITL、Matrix、最新 Sections/Citations 与 Artifact 展示；
 - 固定 Step 已贯穿图外 Strategy/arXiv/import/wait、Matrix、Outline、Section、Export 和 Finalize；
   `current_stage` 与对应 Step/Event 在短事务中推进，并用预期前置值防止重放倒退；
 - HumanInput 已使用请求行锁和条件更新，把 Input、Request resolve、Run 重新排队、Event 与 Outbox

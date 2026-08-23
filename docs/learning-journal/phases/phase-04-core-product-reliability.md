@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：切片 1–3 已完成，待推进切片 4
+- 当前状态：切片 1–4 已完成，待推进切片 5
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -260,6 +260,23 @@ LLM-as-a-Judge。
   `615 passed, 4 skipped`，PostgreSQL/Valkey integration 全量 `113 passed`；`ruff check`、`pyright`
   与 `git diff --check` 通过。普通测试没有访问实时 arXiv 或付费 Provider。本切片未启动 dev server，
   因此没有声称浏览器视觉/console 验证；完整 Review Playwright 旅程仍属于切片 9。
+- 切片 4「Review HITL 与结果展示」：已完成。Review Detail 从真实 Project-scoped API 恢复 Outline、
+  Evidence Matrix、最新 Section、Claim/Evidence Citation 与六类 Artifact。Outline 使用标题、目标与
+  分析维度的结构化表单，并支持 section key、添加、删除与排序；客户端先按 `outline.v1` 的 1–12 节、
+  snake_case、文本、唯一 key 和 1–6 个可见维度边界确定性校验。approve/edit/feedback 均提交
+  Request/Outline 版本与
+  `Idempotency-Key`；同一失败意图复用 Key，Request 或版本变化生成新意图，过期提交由后端拒绝。
+  有未保存编辑时不能误批准服务端旧版本；只有 Run 确实为 `WAITING_INPUT` 且开放 Request 与 Outline
+  匹配时显示操作。409 冲突立即刷新 Detail/Outline/Matrix，同时保留相同提交的 Key 供真正重试。
+- 新增最小 `GET /projects/{project_id}/reviews/{run_id}/sections` 读契约。Repository 同时限制 owner、
+  Project、RunType 与 `SECTION` 类型，每个 `output_key` 只返回最高版本并稳定排序；页面再按批准
+  Outline 顺序展示。Evidence 点击后复用现有 Project-scoped Evidence API 读取 Version/页码并跳转
+  PDF content endpoint；Artifact 下载只使用后端校验过的 content endpoint，不接触 Storage Key。
+  SSE 只使 Outline/Matrix/Section/Artifact Query 失效，刷新仍以 REST/PostgreSQL 事实恢复。
+- 切片 4 实际验证：Web Vitest 全量 `118 passed`，`tsc -b && vite build` 通过；Backend 非集成全量
+  `618 passed, 4 skipped`，PostgreSQL/Valkey integration 全量 `114 passed`；`ruff check src tests`
+  与 `pyright` 通过。普通测试没有访问实时 arXiv 或付费 Provider。本切片未启动 dev server，未声称
+  浏览器视觉/console 验证；完整 Review Playwright 旅程仍属于切片 9。
 
 ## 11. 测试方式
 

@@ -21,8 +21,10 @@ Evidence Matrix 已把多篇论文压缩为可追溯中间事实，但仍不能�
   → issues 非阻断 → EXPORT_REVIEW → Artifact/Finalize
 ```
 
-本模块自身不渲染数字引用、不写 Markdown Artifact、不提供 Review API。切片 9 已把它接入
-Export/Finalize 与生产 Review Executor；具体导出边界见
+本模块自身不渲染数字引用、不写 Markdown Artifact。切片 9 已把它接入 Export/Finalize 与生产
+Review Executor；Phase 4 切片 4 又以最小 Project-scoped Sections 读契约展示最新 `section.v1`、Claim、
+Evidence 绑定和 terminology。页面只有在持久 `VALIDATE_SECTIONS` Step 成功后才标记“引用已校验”，
+不会把刚生成的草稿绑定提前宣传为已验证 Citation。具体导出边界见
 [综述 Artifact 生成与生产执行闭环](review-artifact-generation.md)。
 
 ## `section.v1` 与模型上下文
@@ -127,6 +129,8 @@ PostgreSQL/Testcontainers 集成测试为 `111 passed`；`ruff check src tests` 
 ## 已知限制
 
 - Section Claim 是结构化段落素材；切片 9 的导出器已按首次引用顺序渲染 Markdown `[1]` 和 References；
+- Phase 4 页面只展示每个 Section key 的最高版本，并按批准 Outline 顺序重排；不提供 Section/Matrix
+  在线重写。无效 `section.v1` 或 terminology 结构不会被宽松投影成部分可信结果；
 - Citation Validator 证明结构和范围闭包，不自动证明 Evidence 在语义上充分支持 Claim；
 - 一致性 issue 不自动修复，用户需在最终 Artifact/评测中审阅；
 - 默认章节 4,000、一致性 2,000 token 输出预算及 50 Claim/术语上限仍需真实小样本校准；

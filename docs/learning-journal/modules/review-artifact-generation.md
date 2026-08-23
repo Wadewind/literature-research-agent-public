@@ -136,7 +136,8 @@ PostgreSQL/Valkey/Testcontainers 集成回归 `112 passed`；
 - `review-default.v1` 当前总下载预算由单文件上限乘固定来源数得到，仍需真实小规模试验校准；
 - 一致性报告不是事实 Judge；引用闭包证明引用存在且范围正确，不证明 Claim 一定被 Evidence 语义蕴含；
 - Phase 3 切片 10 已完成阶段验收，并补齐图外 `current_stage` 的 Step/Event 原子推进；
-- 前端 Review Run 页面属于后续产品闭环，本切片只完成后端 API。
+- Phase 4 切片 4 已把 Artifact 元数据和下载接入 Review Detail。浏览器只构造已授权的 Project-scoped
+  Artifact content endpoint，不读取或拼接 `storage_key`；正文完整性仍由后端读取时复核大小和哈希。
 
 ## 60 秒面试说明
 

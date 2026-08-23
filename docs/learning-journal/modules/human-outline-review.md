@@ -30,8 +30,14 @@ ReviewOutlineService.propose_and_pause()
   └─ feedback → feedback_round+1 → 新 Outline/Request → 再次 interrupt
 ```
 
-本模块完成时 API、SSE 与生产接线留给切片 9；现在后端 API、通用 SSE 和完整生产图已接通，前端表单
-仍属于后续产品闭环。
+本模块完成时 API、SSE 与生产接线留给切片 9；现在后端 API、通用 SSE、完整生产图和 Phase 4
+结构化前端表单均已接通。前端不编辑 JSON：标题、目标和分析维度进入结构化字段，approve/edit/
+feedback 仍映射到同一版本化 HumanInput API。
+
+Phase 4 表单同时支持 section key、章节增删和顺序调整，并在浏览器侧按 Domain 相同的章节数量、key、
+文本与维度边界给出确定性提示。只有业务 Run 为 `WAITING_INPUT`、开放 Request 与当前 Outline 匹配时
+允许操作；dirty edit 禁止 approve 仍在服务端的旧版本。409 stale/conflict 会立即刷新服务端 Query，
+但相同提交意图仍保留原 Key，避免响应丢失后的重试产生第二个 HumanInput。
 
 ## Outline 上下文和 Validator
 
@@ -144,7 +150,9 @@ Graph State 只增加 `human_input_request_id`、`human_input_id`、`feedback_hu
 - 尚未设置 feedback 最大轮次、模型调用和 token 总预算；后续按 Profile 校准；
 - Outline 模型没有结构修复调用；非法输出稳定失败，避免本切片引入未讨论的额外模型成本；
 - 只验证结构、范围与 Evidence 闭包，不自动判断大纲是否具有学术价值；
-- 后端 API、SSE 和生产 Review Executor 已在切片 9 接线；前端人工表单仍属于后续产品闭环。
+- 后端 API、SSE 和生产 Review Executor 已在切片 9 接线；Phase 4 切片 4 已接入结构化人工表单。
+  浏览器交互意图只保存请求签名和 `Idempotency-Key`，相同失败提交复用，同一 Request 的不同 action、
+  payload 或新版本生成新 Key；真正的 stale/version/owner/Project 判定继续完全属于后端。
 
 ## 60 秒面试说明
 

@@ -211,6 +211,16 @@ async def outline(project_id: str, run_id: str, actor: ActorDep, query: ReviewQu
     return await _output(project_id, run_id, actor, query, ReviewOutputType.OUTLINE)
 
 
+@router.get("/{run_id}/sections")
+async def sections(
+    project_id: str, run_id: str, actor: ActorDep, query: ReviewQueryDep
+) -> list[dict]:
+    try:
+        return [_value(asdict(item)) for item in await query.sections(actor, project_id, run_id)]
+    except RunNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Review 不存在") from None
+
+
 @router.post("/{run_id}/outline-input")
 async def submit_outline_input(
     project_id: str,

@@ -8,6 +8,7 @@ from literature_agent.domain.review import (
     HumanInputRequestStatus,
     ReviewDependency,
     ReviewOutput,
+    ReviewOutputType,
     ReviewRun,
     ReviewSource,
     RunStep,
@@ -217,6 +218,20 @@ class FakeReviewRepository(ReviewRepository):
         if not self._visible(run_id, project_id, owner_id):
             return []
         return [x for x in self.outputs if x.review_run_id == run_id]
+
+    async def list_latest_section_outputs_scoped(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> list[ReviewOutput]:
+        if not self._visible(run_id, project_id, owner_id):
+            return []
+        latest: dict[str, ReviewOutput] = {}
+        for output in self.outputs:
+            if output.review_run_id != run_id or output.output_type is not ReviewOutputType.SECTION:
+                continue
+            current = latest.get(output.output_key)
+            if current is None or output.version > current.version:
+                latest[output.output_key] = output
+        return [latest[key] for key in sorted(latest)]
 
     async def add_human_input_request(
         self, request: HumanInputRequest

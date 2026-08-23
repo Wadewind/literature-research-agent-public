@@ -76,6 +76,20 @@ class _Query:
         self._scope(actor, project_id, run_id)
         return [_Row(artifact_id="artifact-1")]
 
+    async def sections(self, actor, project_id, run_id):
+        self._scope(actor, project_id, run_id)
+        return [
+            create_review_output(
+                review_run_id="review-1",
+                output_type=ReviewOutputType.SECTION,
+                output_key="section:methods",
+                version=1,
+                schema_version="section.v1",
+                payload={"section_key": "methods", "claims": []},
+                idempotency_key="section-methods",
+            )
+        ]
+
     async def artifact_content(self, actor, project_id, run_id, artifact_id):
         self._scope(actor, project_id, run_id)
         if artifact_id != "artifact-1":
@@ -245,3 +259,17 @@ def test_detail_sources_artifacts_download_cancel_and_event_cursor(client) -> No
     assert test_client.get(f"{base}/events?after_sequence=-1").status_code == 422
     assert test_client.post(f"{base}/cancel").status_code == 202
     assert runs.cancelled
+
+
+def test_sections_are_project_scoped_and_return_only_structured_outputs(client) -> None:
+    test_client, *_ = client
+    base = "/api/v1/projects/project-1/reviews/review-1"
+
+    response = test_client.get(f"{base}/sections")
+
+    assert response.status_code == 200
+    assert response.json()[0]["output_type"] == "section"
+    assert response.json()[0]["payload"] == {"section_key": "methods", "claims": []}
+    assert test_client.get(
+        "/api/v1/projects/project-2/reviews/review-1/sections"
+    ).status_code == 404
