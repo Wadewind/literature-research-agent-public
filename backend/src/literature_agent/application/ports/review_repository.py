@@ -12,6 +12,7 @@ from literature_agent.domain.review import (
     ReviewSource,
     RunStep,
 )
+from literature_agent.domain.run import Run
 
 
 class ReviewRepository(Protocol):
@@ -30,6 +31,12 @@ class ReviewRepository(Protocol):
         self, run_id: str, project_id: str, owner_id: str
     ) -> ReviewRun | None:
         """按 Run、Project、owner 查询 ReviewRun。"""
+        ...
+
+    async def list_review_runs_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[tuple[Run, ReviewRun]]:
+        """稳定列出当前 owner/Project 下的 Review Run 读模型。"""
         ...
 
     async def get_review_run_scoped_for_update(

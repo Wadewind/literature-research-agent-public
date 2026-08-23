@@ -1,6 +1,7 @@
 """Review Project-scoped API 契约测试。"""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -17,8 +18,10 @@ from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import RunNotFoundError
 from literature_agent.domain.review import (
     ReviewOutputType,
+    ReviewStage,
     create_review_output,
 )
+from literature_agent.domain.run import RunStatus
 from literature_agent.main import create_app
 
 
@@ -59,6 +62,11 @@ class _Query:
     async def detail(self, actor, project_id, run_id):
         self._scope(actor, project_id, run_id)
         return _Row(run_id="review-1"), _Row(run_id="review-1"), [], None
+
+    async def list_reviews(self, actor, project_id):
+        if actor.owner_id != "user-1" or project_id != "project-1":
+            return []
+        return [(_ListRun(), _ListReview())]
 
     async def sources(self, actor, project_id, run_id):
         self._scope(actor, project_id, run_id)
@@ -114,6 +122,20 @@ class _Row:
 
 
 @dataclass(frozen=True)
+class _ListRun:
+    run_id: str = "review-1"
+    status: RunStatus = RunStatus.QUEUED
+    created_at: datetime = datetime(2026, 8, 23, tzinfo=UTC)
+    updated_at: datetime = datetime(2026, 8, 23, tzinfo=UTC)
+
+
+@dataclass(frozen=True)
+class _ListReview:
+    research_question: str = "研究问题"
+    current_stage: ReviewStage = ReviewStage.FORMULATE_SEARCH_STRATEGY
+
+
+@dataclass(frozen=True)
 class _Artifact:
     artifact_id: str = "artifact-1"
     media_type: str = "text/markdown"
@@ -156,6 +178,23 @@ def test_create_requires_idempotency_key_and_returns_created(client) -> None:
     )
     assert response.status_code == 202
     assert response.json() == {"run_id": "review-1", "status": "queued", "reused": False}
+
+
+def test_list_reviews_is_project_scoped(client) -> None:
+    test_client, *_ = client
+    response = test_client.get("/api/v1/projects/project-1/reviews")
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "run_id": "review-1",
+            "status": "queued",
+            "research_question": "研究问题",
+            "current_stage": "formulate_search_strategy",
+            "created_at": "2026-08-23T00:00:00+00:00",
+            "updated_at": "2026-08-23T00:00:00+00:00",
+        }
+    ]
+    assert test_client.get("/api/v1/projects/project-2/reviews").json() == []
 
 
 def test_matrix_is_project_scoped_and_missing_outline_is_404(client) -> None:

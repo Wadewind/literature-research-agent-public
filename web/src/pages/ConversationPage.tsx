@@ -18,6 +18,7 @@ import {
   type MessageIntent,
 } from "../conversations/messageIntent";
 import { useRunEvents } from "../runs/useRunEvents";
+import ProjectNav from "../components/ProjectNav";
 
 const PROGRESS_LABELS: Record<string, string> = {
   run_created: "回答任务已创建",
@@ -156,7 +157,7 @@ export default function ConversationPage() {
       <aside className="conversation-sidebar">
         <p className="eyebrow">CONVERSATIONS</p>
         <h2>对话记录</h2>
-        <Link className="text-link" to={`/projects/${projectId}`}>← 返回项目文献库</Link>
+        <ProjectNav projectId={projectId} active="chat" />
         {conversationsQuery.isPending && <p className="muted">正在读取对话…</p>}
         {conversationsQuery.isError && (
           <p className="error-text">{errorMessage(conversationsQuery.error)}</p>

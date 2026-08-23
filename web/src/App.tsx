@@ -7,6 +7,8 @@ import LibraryPage from "./pages/LibraryPage";
 import PersonalLibraryPage from "./pages/PersonalLibraryPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import RunDetailPage from "./pages/RunDetailPage";
+import ReviewsPage from "./pages/ReviewsPage";
+import ReviewDetailPage from "./pages/ReviewDetailPage";
 
 export default function App() {
   return (
@@ -21,13 +23,18 @@ export default function App() {
           <NavLink to="/" end>项目</NavLink>
           <NavLink to="/library">个人文献库</NavLink>
         </nav>
-        <span className="phase-chip">PHASE 02</span>
+        <span className="phase-chip">PHASE 04</span>
       </header>
       <main className="app-main">
         <Routes>
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/library" element={<PersonalLibraryPage />} />
           <Route path="/projects/:projectId" element={<LibraryPage />} />
+          <Route path="/projects/:projectId/reviews" element={<ReviewsPage />} />
+          <Route
+            path="/projects/:projectId/reviews/:runId"
+            element={<ReviewDetailPage />}
+          />
           <Route
             path="/projects/:projectId/conversations/:conversationId"
             element={<ConversationPage />}
@@ -45,11 +52,15 @@ export default function App() {
 }
 
 function ScrollToTop() {
-  const { pathname } = useLocation();
+  const { pathname, hash } = useLocation();
 
   useEffect(() => {
+    if (hash) {
+      document.getElementById(hash.slice(1))?.scrollIntoView();
+      return;
+    }
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-  }, [pathname]);
+  }, [hash, pathname]);
 
   return null;
 }

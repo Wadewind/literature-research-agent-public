@@ -55,6 +55,7 @@ describe("errorMessage", () => {
     ["invalid_scope", "提问范围无效，请重新选择当前项目中的文献"],
     ["project_archived", "项目已归档，当前为只读状态"],
     ["paper_archived", "文献已归档，请先恢复后再操作"],
+    ["review_cannot_cancel", "Review 当前状态不能取消，请刷新后查看最新状态"],
   ])("稳定业务码 %s 映射为操作指引", (detail, expected) => {
     expect(errorMessage(new ApiError(detail === "invalid_scope" ? 422 : 409, detail))).toBe(
       expected,

@@ -175,3 +175,74 @@ export interface EvidenceDetail extends CitationSummary {
   chunk_id: string;
   created_at: string;
 }
+
+export interface ReviewRun {
+  run_id: string;
+  research_question: string;
+  workflow_version: string;
+  model_profile_version: string;
+  statistics_summary: Record<string, number>;
+  current_stage: string;
+  current_outline_output_id: string | null;
+  final_artifact_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReviewListItem {
+  run_id: string;
+  status: string;
+  research_question: string;
+  current_stage: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReviewStep {
+  step_id: string;
+  run_id: string;
+  step_key: string;
+  sequence: number;
+  status: string;
+  error_code: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface HumanInputRequest {
+  request_id: string;
+  request_version: number;
+  outline_output_id: string;
+  allowed_actions: string[];
+  status: string;
+  created_at: string;
+}
+
+export interface ReviewDetail {
+  run: Run;
+  review: ReviewRun;
+  steps: ReviewStep[];
+  open_human_input_request: HumanInputRequest | null;
+}
+
+export interface ReviewSource {
+  source_id: string;
+  review_run_id: string;
+  arxiv_id: string;
+  arxiv_version: string;
+  rank: number;
+  metadata_snapshot: Record<string, unknown>;
+  status: string;
+  paper_id: string | null;
+  paper_version_id: string | null;
+  failure_code: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateReviewResult {
+  run_id: string;
+  status: string;
+  reused: boolean;
+}

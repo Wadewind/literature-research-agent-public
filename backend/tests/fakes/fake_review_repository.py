@@ -12,6 +12,7 @@ from literature_agent.domain.review import (
     ReviewSource,
     RunStep,
 )
+from literature_agent.domain.run import Run, RunType
 
 
 class FakeReviewRepository(ReviewRepository):
@@ -19,6 +20,7 @@ class FakeReviewRepository(ReviewRepository):
 
     def __init__(self) -> None:
         self.review_runs: dict[str, ReviewRun] = {}
+        self.runs: dict[str, Run] = {}
         self.run_scopes: dict[str, tuple[str, str]] = {}
         self.steps: list[RunStep] = []
         self.sources: list[ReviewSource] = []
@@ -45,6 +47,19 @@ class FakeReviewRepository(ReviewRepository):
         if not self._visible(run_id, project_id, owner_id):
             return None
         return self.review_runs.get(run_id)
+
+    async def list_review_runs_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[tuple[Run, ReviewRun]]:
+        rows = [
+            (run, self.review_runs[run.run_id])
+            for run in self.runs.values()
+            if run.project_id == project_id
+            and run.owner_id == owner_id
+            and run.run_type == RunType.REVIEW.value
+            and run.run_id in self.review_runs
+        ]
+        return sorted(rows, key=lambda row: (row[0].created_at, row[0].run_id), reverse=True)
 
     async def get_review_run_scoped_for_update(
         self, run_id: str, project_id: str, owner_id: str

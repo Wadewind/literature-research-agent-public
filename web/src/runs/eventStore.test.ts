@@ -119,4 +119,30 @@ describe("applyEvent", () => {
       expect(state.closed).toBe(true);
     },
   );
+
+  it.each([
+    "review_run_created",
+    "search_strategy_completed",
+    "arxiv_search_completed",
+    "review_source_import_started",
+    "review_source_import_completed",
+    "review_source_ready",
+    "review_source_failed",
+    "dependency_wait_started",
+    "dependency_wait_completed",
+    "evidence_matrix_completed",
+    "outline_proposed",
+    "human_input_requested",
+    "human_input_submitted",
+    "section_draft_completed",
+    "citation_validation_completed",
+    "review_artifact_created",
+  ])("订阅 Review 具名事件 %s", (eventType) => {
+    expect(KNOWN_EVENT_TYPES).toContain(eventType);
+  });
+
+  it("Review 成功事件 run_succeeded 触发收束", () => {
+    expect(applyEvent(createEventStreamState(), makeEvent(9, "run_succeeded")).closed)
+      .toBe(true);
+  });
 });

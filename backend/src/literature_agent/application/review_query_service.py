@@ -52,6 +52,13 @@ class ReviewQueryService[TSession: Session]:
             )
             return run, review, steps, request
 
+    async def list_reviews(self, actor: ActorContext, project_id: str):
+        """返回当前 owner/Project 下的 Review，越权 Project 表现为空列表。"""
+        async with self._session_factory() as session:
+            return await self._review_repo_factory(session).list_review_runs_scoped(
+                project_id, actor.owner_id
+            )
+
     async def sources(self, actor, project_id, run_id):
         await self.detail(actor, project_id, run_id)
         async with self._session_factory() as session:

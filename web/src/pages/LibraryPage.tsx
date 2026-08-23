@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type {
@@ -20,6 +20,7 @@ import {
   type ScopeSelection,
 } from "../conversations/scopeSelection";
 import { ensureUploadIntent, type UploadIntent } from "../library/uploadIntent";
+import ProjectNav from "../components/ProjectNav";
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -29,6 +30,7 @@ function formatSize(bytes: number): string {
 export default function LibraryPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [intent, setIntent] = useState<UploadIntent | null>(null);
@@ -216,6 +218,8 @@ export default function LibraryPage() {
         </div>
       </header>
 
+      <ProjectNav projectId={projectId} active={location.hash === "#project-chat" ? "chat" : "library"} />
+
       {editing && !archived && (
         <form className="project-edit-form panel" onSubmit={onRename}>
           <label><span>项目名称</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} maxLength={200} required /></label>
@@ -275,7 +279,7 @@ export default function LibraryPage() {
         {removeMutation.isError && <p className="error-text">{errorMessage(removeMutation.error)}</p>}
       </section>
 
-      <section className="section-block">
+      <section className="section-block" id="project-chat">
         <div className="section-title-row"><div><p className="eyebrow">HISTORY</p><h2>项目对话</h2></div><span className="section-count">{String(conversationsQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
         {conversationsQuery.data?.length === 0 && <p className="muted">还没有对话。可从上方选择整个项目、单篇或多篇文献开始。</p>}
         <div className="conversation-links">{conversationsQuery.data?.map((conversation) => <Link key={conversation.conversation_id} to={`/projects/${projectId}/conversations/${conversation.conversation_id}`}><strong>{conversation.title || "未命名对话"}</strong><span>{conversation.scope_mode === "project" ? "整个项目" : `${conversation.scope_papers.length || "所选"} 篇文献`} · {new Date(conversation.created_at).toLocaleDateString()}</span></Link>)}</div>

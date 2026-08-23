@@ -22,8 +22,9 @@ Phase 3 的固定 Workflow 需要在 LangGraph 尚未接入前，先明确哪些
   → 同一事务 commit
 ```
 
-本切片没有 HTTP Route，也没有 Worker 执行器。后续 API 只能映射请求并调用该服务；后续 Worker 通过
-已授权的 `run_id` 写入 Step、Source、Dependency 和 Output，不能绕过应用边界执行任意 SQL。
+Phase 3 后续切片已接入 HTTP Route 与 Worker。Phase 4 切片 3 又补充紧凑 List 读路径：Route 只映射
+字段，`ReviewQueryService` 调用 Repository 的单次 Join；查询同时限制 owner、Project 和
+`RunType.REVIEW`，跨范围返回空列表，不在 Route 直接执行 SQL。
 
 ## 数据模型与事务
 
@@ -42,6 +43,8 @@ Phase 3 的固定 Workflow 需要在 LangGraph 尚未接入前，先明确哪些
 
 - `ReviewRun.run_id` 必须对应一个真实通用 Run，生命周期只在通用 Run 状态机中维护；
 - Review 读取必须同时满足 owner、Project 和 run_id；不存在与越权使用相同空结果边界；
+- Review List 必须限制 owner、Project 与 RunType，按 `created_at DESC, run_id DESC` 稳定排序；只暴露
+  列表所需生命周期、研究问题和当前 Stage，不暴露配置快照或内部大载荷；
 - ReviewOutput 只能追加新版本，数据库唯一约束拒绝重复版本和重复节点幂等键；
 - 同一 HumanInputRequest 最多写入一个 HumanInput，Input 必须携带匹配的 request_version；
 - 同一 Review Run 同时最多有一个开放的 HumanInputRequest；
@@ -76,8 +79,8 @@ owner 命名空间，这与现有上传和 RAG 提问行为一致。
 - 同键同请求返回原 Review Run，不产生第二个 Event 或 Outbox；同键不同请求抛幂等冲突；
 - Project 不存在、跨 owner 或已归档时不创建任何记录；
 - 重复 Step、Source、Dependency、Output、HumanInput 和 Artifact 由对应唯一约束兜底；
-- 依赖状态已由切片 4 的 `ReviewDependencyReconciler` 持父 Run 行锁后单向推进；人工输入状态仍留给
-  切片 7；
+- 依赖状态由 `ReviewDependencyReconciler` 持父 Run 行锁后单向推进；人工输入由
+  `HumanOutlineInputService` 以请求版本和同事务 Outbox 恢复约束推进；
 - 取消仍由通用 Run 状态机负责；依赖对账不会恢复已取消或已离开等待状态的 Run。
 
 ## 安全和可观测性
@@ -96,6 +99,9 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 - 应用测试覆盖原子创建 bundle、Project/owner/归档边界、幂等回放和冲突；
 - PostgreSQL 集成测试覆盖所有实体往返、owner/Project 查询隔离、追加版本、依赖与 HumanInput 唯一
   约束，以及创建中途失败后的事务回滚；
+- Phase 4 切片 3 增加 Application/API/PostgreSQL List 测试，覆盖稳定排序、owner/Project 隔离与
+  `RunType.REVIEW` 过滤；该切片 Backend 非集成全量 `615 passed, 4 skipped`，integration 全量
+  `113 passed`。
 - Alembic 在独立临时 PostgreSQL 数据库实际通过 `upgrade head → downgrade -1 → upgrade head`。
 
 实际验证结果：定向领域/应用测试 `11 passed`、定向 PostgreSQL 集成测试 `7 passed`；Backend 完整
@@ -114,7 +120,8 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 ## 已知限制与扩展路径
 
 - Review HTTP API、生产 Executor 和强制 `Idempotency-Key` 已在切片 9 接入；Review 专用前端页面归入
-  Phase 4 产品闭环；
+  Phase 4 产品闭环；Phase 4 切片 3 已完成 List/Create/Detail/Stage/Sources/取消，HITL 与结果展示由
+  下一切片接续；
 - 固定 Step 已贯穿图外 Strategy/arXiv/import/wait、Matrix、Outline、Section、Export 和 Finalize；
   `current_stage` 与对应 Step/Event 在短事务中推进，并用预期前置值防止重放倒退；
 - HumanInput 已使用请求行锁和条件更新，把 Input、Request resolve、Run 重新排队、Event 与 Outbox

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：切片 1–2 已完成，待推进切片 3
+- 当前状态：切片 1–3 已完成，待推进切片 4
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -244,6 +244,22 @@ LLM-as-a-Judge。
   `bash -n scripts/dev.sh` 和 `git diff --check` 通过。`uv build` 生成的 wheel/sdist 均包含 manifest/PDF，
   wheel 安装到独立 `/tmp` 目录后可读取 4 条来源和首篇 121-byte PDF。普通测试没有读取 `.env`、访问
   arXiv、下载 tiktoken 资源或调用付费 Provider。
+- 切片 3「Review 前端基础旅程」：已完成。新增 Project-scoped Review List API，以单次
+  `runs JOIN review_runs` 查询同时限制 owner、Project 与 `RunType.REVIEW`，按 `created_at DESC,
+  run_id DESC` 稳定排序；列表只返回生命周期、研究问题、当前 Stage 和时间，不暴露配置快照、
+  Checkpoint 或内部大载荷。跨 owner/Project 查询返回空列表。
+- Web 以 Project 工作区导航统一 Library、Chat 与 Reviews；Review 创建失败重试复用同一
+  `Idempotency-Key`，成功后才清除交互意图，归档 Project 明确只读。Detail 从 API 恢复 Run、
+  `current_stage`、Step 和 Source，以真实固定 `review.v1` 顺序呈现 Stage rail；等待依赖、等待输入、
+  失败、取消和终态都有明确状态。SSE 只使 Review detail/list/sources Query 失效，不承载业务结果；
+  Review List 仅在存在非终态 Run 时每 5 秒低成本刷新，空列表或全终态列表不轮询；页面刷新仍完全
+  读取 PostgreSQL 支撑的 REST API。具名 SSE 清单已与当前 Review 生产者逐项核对，包含搜索完成、
+  Outline 提议、等待人工输入和 Section 草稿完成等现有事件。Outline、Matrix、Section、Citation 和
+  Artifact 结果留给切片 4，不展示假数据。
+- 切片 3 实际验证：Web Vitest 全量 `100 passed`，`tsc -b && vite build` 通过；Backend 非集成全量
+  `615 passed, 4 skipped`，PostgreSQL/Valkey integration 全量 `113 passed`；`ruff check`、`pyright`
+  与 `git diff --check` 通过。普通测试没有访问实时 arXiv 或付费 Provider。本切片未启动 dev server，
+  因此没有声称浏览器视觉/console 验证；完整 Review Playwright 旅程仍属于切片 9。
 
 ## 11. 测试方式
 

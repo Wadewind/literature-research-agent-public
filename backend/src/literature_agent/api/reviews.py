@@ -99,6 +99,23 @@ OutlineInputDep = Annotated[HumanOutlineInputService, Depends(get_outline_input_
 ReviewRunDep = Annotated[RunService, Depends(get_review_run_service)]
 
 
+@router.get("")
+async def list_reviews(
+    project_id: str, actor: ActorDep, query: ReviewQueryDep
+) -> list[dict]:
+    return [
+        {
+            "run_id": run.run_id,
+            "status": run.status.value,
+            "research_question": review.research_question,
+            "current_stage": review.current_stage.value,
+            "created_at": run.created_at.isoformat(),
+            "updated_at": run.updated_at.isoformat(),
+        }
+        for run, review in await query.list_reviews(actor, project_id)
+    ]
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def create_review(
     project_id: str,

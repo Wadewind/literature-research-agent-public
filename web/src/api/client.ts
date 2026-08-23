@@ -20,6 +20,7 @@ const BUSINESS_ERROR_MESSAGES: Record<string, string> = {
   project_has_active_runs: "项目仍有运行中的任务，请等待完成或先取消任务",
   conversation_not_found: "资源不存在或无权访问",
   evidence_not_found: "资源不存在或无权访问",
+  review_cannot_cancel: "Review 当前状态不能取消，请刷新后查看最新状态",
 };
 
 /** 读取响应错误体中的 detail 字段（FastAPI 错误格式）。 */

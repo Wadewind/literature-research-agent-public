@@ -165,6 +165,54 @@ async def test_review_repository_roundtrip_and_scope(session, project: str) -> N
     assert await repo.list_artifacts_scoped(run.run_id, project, "user-2") == []
 
 
+async def test_review_list_is_stably_sorted_and_scoped(session, project: str) -> None:
+    """列表只返回当前 owner/Project 的 Review，并稳定按新到旧排序。"""
+    first_run, first_review = await _seed_review(session, project)
+    second_run, second_review = await _seed_review(session, project)
+    other_project = create_project("user-1", "Other", "")
+    other_owner_project = create_project("user-2", "Private", "")
+    await SqlalchemyProjectRepository(session).add(other_project)
+    await SqlalchemyProjectRepository(session).add(other_owner_project)
+    await session.flush()
+    await _seed_review(session, other_project.project_id)
+    hidden_run = create_run(other_owner_project.project_id, "user-2", RunType.REVIEW, {})
+    await SqlalchemyRunRepository(session).add(hidden_run)
+    await session.flush()
+    await SqlalchemyReviewRepository(session).add_review_run(
+        create_review_run(
+            run_id=hidden_run.run_id,
+            research_question="private",
+            workflow_version="review.v1",
+            model_profile_version="review-default.v1",
+            prompt_versions={"outline": "outline_generate.v1"},
+            config_snapshot={"source_limit": 10},
+        )
+    )
+    wrong_type_run = create_run(project, "user-1", RunType.INGESTION, {})
+    await SqlalchemyRunRepository(session).add(wrong_type_run)
+    await session.flush()
+    await SqlalchemyReviewRepository(session).add_review_run(
+        create_review_run(
+            run_id=wrong_type_run.run_id,
+            research_question="not a review",
+            workflow_version="review.v1",
+            model_profile_version="review-default.v1",
+            prompt_versions={"outline": "outline_generate.v1"},
+            config_snapshot={"source_limit": 10},
+        )
+    )
+    await session.commit()
+
+    rows = await SqlalchemyReviewRepository(session).list_review_runs_scoped(
+        project, "user-1"
+    )
+
+    assert rows == [(second_run, second_review), (first_run, first_review)]
+    assert await SqlalchemyReviewRepository(session).list_review_runs_scoped(
+        project, "user-2"
+    ) == []
+
+
 async def test_database_constraints_prevent_duplicate_effects(session, project: str) -> None:
     """Output/Dependency/HumanInput 的唯一约束兜底至少一次执行。"""
     run, _ = await _seed_review(session, project)

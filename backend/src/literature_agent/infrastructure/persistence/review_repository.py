@@ -28,7 +28,7 @@ from literature_agent.domain.review import (
     ReviewStepStatus,
     RunStep,
 )
-from literature_agent.domain.run import RunStatus, RunType
+from literature_agent.domain.run import Run, RunStatus, RunType
 from literature_agent.infrastructure.persistence.models import (
     ArtifactORM,
     HumanInputORM,
@@ -71,6 +71,21 @@ def _review_run_to_domain(value: ReviewRunORM) -> ReviewRun:
         current_stage=ReviewStage(value.current_stage),
         current_outline_output_id=value.current_outline_output_id,
         final_artifact_id=value.final_artifact_id,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def _run_to_domain(value: RunORM) -> Run:
+    return Run(
+        run_id=value.run_id,
+        project_id=value.project_id,
+        owner_id=value.owner_id,
+        run_type=value.run_type,
+        status=RunStatus(value.status),
+        input_payload=value.input_payload,
+        result_payload=value.result_payload,
+        event_sequence=value.event_sequence,
         created_at=value.created_at,
         updated_at=value.updated_at,
     )
@@ -213,6 +228,25 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         row = result.scalar_one_or_none()
         return _review_run_to_domain(row) if row else None
+
+    async def list_review_runs_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[tuple[Run, ReviewRun]]:
+        """以单次 Join 查询返回稳定、受限的 Review 列表。"""
+        result = await self._session.execute(
+            select(RunORM, ReviewRunORM)
+            .join(ReviewRunORM, ReviewRunORM.run_id == RunORM.run_id)
+            .where(
+                RunORM.project_id == project_id,
+                RunORM.owner_id == owner_id,
+                RunORM.run_type == RunType.REVIEW.value,
+            )
+            .order_by(RunORM.created_at.desc(), RunORM.run_id.desc())
+        )
+        return [
+            (_run_to_domain(run), _review_run_to_domain(review))
+            for run, review in result.all()
+        ]
 
     async def get_review_run_scoped_for_update(
         self, run_id: str, project_id: str, owner_id: str
