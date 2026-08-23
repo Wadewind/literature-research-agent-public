@@ -4,9 +4,15 @@
 
 计划中，尚未开始实现。Spec 初版日期：2026-08-20。
 
-进入条件：Phase 4 已完成，Core Research Backend v1 的文献导入、RAG、固定 Review Workflow、Run/Event、Evidence、Artifact、可观测性和评测基线均可独立运行。
+进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
+Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。它不要求 Core
+已经具备公网认证、备份恢复、永久删除/GC、OpenTelemetry 或 SLA。
 
-2026-08-20 已确定使用基于 LangGraph 的 Deep Agents 作为 Research Agent SDK，选型理由和边界见 `../decisions/0001-select-deep-agents-runtime.md`。它提供与目标匹配的 Agent Runtime、MCP 接入和可插拔 Sandbox Backend 方向，但这些能力不能仅凭 SDK 宣称视为可用。Phase 5 通过受限 Spike 验证其能否遵守本项目的业务状态、权限、安全和恢复边界，并用后续集成 ADR 固化版本、Provider 和部署方式。若关键验证失败，停止进入 Phase 6；Core v1 不受影响。
+2026-08-20 已确定使用基于 LangGraph 的 Deep Agents 作为 Research Agent SDK，选型理由和边界见
+`../decisions/0001-select-deep-agents-runtime.md`。它提供与目标匹配的 Agent Runtime、MCP 接入和可插拔
+Sandbox Backend 方向，但这些能力不能仅凭 SDK 宣称视为可用。Phase 5 通过受限 Spike 验证其能否
+遵守本项目的业务状态、权限、安全和恢复边界，并用后续集成 ADR 固化版本、Provider 和部署方式。若
+关键验证失败，停止进入 Phase 6；Demo-ready Core v1 不受影响。
 
 ## 目标和用户可见结果
 
@@ -270,7 +276,7 @@ Tool Event 只记录工具注册名/版本、执行 ID、状态、时长、输�
 - MCP Tool 的业务权限不能仅依赖 Tool 描述或 Deep Agents 文件权限；
 - Phase 5 只验证单一用户故事，不代表通用 Research Agent 已达到产品质量；
 - 实时公共网站、模型和 Sandbox Provider 的结果可能不稳定，不作为默认 CI 事实；
-- Core v1 即使不进入 Phase 6 仍保持完整可交付。
+- Demo-ready Core v1 即使不进入 Phase 6 仍保持完整可交付。
 
 ## 参考资料
 

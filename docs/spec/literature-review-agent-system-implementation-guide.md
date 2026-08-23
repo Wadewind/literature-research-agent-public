@@ -1,14 +1,18 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v2
+> 状态：Proposed v3
 >
-> 日期：2026-08-13
+> 日期：2026-08-23
 >
 > 定位：面向单人、AI 辅助开发的总体实施文档；用于确定产品边界、总体架构、模块职责、阶段顺序和学习目标
 >
 > 技术方向：Python / FastAPI / LangGraph / PostgreSQL / pgvector / ARQ / Valkey / React
 >
 > v2 变更：将 RAG、固定 Workflow 和可靠后端定义为可独立交付的 Core v1；Research Agent 改为 Core 完成后通过成熟 SDK 接入的扩展里程碑
+>
+> v3 变更：将 Phase 4 交付固定为 Demo-ready Core v1，采用本地开发启动、离线 Fake 演示、最低
+> Logs/Metrics 和可复现评测；公网生产、认证、备份恢复、永久删除/GC、OpenTelemetry 和 SLA 不属于
+> 该里程碑
 
 ## 1. 文档用途
 
@@ -84,9 +88,9 @@
 
 ## 3. 项目边界
 
-### 3.1 Core Research Backend v1 范围
+### 3.1 Demo-ready Core Research Backend v1 范围
 
-Core Research Backend v1 需要完成：
+Demo-ready Core Research Backend v1 需要完成：
 
 - Research Project 和文献库；
 - PDF 上传、解析、切分和向量化；
@@ -99,10 +103,13 @@ Core Research Backend v1 需要完成：
 - 通用 Run、Attempt、Step 和 Event 模型；
 - ARQ 后台 Worker、重试和协作式取消；
 - SSE 实时事件与断线重放；
-- 单节点 Docker Compose 部署；
+- PostgreSQL/Valkey Compose 加宿主 API、Worker、Web 的可复现本地开发启动；
+- 完全离线的 Fake Parser/Embedding/Chat/arXiv 演示与显式 Real 模式；
+- JSON 日志、Correlation ID、小型 Prometheus Metrics、可靠性矩阵和实际评测/性能基线；
 - 关键行为的自动测试、故障注入和学习笔记。
 
-总体架构需要为后续 `ResearchAgentRuntime` Adapter 保留清晰边界，但 Core v1 不提前实现未验证的通用 Agent、Tool Registry、浏览器或 Sandbox 抽象。
+总体架构需要为后续 `ResearchAgentRuntime` Adapter 保留清晰边界，但 Demo-ready Core v1 不提前实现
+未验证的通用 Agent、Tool Registry、浏览器或 Sandbox 抽象。
 
 ### 3.2 明确非目标
 
@@ -114,12 +121,13 @@ Core Research Backend v1 需要完成：
 - 插件市场；
 - 多 Agent、Swarm、辩论或动态 Agent 团队；
 - 自行实现通用 Agent Loop、上下文压缩、浏览器自动化框架或 Sandbox 平台；
-- Core v1 中的开放互联网浏览、自动下载和任意代码执行；
+- Demo-ready Core v1 中的开放互联网浏览、非固定学术 API 自动下载和任意代码执行；
 - 任意 Shell 或直接访问宿主机的 Python；
 - 自动抓取付费墙后的论文全文；
 - Kubernetes、多地域和高可用；
 - Kafka、Temporal、Elasticsearch、Qdrant 或 Milvus；
 - 企业 SSO、复杂 RBAC 和计费系统；
+- 公网身份认证、自动备份恢复、永久删除/Storage GC、OpenTelemetry 平台和生产 SLA；
 - 自动替代研究者完成学术事实审查；
 - 未经人工确认直接发表或提交生成结果。
 
@@ -210,7 +218,7 @@ Artifact 是一次 Run 产生的持久文件或结构化产物，例如：
 
 ### 5.1 物理部署
 
-Core v1 采用单仓库、单节点、少量进程的模块化单体：
+Demo-ready Core v1 采用单仓库、单节点、少量进程的模块化单体：
 
 ```text
                          ┌──────────────────┐
@@ -249,17 +257,17 @@ Core v1 采用单仓库、单节点、少量进程的模块化单体：
 └──────────────────────────┘
 ```
 
-默认 Docker Compose 服务为：
+Demo-ready Core v1 的默认本地启动边界为：
 
 ```text
-web
-api
-worker
-postgres
-valkey
+Docker Compose: postgres / valkey
+宿主进程:      api / worker / web
+共享 Storage:  API 与 Worker 使用同一个显式 AGENT_STORAGE_ROOT
 ```
 
-Agent Runtime、Sandbox、Caddy 和可观测性后端在后期通过可选 Compose Profile 加入。Core v1 不要求部署 Agent Server 或 Sandbox。
+开发者需预装 Python、uv、Node.js/npm 和 Docker Compose。Phase 4 不要求把 Web/API/Worker 制作为完整
+部署镜像，也不承诺公网服务器拓扑。Agent Runtime、Sandbox、Caddy 和可观测性后端不属于
+Demo-ready Core v1；Core 也不要求部署 Agent Server 或 Sandbox。
 
 Agent Extension 的部署边界为：
 
@@ -526,7 +534,8 @@ Agent 扩展阶段负责：
 - 危险操作和下载前审批；
 - Sandbox 与 Artifact Workspace 边界。
 
-Core v1 不提前建设通用 Tool Registry。RAG 和固定 Workflow 直接通过明确的应用 Port 调用领域能力；只有 Agent SDK 集成验证证明需要统一 Tool 契约后，才在阶段 Spec 中确定具体模型。
+Demo-ready Core v1 不提前建设通用 Tool Registry。RAG 和固定 Workflow 直接通过明确的应用 Port 调用
+领域能力；只有 Agent SDK 集成验证证明需要统一 Tool 契约后，才在阶段 Spec 中确定具体模型。
 
 ### 7.14 Evidence 与 Citation
 
@@ -879,13 +888,16 @@ owner/Project Review。取消后不得新增 Artifact/Event/Stage；文件写入
 
 ### 12.3 外部 URL
 
-Core v1 只调用固定学术 API，不提供任意 URL 抓取。后续 Agent 增加 Browser 或 URL Tool 时，必须考虑 SSRF、DNS 重绑定、Redirect、内网地址阻断、下载大小与类型、恶意文件、Prompt Injection 和网络外泄。
+Demo-ready Core v1 只调用固定学术 API，不提供任意 URL 抓取。后续 Agent 增加 Browser 或 URL Tool
+时，必须考虑 SSRF、DNS 重绑定、Redirect、内网地址阻断、下载大小与类型、恶意文件、Prompt
+Injection 和网络外泄。
 
 Agent 浏览器首版只访问公开资源，优先发现论文官方项目页、代码仓库、开放数据集和补充材料。涉及登录、用户凭据、付费墙、CAPTCHA、对外提交或不可逆操作时必须拒绝或进入人工审批，不能通过自动化规避站点限制。
 
 ### 12.4 代码执行
 
-Core v1 不提供任意代码执行。固定图表或导出能力应优先作为确定性的应用服务运行，并使用结构化输入 Schema。
+Demo-ready Core v1 不提供任意代码执行。固定图表或导出能力应优先作为确定性的应用服务运行，并使用
+结构化输入 Schema。
 
 是否开放 `run_python_analysis` 由 Deep Agents 集成 Spike 和后续 ADR 决定。若开放，必须通过经验证的 Sandbox Backend 或经评审的独立 Sandbox，限制：
 
@@ -922,21 +934,20 @@ models
 health / readiness / metrics
 ```
 
-`agent-runs` 属于 Research Agent Extension，不是 Core v1 API 的完成条件。
+`agent-runs` 属于 Research Agent Extension，不是 Demo-ready Core v1 API 的完成条件。
 
 长任务创建返回 `202 Accepted` 和稳定 `run_id`。查询和事件接口使用业务 ID，不暴露 ARQ 或 LangGraph 内部表。
 
 ### 13.2 Web 页面
 
-Core v1 页面：
+Demo-ready Core v1 页面：
 
 - Project 列表和详情；
 - Literature Library；
 - Paper 详情和 PDF 阅读；
 - RAG Chat；
-- Review 创建和 Run 详情；
+- Review List、创建和详情，包含 Stage、Sources、结构化 Outline HITL、Matrix、Sections 和 Citation；
 - Artifact 查看和下载；
-- 设置和模型配置。
 
 Research Agent、Browser、Workspace 和审批详情页面在 Agent SDK 完成选型并验证事件契约后加入，不提前复制 SDK 自带 UI 或内部状态模型。
 
@@ -968,7 +979,7 @@ Run Detail 是核心页面，应展示：
 
 ```text
 request_id
-trace_id
+trace_id           # 仅在后续阶段显式启用 Trace 时存在
 project_id
 run_id
 attempt_id
@@ -981,11 +992,13 @@ tool_execution_id  # 仅 Agent 扩展存在
 
 ### 14.2 日志
 
-使用 structlog 输出结构化 JSON。日志记录事件和诊断上下文，不记录完整 Prompt、Secret、PDF 文本和生成文档。
+Demo-ready Core v1 使用标准库 `logging` 和项目自有 JSON Formatter 输出结构化日志。API 进程通过
+`contextvars` 传播 Correlation ID；Worker 以 `run_id/attempt_id` 建立自己的执行上下文，不依赖跨进程
+Context。日志记录事件和诊断上下文，不记录完整 Prompt、Secret、PDF 文本和生成文档。
 
 ### 14.3 指标
 
-后期至少覆盖：
+Phase 4 只引入 `prometheus-client` 和小型 `/metrics`，至少覆盖：
 
 - API 请求量和延迟；
 - Queue 深度和等待时间；
@@ -999,7 +1012,9 @@ tool_execution_id  # 仅 Agent 扩展存在
 
 ### 14.4 Trace
 
-Core v1 使用 OpenTelemetry 连接 API、Queue、Worker、LangGraph Node、模型和 Retrieval。Agent 扩展再连接 Runtime、Browser、Tool 和 Sandbox Span。LangSmith 或 SDK 自带 Trace 可以用于运行时调试，但不作为系统唯一的业务审计或生产可观测性来源。
+Demo-ready Core v1 不引入 OpenTelemetry、Collector 或 Trace 后端。Run、Event、Attempt、Step、
+ModelInvocation 和 Correlation Log 提供当前最低诊断链路。Phase 6 若因 Agent Runtime、Browser、Tool 或
+Sandbox 调试需要 Trace，应在自己的阶段 Spec 中独立决策；LangSmith 或 SDK Trace 不能替代业务审计。
 
 ## 15. 建议仓库结构
 
@@ -1036,7 +1051,7 @@ literature-agent/
 ├─ contracts/
 │  ├─ openapi/
 │  ├─ events/
-│  └─ tools/                  # Agent Extension 契约，Core v1 不预建
+│  └─ tools/                  # Agent Extension 契约，Demo-ready Core v1 不预建
 ├─ evals/
 │  ├─ datasets/
 │  ├─ fixtures/
@@ -1309,33 +1324,35 @@ Strategy、arXiv Search/Import、Wait/Reconcile 和 Matrix 各自在 Step/Event 
 从 `model_invocations` 聚合；Final Output 只保存统计、引用数量和 Artifact manifest，完整引用映射只在
 Bibliography Artifact 与 Claim/Citation/Evidence 事实中保存。
 
-### Phase 4：Core Research Backend 产品闭环、可靠性与评测
+### Phase 4：Demo-ready Core 产品闭环、可靠性与评测
 
 #### 目标
 
-在引入开放式 Agent Runtime 之前，将文献导入、RAG 和固定 Review Workflow 做成可演示、可诊断、可恢复并具有评测证据的独立产品。
+在引入开放式 Agent Runtime 之前，将文献导入、RAG 和固定 Review Workflow 做成可在本地开发环境
+复现、演示、诊断和评测的独立产品。
 
-Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Extension 不阻塞该里程碑。
+Phase 4 完成即代表 **Demo-ready Core Research Backend v1** 完成；它不是公网生产产品，Research
+Agent Extension 不阻塞该里程碑。
 
 #### 需要学习
 
-- OpenTelemetry Trace 和 Prometheus 指标设计；
+- JSON 结构化日志、Correlation 和 Prometheus 低基数指标设计；
 - 高基数与 Correlation；
 - RAG、Retrieval、Citation 和 Workflow 评测；
 - E2E 测试边界；
 - Lease/Heartbeat、故障注入和恢复对账；
-- 单机部署、备份与恢复；
+- 本地开发启动、Fake/Real Adapter 边界；
 - 性能基线和容量假设。
 
 #### 主要内容
 
 - 完整 Project、Library、Chat、Review、Run 和 Artifact UI；
-- JSON 日志、Metrics 和 Trace；
+- 结构化 Outline 表单、完全离线的 Fake arXiv 和可重复演示 Fixture；
+- 标准库 JSON 日志、Correlation ID 和小型 Prometheus Metrics；
 - 固定 Retrieval/Citation/Workflow 评测集及结果报告；
 - Queue、Worker、数据库、Provider、Checkpoint 和 Event 通知故障注入；
 - 用户与 Project 隔离测试；
-- Docker Compose 部署和运维文档；
-- PostgreSQL 和 Artifact 备份恢复演练；
+- PostgreSQL/Valkey Compose 加宿主 API/Worker/Web 的开发启动与共享 Storage 审计；
 - 关键 E2E、项目架构说明和面试笔记。
 
 #### 阶段出口
@@ -1345,9 +1362,12 @@ Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Ext
 - 用户 A 无法读取用户 B 的文献、Run、Evidence 和 Artifact；
 - 每个用户可见错误可以通过 Correlation ID 诊断；
 - 有真实执行得到的性能和评测基线，不使用虚构指标；
-- 全新环境能够按文档启动和运行；
-- 备份和恢复流程至少演练一次；
+- 全新开发环境安装依赖后能够按文档离线启动和运行；
+- 真实 arXiv/Provider 只通过显式模式运行，普通测试无网络和费用；
 - 每个 Core 模块有学习笔记、已知限制和 60 秒面试说明。
+
+公网部署、登录认证、自动备份恢复、永久删除/GC、OpenTelemetry 和 SLA 明确不属于该阶段；完整边界
+见 ADR-0004 和 Phase 4 Spec。
 
 ### Phase 5：Deep Agents 集成验证
 
@@ -1390,7 +1410,7 @@ Phase 4 完成即代表 **Core Research Backend v1** 完成；Research Agent Ext
 - SDK 事件被筛选并映射为版本化业务 Event，不保存完整思考过程和敏感输出；
 - 取消、超时、Runtime 断连和“SDK 成功但本地响应丢失”至少各有一次验证；
 - 下载 Artifact 具有来源、内容哈希、大小、类型和 Project 所有权；
-- 明确是否进入 Phase 6；若用例或运行时不成立，Core v1 仍保持完整可交付。
+- 明确是否进入 Phase 6；若用例或运行时不成立，Demo-ready Core v1 仍保持完整可交付。
 
 ### Phase 6：Deep Agents 驱动的 Research Agent 与安全强化
 
@@ -1549,7 +1569,7 @@ Agent Extension 另需覆盖：
 - DOCX 模板；Phase 3 Markdown 已固定为 `[1]` 数字引用；
 - Metrics Bucket 和告警阈值。
 
-以下实现决策明确推迟到 Phase 5/6，而不是在 Core v1 中预先固定：
+以下实现决策明确推迟到 Phase 5/6，而不是在 Demo-ready Core v1 中预先固定：
 
 - Agent 的最终用户故事和是否进入正式产品；
 - Deep Agents 的精确版本、升级策略和兼容范围；
@@ -1563,9 +1583,9 @@ Agent Extension 另需覆盖：
 
 ## 22. 完成定义
 
-### 22.1 Core Research Backend v1
+### 22.1 Demo-ready Core Research Backend v1
 
-Core v1 完成需要同时满足：
+Demo-ready Core v1 完成需要同时满足：
 
 - 文献导入、有引用 RAG 和固定 Review Workflow 三条路径可运行；
 - 长任务可查询、重试、取消、暂停和恢复；
@@ -1574,13 +1594,15 @@ Core v1 完成需要同时满足：
 - 重要 Claim 的引用可定位到 Paper Version 和 Evidence；
 - 用户和 Project 数据隔离有自动测试；
 - 关键行为不依赖真实模型或实时学术 API 即可测试；
-- Docker Compose 可复现启动；
-- 关键日志、指标和 Trace 可用于诊断；
+- 全新开发环境安装依赖后，可通过 PostgreSQL/Valkey Compose 和 `scripts/dev.sh` 完全离线复现启动；
+- 标准库 JSON 日志、Correlation ID 和低基数 Prometheus Metrics 可用于最低诊断；
 - Retrieval、Citation 和 Workflow 评测结果来自真实运行且可复现；
 - Phase 1 至 Phase 4 的阶段 Spec、测试证据、模块笔记和复盘完成；
 - 开发者能够不依赖 AI 解释核心架构、失败语义和设计取舍。
 
-达到以上条件即可将项目作为完整的 Core Research Backend 交付，Research Agent Extension 不阻塞该结论。
+达到以上条件即可将项目作为 Demo-ready Core Research Backend 交付，Research Agent Extension 不阻塞
+该结论。公网部署、认证、自动备份恢复、永久删除/GC、OpenTelemetry 和 SLA 不因该里程碑而被视为
+完成。
 
 ### 22.2 Research Agent Extension
 
@@ -1605,7 +1627,7 @@ Core v1 完成需要同时满足：
 | 3 | 文档结构、Embedding、检索 | 可评测的文献检索 |
 | 4 | Evidence、Citation、SSE | 有引用的 RAG 问答 |
 | 5 | LangGraph、Checkpoint、Interrupt | 可暂停恢复的综述 Workflow |
-| 6 | Observability、E2E、评测、故障恢复 | 可部署、可演示、可复盘的 Core v1 |
+| 6 | Logs/Metrics、E2E、评测、故障恢复 | 本地可演示、可复盘的 Demo-ready Core v1 |
 | 7 | Agent SDK、Runtime Adapter、所有权 | 有 ADR 和运行证据的 Agent 集成 Spike |
 | 8 | Browser、Tool、Sandbox、安全 | 受限且可观察的 Research Agent Extension |
 

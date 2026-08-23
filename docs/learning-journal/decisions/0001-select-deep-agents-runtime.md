@@ -38,10 +38,13 @@ Core Research Backend 先交付确定性的文献导入、RAG、引用校验和�
 
 ## 验证门槛
 
-Phase 5 必须验证取消与恢复、重复副作用、MCP 白名单、Sandbox 隔离、Artifact 取回、事件筛选和 SDK 升级契约。任何关键安全或恢复项无法满足时，不进入 Phase 6，但不推翻 Core Research Backend v1。
+Phase 5 必须验证取消与恢复、重复副作用、MCP 白名单、Sandbox 隔离、Artifact 取回、事件筛选和 SDK
+升级契约。任何关键安全或恢复项无法满足时，不进入 Phase 6，但不推翻 Demo-ready Core Research
+Backend v1。
 
 ## 被否决的方案
 
 - 自研通用 Agent Loop：控制力高，但范围和维护成本不适合个人项目。
 - 在业务层直接依赖 Deep Agents 类型：初期代码更少，但会污染 Domain 和持久化契约，使 SDK 升级与替换成本过高。
-- 在 Core v1 阶段提前接入：会分散 Phase 1–4 的确定性产品闭环，因此选型现在记录，实现仍延后到 Phase 5。
+- 在 Demo-ready Core v1 阶段提前接入：会分散 Phase 1–4 的确定性产品闭环，因此选型现在记录，实现
+  仍延后到 Phase 5。

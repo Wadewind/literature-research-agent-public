@@ -72,7 +72,8 @@ HTTP Route (api/projects.py)
 ## 已知限制
 
 - 当前 Actor 为开发用户硬编码，生产必须替换。
-- 修改名称/描述、归档/恢复已在 Phase 2 切片 1 实现；仍无永久删除（Phase 4）、标签和成员管理。
+- 修改名称/描述、归档/恢复已在 Phase 2 切片 1 实现；仍无永久删除、标签和成员管理。ADR-0004 已将
+  永久删除与 Storage GC 推迟到 Demo-ready Core v1 之后的独立生产化决策。
 - 归档/恢复暂无前端入口（延后到 Phase 2 切片 9 的 UI）。
 - 没有按 Project 的配额或预算限制。
 

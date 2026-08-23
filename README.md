@@ -1,6 +1,9 @@
 # Literature Review Agent System
 
-面向学习和简历展示的文献综述 Agent 系统。Phase 1–2 已完成：系统支持 Project 与个人文献库、可靠异步 PDF 导入、结构化文档、pgvector 混合检索，以及 Project/单篇/多篇范围内带 Evidence 和 PDF 页码引用的 RAG 问答。后台任务具备幂等、重试、取消、Event/SSE 重放和故障恢复，Web 端已有 Playwright 完整旅程。
+面向学习和简历展示的文献综述 Agent 系统。Phase 1–3 已完成：系统支持 Project 与个人文献库、可靠
+异步 PDF 导入、pgvector 混合检索、带 Evidence/PDF 页码引用的 RAG 问答，以及可暂停恢复、人工确认
+Outline 并导出引用 Artifact 的固定 Review Workflow。Phase 4 将其收束为本地可复现、可评测的
+Demo-ready Core v1；该里程碑不代表公网生产、登录认证、备份恢复、永久删除/GC 或 SLA 已完成。
 
 ## 仓库布局
 

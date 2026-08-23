@@ -22,7 +22,8 @@
   → 提交结果、Usage、审计和可重放 Event
 ```
 
-阶段结束时，Research Agent Extension 是 Core v1 之上的独立扩展。禁用或移除 Agent Runtime 不影响文献导入、RAG 和固定 Review Workflow。
+阶段结束时，Research Agent Extension 是 Demo-ready Core v1 之上的独立扩展。禁用或移除 Agent
+Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 
 ## 范围
 
@@ -343,7 +344,8 @@ Run ── RuntimeSession ── Workspace
 9. **Agent UI 与 Artifact**：Run Detail、Step、Tool、审批、Manifest、报告和文件查看/下载；
 10. **故障注入与安全测试**：Runtime/MCP/Browser/Sandbox 故障、Prompt Injection、Secret、越权、恶意文件和取消竞争；
 11. **评测与升级保护**：固定 Agent 评测集、Deep Agents 升级契约测试、性能/成本基线和已知限制；
-12. **验收复盘**：Compose/Profile、备份恢复、运维文档、模块学习笔记和 Research Agent Extension 完成报告。
+12. **验收复盘**：Runtime Compose/Profile、隔离 Workspace 恢复边界、演示运行文档、模块学习笔记和
+    Research Agent Extension 完成报告。Core 数据库/Storage 的生产备份恢复不自动转移到本阶段。
 
 ## 测试方式
 
@@ -396,7 +398,7 @@ Run ── RuntimeSession ── Workspace
 - Prompt Injection 无法只靠分类器或 Prompt 消除，系统依赖最小权限和基础设施隔离限制后果；
 - 完整浏览器兼容性、复杂登录流程和网页交互不属于首版目标；
 - 多 Agent、长期 Memory 和通用代码执行保持关闭，除非后续有独立需求和安全证据；
-- Research Agent Extension 可以独立禁用，Core Research Backend v1 仍应完整运行。
+- Research Agent Extension 可以独立禁用，Demo-ready Core Research Backend v1 仍应完整运行。
 
 ## 预期学习笔记
 

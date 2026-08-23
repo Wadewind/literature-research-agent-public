@@ -663,7 +663,8 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 1. Compose Smoke 采用隔离容器 PostgreSQL/Valkey + 宿主 API/Worker/Web；API 与 Worker 共享同一临时 Storage。当前不建设完整容器部署。
 2. Playwright 使用 `text_two_pages.pdf` 和 Fake Parser 固化业务旅程；失败时保存 screenshot/video/trace，不维护截图基线。
 3. 并发同 owner + SHA-256 上传的唯一约束 loser 仍允许失败后重试；冲突后自动回读 canonical 作为后续可靠性增强，不阻塞 Phase 1。
-4. 本地 Storage 孤儿资产和历史非 canonical 资产不在 Phase 1 自动删除；永久删除、引用检查与异步 GC 延后到 Phase 4。
+4. 本地 Storage 孤儿资产和历史非 canonical 资产不在 Phase 1 自动删除；永久删除、引用检查与异步 GC
+   原定延后到 Phase 4，后由 ADR-0004 调整为不属于 Demo-ready Core v1。
 
 如果实现需要改变 Run/Event 事实来源、Paper/Version/Parse Revision 所有权、数据隐私或跨用户去重策略，先更新本 Spec；达到 `AGENTS.md` 的触发条件时再写 ADR。
 
@@ -675,7 +676,8 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 - 本地 Storage 只面向单节点开发，S3 替换需要 ADR；
 - 协作式取消不保证立即终止已进入 Parser 的底层计算；
 - 前端仅覆盖本阶段演示闭环。
-- Project 修改/归档/恢复与 Paper 归档/恢复已在 Phase 2 切片 1 实现（语义见产品决策 0002）；前端归档入口延后到 Phase 2 切片 9。永久删除延后到 Phase 4。
+- Project 修改/归档/恢复与 Paper 归档/恢复已在 Phase 2 切片 1 实现（语义见产品决策 0002）；前端
+  归档入口已在 Phase 2 切片 9 完成。永久删除经 ADR-0004 调整为不属于 Demo-ready Core v1。
 
 ## 学习笔记和下一步
 

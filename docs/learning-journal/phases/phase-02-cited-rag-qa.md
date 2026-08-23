@@ -117,7 +117,8 @@ Project
 - Chunk 由一个或多个相邻 Element 组成，不修改原始 Element；
 - 章节标题作为上下文前缀，表格和题注尽量保持完整；
 - 每个 Chunk 保存 Element ID 列表和可回溯页码；
-- Chunk/Profile 变化产生新 ChunkSet，旧索引保留直到无引用后再清理（清理属 Phase 4 GC 范畴）；
+- Chunk/Profile 变化产生新 ChunkSet，旧索引保留直到无引用后再清理；ADR-0004 已把自动 GC 推迟到
+  Demo-ready Core v1 之后；
 - Phase 2 只配置一个活动 Chunk/Embedding Profile；
 - 首版使用 pgvector 精确检索，不创建 HNSW；
 - token 计数使用 `tiktoken`（离线计算，2026-08-20 确认引入），tokenizer 名称参与 chunk profile hash；
@@ -270,7 +271,8 @@ Event 不保存完整问题、Prompt、Chunk 文本、Evidence 摘录或最终�
 
 ### 切片 1：资源管理边界（契约定稿）
 
-已于 2026-08-20 实现完成。遵循 `../decisions/0002-archive-and-project-scoped-entrypoints.md`：归档优先，永久删除延后到 Phase 4。
+已于 2026-08-20 实现完成。遵循 `../decisions/0002-archive-and-project-scoped-entrypoints.md`：归档
+优先；永久删除原定 Phase 4，后由 ADR-0004 调整为不属于 Demo-ready Core v1。
 
 #### 目标
 
@@ -823,7 +825,8 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 - 2026-08-20：新增依赖 `pgvector`（SQLAlchemy 绑定）与 `tiktoken`，各自独立 `chore:` 提交；compose 与 Testcontainers 镜像从 `postgres:18` 换为 `pgvector/pgvector:pg18`，本地开发库允许重建，迁移负责 `CREATE EXTENSION vector`；
 - 2026-08-20：`scope_mode` 只有 `project` / `selected_papers` 两值，单篇即一条的 `selected_papers`；Conversation 创建后 scope 不可改；Run `input_payload` 固化 `[{paper_id, version_id}, ...]` 快照；
 - 2026-08-20：Citation 严格策略——Claim 为段落级，`answered` 状态下每个 Claim 必须至少绑定一个本次 Run 的 Evidence，否则修复重试一次后 FAILED；
-- 2026-08-20：归档语义——归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；归档 Project 存在非终态 Run 时归档返回 409；永久删除仍属 Phase 4；
+- 2026-08-20：归档语义——归档 Paper 后同哈希上传仍复用已有 canonical Version，不自动恢复归档；
+  归档 Project 存在非终态 Run 时归档返回 409；永久删除原定 Phase 4，后由 ADR-0004 推迟；
 - 2026-08-20：FTS 语言配置 `english`；RRF `k=60`；不做 Query Expansion 和独立 reranker；
 - 2026-08-20：评测语料使用合成 PDF（切片 2 由子智能体构建），问题集覆盖单篇事实、跨篇综合、明确无答案和范围边界四类；指标只报告实跑的 Retrieval Recall@K、Citation validity/completeness 和少量人工 Groundedness。
 

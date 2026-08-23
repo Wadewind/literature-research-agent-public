@@ -31,3 +31,8 @@ learning-journal/
 [综述 Artifact 生成与生产执行闭环](modules/review-artifact-generation.md)。生产 Review Executor、固定图
 终态、Project-scoped API、Artifact 下载、通用 SSE 重放和图外阶段可观察性均已通过最终审计；真实参数
 校准和 Review 专用前端归入 Phase 4 产品闭环。
+
+[Phase 4：Demo-ready Core 产品闭环、可靠性与评测](phases/phase-04-core-product-reliability.md)已于
+2026-08-23 完成需求收敛，计划按离线 Fake arXiv、Review UI、JSON Logs/Correlation、低基数 Metrics、
+可靠性审计、固定评测/性能基线和 Playwright 发布收尾依次开发。该阶段明确面向本地演示开发环境，
+不包含公网认证、备份恢复、永久删除/GC、OpenTelemetry 或 SLA。
