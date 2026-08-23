@@ -2,9 +2,11 @@
 
 import logging
 from datetime import UTC, datetime
+from unittest.mock import Mock
 
 import pytest
 
+from literature_agent.application import run_execution_service as execution_module
 from literature_agent.application.run_execution_service import (
     ExecutionOutcome,
     RunExecutionService,
@@ -218,6 +220,7 @@ async def test_execute_duplicate_job_is_skipped(
     event_repo: FakeEventRepository,
     attempt_repo: FakeAttemptRepository,
     outbox_repo: FakeOutboxRepository,
+    monkeypatch,
 ) -> None:
     """重复 Job 不应重复认领或重复执行。"""
     run = await _add_run(run_repo)
@@ -230,13 +233,22 @@ async def test_execute_duplicate_job_is_skipped(
     service = _make_service(
         run_repo, event_repo, attempt_repo, outbox_repo, _tracking_executor
     )
+    recorder = Mock()
+    monkeypatch.setattr(execution_module, "metrics", recorder)
 
     first = await service.execute(run.run_id, correlation_id="job-1")
     second = await service.execute(run.run_id, correlation_id="job-1")
+    missing = await service.execute("missing-run", correlation_id="job-2")
 
     assert first == ExecutionOutcome.COMPLETED
     assert second == ExecutionOutcome.SKIPPED
+    assert missing == ExecutionOutcome.MISSING
     assert calls == [run.run_id]
+    recorder.record_run_started.assert_called_once_with(run.run_type)
+    recorder.record_run_completed.assert_called_once()
+    completed_call = recorder.record_run_completed.call_args
+    assert completed_call.args[1] == "succeeded"
+    assert completed_call.kwargs["attempt_status"] == "succeeded"
 
 
 async def test_review_finalize_closes_attempt_without_duplicate_succeeded_event(

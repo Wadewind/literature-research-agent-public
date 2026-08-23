@@ -25,6 +25,7 @@ from literature_agent.domain.exceptions import NoReviewablePapersError, RunNotFo
 from literature_agent.domain.review import ReviewSourceStatus, ReviewStage
 from literature_agent.domain.run import Run, RunStatus, RunType
 from literature_agent.infrastructure.workflow.postgres_checkpoint import PostgresCheckpointStore
+from literature_agent.metrics import metrics, observe_review_stage
 from literature_agent.workflows.review_export_nodes import ReviewExportGraphNodes
 from literature_agent.workflows.review_graph import (
     ReviewGraphFactory,
@@ -71,50 +72,67 @@ class ReviewExecutor[TSession: Session]:
 
     async def execute(self, run: Run, correlation_id: str) -> None:
         if run.run_type != RunType.REVIEW.value or run.status is not RunStatus.RUNNING:
+            metrics.record_review_stage(ReviewStage.VALIDATE_REQUEST, "failed")
             raise RunNotFoundError(run.run_id)
+        metrics.record_review_stage(ReviewStage.VALIDATE_REQUEST, "succeeded")
         owner_id = run.owner_id
         project_id = run.project_id
         actor = ActorContext(owner_id)
-        strategy = await self._strategy.formulate(
-            run_id=run.run_id,
-            project_id=project_id,
-            owner_id=owner_id,
-            correlation_id=correlation_id,
+        strategy = await observe_review_stage(
+            ReviewStage.FORMULATE_SEARCH_STRATEGY,
+            self._strategy.formulate(
+                run_id=run.run_id,
+                project_id=project_id,
+                owner_id=owner_id,
+                correlation_id=correlation_id,
+            ),
         )
         snapshot = await self._review_snapshot(run.run_id, project_id, owner_id)
         query = ArxivSearchQuery(
             strategy.output.payload["arxiv_query"],
             max_results=int(snapshot.config_snapshot.get("source_limit", 10)),
         )
-        await self._arxiv.search_sources(
-            actor=actor,
-            project_id=project_id,
-            review_run_id=run.run_id,
-            query=query,
-            correlation_id=correlation_id,
+        await observe_review_stage(
+            ReviewStage.SEARCH_ARXIV,
+            self._arxiv.search_sources(
+                actor=actor,
+                project_id=project_id,
+                review_run_id=run.run_id,
+                query=query,
+                correlation_id=correlation_id,
+            ),
         )
-        await self._arxiv.import_sources(
-            actor=actor,
-            project_id=project_id,
-            review_run_id=run.run_id,
-            correlation_id=correlation_id,
+        await observe_review_stage(
+            ReviewStage.IMPORT_ARXIV_PAPERS,
+            self._arxiv.import_sources(
+                actor=actor,
+                project_id=project_id,
+                review_run_id=run.run_id,
+                correlation_id=correlation_id,
+            ),
         )
         sources = await self._sources(run.run_id, project_id, owner_id)
         if any(
             item.status in {ReviewSourceStatus.DISCOVERED, ReviewSourceStatus.IMPORTING}
             for item in sources
         ):
-            await self._dependency_wait.pause(run.run_id, project_id, owner_id, correlation_id)
+            await observe_review_stage(
+                ReviewStage.WAIT_FOR_INGESTION,
+                self._dependency_wait.pause(run.run_id, project_id, owner_id, correlation_id),
+            )
             return
         if not any(item.status is ReviewSourceStatus.READY for item in sources):
             raise NoReviewablePapersError
 
-        matrix = await self._matrix.build(
-            run_id=run.run_id,
-            project_id=project_id,
-            owner_id=owner_id,
-            search_strategy_output_id=strategy.output.output_id,
-            correlation_id=correlation_id,
+        matrix = await observe_review_stage(
+            ReviewStage.BUILD_EVIDENCE_MATRIX,
+            self._matrix.build(
+                run_id=run.run_id,
+                project_id=project_id,
+                owner_id=owner_id,
+                search_strategy_output_id=strategy.output.output_id,
+                correlation_id=correlation_id,
+            ),
         )
         outline_nodes = ReviewOutlineGraphNodes(
             owner_id=owner_id,

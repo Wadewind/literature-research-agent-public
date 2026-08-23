@@ -84,6 +84,8 @@ SSE (GET /runs/{run_id}/events/stream)
 - 查询始终校验 `owner_id`。
 - Event Payload 只保存小型结构化数据，不保存 PDF、全文、Prompt 或堆栈。
 - `correlation_id` 用于把同一业务操作的前端请求、Service 调用和 Event 串联。
+- Phase 4 Metrics 的 Run/Attempt Counter 与 duration Histogram 只使用低基数 run_type/status；不使用
+  run/project/attempt/correlation ID。重复执行计“尝试”，业务状态仍以本表和 Event 为准。
 
 ## 重要测试和运行结果
 

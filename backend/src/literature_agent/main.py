@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from literature_agent.api.conversations import router as conversations_router
 from literature_agent.api.documents import router as documents_router
 from literature_agent.api.health import router as health_router
+from literature_agent.api.metrics import router as metrics_router
 from literature_agent.api.paper_files import router as paper_files_router
 from literature_agent.api.papers import router as papers_router
 from literature_agent.api.projects import router as projects_router
@@ -27,6 +28,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(CorrelationMiddleware, service="api")
     app.include_router(health_router, prefix="/health")
+    app.include_router(metrics_router)
     app.include_router(projects_router)
     app.include_router(runs_router)
     app.include_router(reviews_router)

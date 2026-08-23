@@ -50,6 +50,7 @@ _DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED = True
 _DEFAULT_ANSWER_MAX_OUTPUT_TOKENS = 2048
 # arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。
 _DEFAULT_ARXIV_BACKEND = "fake"
+_DEFAULT_WORKER_METRICS_PORT = 8001
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +104,7 @@ class Settings:
     )
     answer_max_output_tokens: int = field(default=_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS)
     arxiv_backend: str = field(default=_DEFAULT_ARXIV_BACKEND)
+    worker_metrics_port: int = field(default=_DEFAULT_WORKER_METRICS_PORT)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -189,6 +191,15 @@ class Settings:
             if raw_answer_max_tokens
             else _DEFAULT_ANSWER_MAX_OUTPUT_TOKENS
         )
+        raw_metrics_port = os.getenv("AGENT_WORKER_METRICS_PORT")
+        try:
+            worker_metrics_port = (
+                int(raw_metrics_port) if raw_metrics_port else _DEFAULT_WORKER_METRICS_PORT
+            )
+        except ValueError as exc:
+            raise ValueError("AGENT_WORKER_METRICS_PORT 必须为 0..65535 的整数") from exc
+        if not 0 <= worker_metrics_port <= 65535:
+            raise ValueError("AGENT_WORKER_METRICS_PORT 必须为 0..65535 的整数")
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -231,4 +242,5 @@ class Settings:
             in {"1", "true", "yes"},
             answer_max_output_tokens=answer_max_output_tokens,
             arxiv_backend=os.getenv("AGENT_ARXIV_BACKEND", _DEFAULT_ARXIV_BACKEND),
+            worker_metrics_port=worker_metrics_port,
         )

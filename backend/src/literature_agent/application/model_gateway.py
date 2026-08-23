@@ -29,6 +29,7 @@ from literature_agent.domain.model_types import (
     ChatResult,
     EmbeddingResult,
 )
+from literature_agent.metrics import metrics
 from literature_agent.observability import log_event
 
 TSession = TypeVar("TSession", bound=Session)
@@ -208,6 +209,7 @@ class ModelGateway[TSession: Session]:
             error_code=error_code,
             exception_type=error_code,
         )
+        metrics.record_model(capability, status, latency_ms / 1000)
 
     @staticmethod
     def _elapsed_ms(started: float) -> int:

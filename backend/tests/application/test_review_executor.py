@@ -3,10 +3,13 @@
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
+from literature_agent import metrics as metrics_module
+from literature_agent.application import review_executor as review_executor_module
 from literature_agent.application.review_executor import ReviewExecutor
 from literature_agent.application.review_search_strategy_service import SearchStrategyResult
 from literature_agent.domain.exceptions import NoReviewablePapersError
@@ -70,7 +73,7 @@ class _CheckpointStore:
         yield self.saver
 
 
-async def test_pending_source_pauses_outside_langgraph() -> None:
+async def test_pending_source_pauses_outside_langgraph(monkeypatch) -> None:
     runs = FakeRunRepository()
     reviews = FakeReviewRepository()
     run = replace(
@@ -136,6 +139,9 @@ async def test_pending_source_pauses_outside_langgraph() -> None:
         export_service=unexpected,
         checkpoint_store=unexpected,
     )
+    recorder = Mock()
+    monkeypatch.setattr(review_executor_module, "metrics", recorder)
+    monkeypatch.setattr(metrics_module, "metrics", recorder)
 
     await executor.execute(run, "correlation-1")
 
@@ -143,6 +149,13 @@ async def test_pending_source_pauses_outside_langgraph() -> None:
     assert arxiv.search_calls == 1
     assert arxiv.import_calls == 1
     assert wait.calls == [("review-1", "project-1", "owner-1", "correlation-1")]
+    assert [call.args for call in recorder.record_review_stage.call_args_list] == [
+        (ReviewStage.VALIDATE_REQUEST, "succeeded"),
+        (ReviewStage.FORMULATE_SEARCH_STRATEGY, "succeeded"),
+        (ReviewStage.SEARCH_ARXIV, "succeeded"),
+        (ReviewStage.IMPORT_ARXIV_PAPERS, "succeeded"),
+        (ReviewStage.WAIT_FOR_INGESTION, "succeeded"),
+    ]
 
 
 @pytest.mark.parametrize("source_state", ["failed", "empty"])

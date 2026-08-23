@@ -5,8 +5,11 @@ FTS 零命中的纯语义路径、每篇上限与预算截断、范围参数透�
 SQL 强过滤正确性由集成测试覆盖。
 """
 
+from unittest.mock import Mock
+
 import pytest
 
+from literature_agent.application import retriever as retriever_module
 from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.application.retriever import Retriever
 from literature_agent.domain.chunk import Chunk
@@ -64,7 +67,7 @@ def _make_retriever(
     )
 
 
-async def test_retrieve_merges_two_paths_and_records_invocation() -> None:
+async def test_retrieve_merges_two_paths_and_records_invocation(monkeypatch) -> None:
     """编排：一次 embedding 调用（含 run_id 记录）、两路 RRF 合并、字段完整。"""
     chunk_repo = FakeChunkRepository()
     chunk_repo.semantic_results = [_retrieved("a", "p1"), _retrieved("b", "p1")]
@@ -72,6 +75,8 @@ async def test_retrieve_merges_two_paths_and_records_invocation() -> None:
     invocation_repo = FakeModelInvocationRepository()
     embedding = FakeEmbeddingModel()
     retriever = _make_retriever(chunk_repo, invocation_repo, embedding_model=embedding)
+    recorder = Mock()
+    monkeypatch.setattr(retriever_module, "metrics", recorder)
 
     results = await retriever.retrieve(
         owner_id="user-1", project_id="proj-1", query="graph neural networks", run_id="run-9"
@@ -97,6 +102,8 @@ async def test_retrieve_merges_two_paths_and_records_invocation() -> None:
     paths = [call["path"] for call in chunk_repo.search_calls]
     assert paths == ["semantic", "fulltext"]
     assert all(call["limit"] == 20 for call in chunk_repo.search_calls)
+    assert recorder.record_retrieval.call_args.args[0] == "project"
+    assert recorder.record_retrieval.call_args.args[2] == 3
 
 
 async def test_empty_query_rejected_without_model_call() -> None:
@@ -149,10 +156,12 @@ async def test_per_paper_limit_and_token_budget_applied() -> None:
     assert results[0].rank == 1
 
 
-async def test_selected_paper_ids_passed_to_both_paths() -> None:
+async def test_selected_paper_ids_passed_to_both_paths(monkeypatch) -> None:
     """selected_papers 范围原样透传给两路 SQL 查询。"""
     chunk_repo = FakeChunkRepository()
     retriever = _make_retriever(chunk_repo, FakeModelInvocationRepository())
+    recorder = Mock()
+    monkeypatch.setattr(retriever_module, "metrics", recorder)
 
     await retriever.retrieve(
         owner_id="user-1",
@@ -163,6 +172,7 @@ async def test_selected_paper_ids_passed_to_both_paths() -> None:
 
     assert chunk_repo.search_calls[0]["paper_ids"] == ["p1", "p2"]
     assert chunk_repo.search_calls[1]["paper_ids"] == ["p1", "p2"]
+    assert recorder.record_retrieval.call_args.args[0] == "selected_papers"
 
 
 async def test_embedding_failure_propagates_and_is_recorded() -> None:
@@ -218,12 +228,14 @@ async def test_retrieve_for_scope_passes_snapshot_to_both_paths() -> None:
     assert all(call["owner_id"] == "user-1" for call in chunk_repo.search_calls)
 
 
-async def test_retrieve_for_scope_empty_snapshot_skips_model() -> None:
+async def test_retrieve_for_scope_empty_snapshot_skips_model(monkeypatch) -> None:
     """空快照直接返回空结果，不调用模型也不访问数据库。"""
     chunk_repo = FakeChunkRepository()
     invocation_repo = FakeModelInvocationRepository()
     embedding = FakeEmbeddingModel()
     retriever = _make_retriever(chunk_repo, invocation_repo, embedding_model=embedding)
+    recorder = Mock()
+    monkeypatch.setattr(retriever_module, "metrics", recorder)
 
     results = await retriever.retrieve_for_scope(
         owner_id="user-1", query="q", version_scope=[], run_id="run-9"
@@ -233,3 +245,5 @@ async def test_retrieve_for_scope_empty_snapshot_skips_model() -> None:
     assert embedding.calls == []
     assert invocation_repo.all() == []
     assert chunk_repo.search_calls == []
+    assert recorder.record_retrieval.call_args.args[0] == "version_snapshot"
+    assert recorder.record_retrieval.call_args.args[2] == 0

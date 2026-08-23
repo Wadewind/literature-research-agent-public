@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from literature_agent.api.health import get_readiness_service
 from literature_agent.application.health_service import HealthService
@@ -19,6 +20,19 @@ def test_health_live_returns_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_metrics_returns_prometheus_text_for_api_process() -> None:
+    """GET /metrics 使用 Prometheus content type 且不暴露敏感高基数 Label。"""
+    response = TestClient(create_app()).get("/metrics")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == CONTENT_TYPE_LATEST
+    assert "agent_run_started_total" in response.text
+    assert "owner_id" not in response.text
+    assert "project_id" not in response.text
+    assert "run_id" not in response.text
+    assert "correlation_id" not in response.text
 
 
 class _Probe:

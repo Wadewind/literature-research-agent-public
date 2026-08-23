@@ -1,20 +1,49 @@
 """Review LangGraph Runtime 契约测试。"""
 
+from unittest.mock import Mock
+
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from psycopg import OperationalError
 
+from literature_agent import metrics as metrics_module
 from literature_agent.domain.exceptions import (
     CheckpointDataError,
     CheckpointUnavailableError,
 )
+from literature_agent.domain.review import ReviewStage
 from literature_agent.workflows.review_graph import (
     ReviewGraphFactory,
     ReviewGraphState,
     ReviewWorkflowRuntime,
+    _observed_node,
     review_graph_config,
     review_thread_id,
 )
+
+
+async def test_observed_node_maps_fixed_stage_and_failure(monkeypatch) -> None:
+    """图节点 wrapper 使用固定 ReviewStage，并保留节点异常。"""
+    recorder = Mock()
+    monkeypatch.setattr(metrics_module, "metrics", recorder)
+
+    async def succeed(_state: ReviewGraphState) -> dict:
+        return {"final_output_id": "final-1"}
+
+    async def fail(_state: ReviewGraphState) -> dict:
+        raise RuntimeError("node failed")
+
+    state = _state("review-1")
+    assert await _observed_node(ReviewStage.FINALIZE, succeed)(state) == {
+        "final_output_id": "final-1"
+    }
+    with pytest.raises(RuntimeError, match="node failed"):
+        await _observed_node(ReviewStage.DRAFT_SECTIONS, fail)(state)
+
+    assert [call.args for call in recorder.record_review_stage.call_args_list] == [
+        (ReviewStage.FINALIZE, "succeeded"),
+        (ReviewStage.DRAFT_SECTIONS, "failed"),
+    ]
 
 
 def _state(run_id: str) -> ReviewGraphState:

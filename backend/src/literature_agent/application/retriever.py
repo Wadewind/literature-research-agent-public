@@ -10,6 +10,7 @@ SQL 强过滤保证范围）；切片 8 的 rag_answer Run 接线时传入 run_i
 """
 
 import logging
+import time
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from literature_agent.domain.retrieval import (
     apply_token_budget,
     rrf_merge,
 )
+from literature_agent.metrics import metrics
 from literature_agent.observability import log_event
 
 TSession = TypeVar("TSession", bound=Session)
@@ -126,6 +128,7 @@ class Retriever[TSession: Session]:
         query = query.strip()
         if not query:
             raise ValueError("查询不能为空")
+        started = time.monotonic()
 
         # 模型调用不发生在数据库事务内；空结果（零向量）同样允许检索
         embedding = await self._model_gateway.embed([query], run_id=run_id)
@@ -148,12 +151,15 @@ class Retriever[TSession: Session]:
                 paper_ids=selected_paper_ids,
             )
 
-        return self._merge_and_rank(
+        result = self._merge_and_rank(
             semantic,
             fts,
             project_id=project_id,
             run_id=run_id,
         )
+        scope = "selected_papers" if selected_paper_ids is not None else "project"
+        metrics.record_retrieval(scope, time.monotonic() - started, len(result))
+        return result
 
     async def retrieve_for_scope(
         self,
@@ -184,7 +190,9 @@ class Retriever[TSession: Session]:
         query = query.strip()
         if not query:
             raise ValueError("查询不能为空")
+        started = time.monotonic()
         if not version_scope:
+            metrics.record_retrieval("version_snapshot", time.monotonic() - started, 0)
             return []
 
         embedding = await self._model_gateway.embed([query], run_id=run_id)
@@ -205,7 +213,9 @@ class Retriever[TSession: Session]:
                 version_scope=version_scope,
             )
 
-        return self._merge_and_rank(semantic, fts, run_id=run_id)
+        result = self._merge_and_rank(semantic, fts, run_id=run_id)
+        metrics.record_retrieval("version_snapshot", time.monotonic() - started, len(result))
+        return result
 
     def _merge_and_rank(
         self,

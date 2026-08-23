@@ -8,6 +8,7 @@ import pytest
 from literature_agent.application.run_execution_service import ExecutionOutcome
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.config import Settings
+from literature_agent.metrics import metrics
 from literature_agent.observability import get_log_context
 from literature_agent.worker import (
     _build_arxiv_gateway,
@@ -87,6 +88,9 @@ async def test_execute_run_builds_bounded_worker_context_without_job_payload() -
 
     async def execute(run_id: str, correlation_id: str):
         observed.update(get_log_context())
+        observed["active_jobs"] = metrics.registry.get_sample_value(
+            "agent_worker_active_jobs"
+        )
         observed["argument"] = correlation_id
         assert run_id == "run-1"
         return ExecutionOutcome.COMPLETED
@@ -105,4 +109,6 @@ async def test_execute_run_builds_bounded_worker_context_without_job_payload() -
     assert observed["correlation_id"].startswith("worker:")
     assert len(observed["correlation_id"]) == 31
     assert long_job_id not in observed["correlation_id"]
+    assert observed["active_jobs"] == 1
+    assert metrics.registry.get_sample_value("agent_worker_active_jobs") == 0
     assert get_log_context() == {}

@@ -14,6 +14,8 @@ from literature_agent.domain.exceptions import (
     CheckpointDataError,
     CheckpointUnavailableError,
 )
+from literature_agent.domain.review import ReviewStage
+from literature_agent.metrics import observe_review_stage
 
 WORKFLOW_VERSION = "review.v1"
 
@@ -45,6 +47,15 @@ class ReviewGraphState(TypedDict):
 
 
 ReviewGraphNode = Callable[[ReviewGraphState], Awaitable[dict]]
+
+
+def _observed_node(stage: ReviewStage, node: ReviewGraphNode) -> ReviewGraphNode:
+    """在 LangGraph 节点边界记录尝试，不改变节点与 checkpoint 语义。"""
+
+    async def observed(state: ReviewGraphState) -> dict:
+        return await observe_review_stage(stage, node(state))
+
+    return observed
 
 
 def review_thread_id(review_run_id: str) -> str:
@@ -170,9 +181,15 @@ class ReviewGraphFactory:
         outline_decision_node = self._outline_decision_node
         if outline_entry_node is None or outline_decision_node is None:  # pragma: no cover
             raise ValueError("Outline 图节点配置不完整")
-        graph.add_node("propose_outline", RunnableLambda(outline_entry_node))
+        graph.add_node(
+            "propose_outline",
+            RunnableLambda(_observed_node(ReviewStage.PROPOSE_OUTLINE, outline_entry_node)),
+        )
         graph.add_node("review_outline", _review_outline_interrupt)
-        graph.add_node("apply_outline_decision", RunnableLambda(outline_decision_node))
+        graph.add_node(
+            "apply_outline_decision",
+            RunnableLambda(_observed_node(ReviewStage.REVIEW_OUTLINE, outline_decision_node)),
+        )
         section_draft_node = self._section_draft_node
         section_validate_node = self._section_validate_node
         consistency_node = self._consistency_node
@@ -181,12 +198,29 @@ class ReviewGraphFactory:
             and section_validate_node is not None
             and consistency_node is not None
         ):
-            graph.add_node("draft_sections", RunnableLambda(section_draft_node))
-            graph.add_node("validate_sections", RunnableLambda(section_validate_node))
-            graph.add_node("consistency_check", RunnableLambda(consistency_node))
+            graph.add_node(
+                "draft_sections",
+                RunnableLambda(_observed_node(ReviewStage.DRAFT_SECTIONS, section_draft_node)),
+            )
+            graph.add_node(
+                "validate_sections",
+                RunnableLambda(
+                    _observed_node(ReviewStage.VALIDATE_SECTIONS, section_validate_node)
+                ),
+            )
+            graph.add_node(
+                "consistency_check",
+                RunnableLambda(_observed_node(ReviewStage.CONSISTENCY_CHECK, consistency_node)),
+            )
             if self._export_node is not None and self._finalize_node is not None:
-                graph.add_node("export_review", RunnableLambda(self._export_node))
-                graph.add_node("finalize", RunnableLambda(self._finalize_node))
+                graph.add_node(
+                    "export_review",
+                    RunnableLambda(_observed_node(ReviewStage.EXPORT_REVIEW, self._export_node)),
+                )
+                graph.add_node(
+                    "finalize",
+                    RunnableLambda(_observed_node(ReviewStage.FINALIZE, self._finalize_node)),
+                )
             else:
                 graph.add_node("section_boundary", RunnableLambda(_section_boundary))
             approved_target = "draft_sections"

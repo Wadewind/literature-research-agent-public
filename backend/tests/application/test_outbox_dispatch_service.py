@@ -2,9 +2,11 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
+from literature_agent.application import outbox_dispatch_service as outbox_module
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.domain.queue_outbox import OutboxStatus, QueueOutbox, create_outbox_entry
 from literature_agent.domain.run import Run, RunStatus, create_run
@@ -45,12 +47,15 @@ def _make_service(
 
 async def test_dispatch_pending_enqueues_and_marks_dispatched(
     outbox_repo: FakeOutboxRepository,
+    monkeypatch,
 ) -> None:
     """到期记录应被投递并标记为 DISPATCHED。"""
     queue = FakeRunQueue()
     entry = _entry("run-1")
     await outbox_repo.add(entry)
     service = _make_service(outbox_repo, queue)
+    recorder = Mock()
+    monkeypatch.setattr(outbox_module, "metrics", recorder)
 
     dispatched = await service.dispatch_pending(_NOW)
 
@@ -60,6 +65,7 @@ async def test_dispatch_pending_enqueues_and_marks_dispatched(
     assert loaded is not None
     assert loaded.status == OutboxStatus.DISPATCHED
     assert loaded.dispatched_at == _NOW
+    recorder.record_outbox.assert_called_once_with("dispatched")
 
 
 async def test_dispatch_skips_not_due_records(
@@ -79,12 +85,15 @@ async def test_dispatch_skips_not_due_records(
 
 async def test_dispatch_failure_records_attempt_and_backoff(
     outbox_repo: FakeOutboxRepository,
+    monkeypatch,
 ) -> None:
     """投递失败应保持 PENDING、累计次数并推迟下一次尝试。"""
     queue = FakeRunQueue(fail=True)
     entry = _entry("run-1")
     await outbox_repo.add(entry)
     service = _make_service(outbox_repo, queue)
+    recorder = Mock()
+    monkeypatch.setattr(outbox_module, "metrics", recorder)
 
     dispatched = await service.dispatch_pending(_NOW)
 
@@ -94,6 +103,7 @@ async def test_dispatch_failure_records_attempt_and_backoff(
     assert loaded.status == OutboxStatus.PENDING
     assert loaded.attempt_count == 1
     assert loaded.scheduled_at > _NOW
+    recorder.record_outbox.assert_called_once_with("failed")
 
 
 async def test_dispatch_failure_exhausts_to_failed(
@@ -190,6 +200,7 @@ async def test_retry_wait_run_is_requeued_before_dispatch(
 
 async def test_terminal_run_dispatch_is_dropped(
     outbox_repo: FakeOutboxRepository,
+    monkeypatch,
 ) -> None:
     """已终态的 Run 不再投递，Outbox 记录直接标记为已投递。"""
     queue = FakeRunQueue()
@@ -198,6 +209,8 @@ async def test_terminal_run_dispatch_is_dropped(
     await run_repo.add(_run_at("run-1", RunStatus.SUCCEEDED))
     await outbox_repo.add(_entry("run-1"))
     service = _make_service_with_runs(outbox_repo, queue, run_repo, event_repo)
+    recorder = Mock()
+    monkeypatch.setattr(outbox_module, "metrics", recorder)
 
     dispatched = await service.dispatch_pending(_NOW)
 
@@ -207,6 +220,7 @@ async def test_terminal_run_dispatch_is_dropped(
     assert entry is not None
     assert entry.status == OutboxStatus.DISPATCHED
     assert event_repo._events == []
+    recorder.record_outbox.assert_called_once_with("dropped")
 
 
 async def test_cancel_requested_run_dispatch_is_dropped(

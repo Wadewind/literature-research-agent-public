@@ -62,11 +62,19 @@ Worker 为每个 Job 建立独立 correlation，并通过同一 `run_id` 与 API
 query/body/headers、完整 Prompt、模型响应、PDF/Chunk 全文或异常 traceback。当前只提供本地标准输出，
 没有集中日志平台、OpenTelemetry Trace、告警或 SLA。
 
+Prometheus text exposition 按进程独立暴露：API 的 <http://127.0.0.1:8000/metrics> 只包含 API 进程
+Registry；Worker 的 <http://127.0.0.1:8001/metrics> 只包含 Worker 进程 Registry。Worker endpoint 固定
+绑定 loopback，设置 `AGENT_WORKER_METRICS_PORT=0` 可关闭。两者都没有公网认证，只适用于可信本地开发；
+不要直接暴露到公网。指标不包含 owner/project/run/correlation、Provider/Model 或用户内容 Label。
+Counter/Histogram 在进程重启后归零，至少一次重放可以增加尝试计数，PostgreSQL 仍是业务事实来源。
+
 访问地址：
 
 - Web：<http://localhost:5173>
 - API：<http://127.0.0.1:8000>
 - 健康检查：<http://127.0.0.1:8000/health/ready>
+- API Metrics：<http://127.0.0.1:8000/metrics>
+- Worker Metrics：<http://127.0.0.1:8001/metrics>
 
 Fake arXiv 使用 `review-demo.v1` 合成语料：固定返回 4 条版本化来源，其中 3 条可离线导入，1 条稳定
 模拟 PDF 不可用。Fake Parser、Embedding 与 Chat 会继续完成解析、索引、Evidence Matrix 和 Review；

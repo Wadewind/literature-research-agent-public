@@ -43,6 +43,7 @@ from literature_agent.domain.run_attempt import (
     RunAttempt,
     create_run_attempt,
 )
+from literature_agent.metrics import metrics
 from literature_agent.observability import bind_log_context, log_event
 
 TSession = TypeVar("TSession", bound=Session)
@@ -137,6 +138,7 @@ class RunExecutionService:
                 attempt_id=attempt.attempt_id,
                 run_type=getattr(run.run_type, "value", run.run_type),
             ):
+                metrics.record_run_started(run.run_type)
                 log_event(
                     logger,
                     logging.INFO,
@@ -150,6 +152,14 @@ class RunExecutionService:
                     await self._executor(run, correlation_id)
                 except Exception as exc:
                     outcome = await self._fail(run_id, attempt, exc, correlation_id)
+                    metrics.record_run_completed(
+                        run.run_type,
+                        self._metrics_status(outcome),
+                        time.monotonic() - clock_started,
+                        attempt_status=(
+                            "failed" if outcome is not ExecutionOutcome.SKIPPED else "cancelled"
+                        ),
+                    )
                     return self._log_outcome(
                         outcome,
                         clock_started,
@@ -176,11 +186,43 @@ class RunExecutionService:
                 else:
                     # 执行期间被并发取消，或执行器没有推进到已知结束状态
                     outcome = ExecutionOutcome.SKIPPED
+                metrics.record_run_completed(
+                    run.run_type,
+                    self._metrics_status(outcome, final_status),
+                    time.monotonic() - clock_started,
+                    attempt_status=self._metrics_attempt_status(final_status),
+                )
                 return self._log_outcome(
                     outcome,
                     clock_started,
                     status=final_status.value if final_status else "missing",
                 )
+
+    @staticmethod
+    def _metrics_status(outcome: ExecutionOutcome, final_status: RunStatus | None = None) -> str:
+        """把一次已认领执行归一化为固定低基数结果。"""
+        if final_status is RunStatus.CANCELLED:
+            return "cancelled"
+        return {
+            ExecutionOutcome.COMPLETED: "succeeded",
+            ExecutionOutcome.FAILED: "failed",
+            ExecutionOutcome.RETRY_SCHEDULED: "retry_scheduled",
+            ExecutionOutcome.PAUSED: "paused",
+        }.get(outcome, "unknown")
+
+    @staticmethod
+    def _metrics_attempt_status(final_status: RunStatus | None) -> str:
+        """按持久 Attempt 关闭映射生成低基数状态。"""
+        if final_status is None:
+            return "failed"
+        return {
+            RunStatus.SUCCEEDED: "succeeded",
+            RunStatus.FAILED: "failed",
+            RunStatus.RETRY_WAIT: "failed",
+            RunStatus.WAITING_INPUT: "paused",
+            RunStatus.WAITING_DEPENDENCY: "paused",
+            RunStatus.CANCELLED: "cancelled",
+        }.get(final_status, "failed")
 
     @staticmethod
     def _log_outcome(

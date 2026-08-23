@@ -67,6 +67,8 @@ Worker 进程（python -m literature_agent.worker）│
 - Phase 4 切片 5 后，Outbox 成功/失败和 Worker 三个周期循环使用固定 JSON event。ARQ Job 仍只携带
   `run_id`；Worker 以 job_id/run_id 的摘要生成本地 correlation，认领成功后从 PostgreSQL 绑定
   project/run type/attempt。重复 Job 记录 `run_execution_skipped`，不会把 API contextvar 当成跨进程事实。
+- Phase 4 切片 6 的 Outbox/Run/Attempt/Worker active 指标只表达当前 Worker 进程的执行尝试。重复投递
+  或恢复会增加计数，进程重启会归零；它们不替代 PostgreSQL 中的 Outbox、Run、Event 与 Attempt。
 - **重投复用 Outbox 行**（切片 8 决策）：不给 Run 加重试字段，RETRY_WAIT 的唤醒时间用 `outbox.scheduled_at` 表达；代价是 Outbox 语义从"首次投递"扩展为"投递/重投记录"。
 - **错误分类最小两类**（2026-08-20 定稿）：永久错误（`InvalidPdfInputError`/`FileValidationError` 输入类）直接 FAILED；临时错误（`parser_timeout`、资源类、未知异常）预算内 RETRY_WAIT 重试，预算 `max_run_attempts` 默认 3（含首次），退避沿用 Outbox 参数。分类表集中在领域函数 `is_permanent_error`。
 - **Outbox 不可重置时降级 FAILED**：重试前提是 Outbox 记录仍可重置；记录缺失或状态异常时无法保证重新投递，直接 FAILED，避免 Run 滞留 RETRY_WAIT。

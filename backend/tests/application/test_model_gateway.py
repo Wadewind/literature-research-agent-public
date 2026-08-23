@@ -1,9 +1,11 @@
 """ModelGateway 应用服务测试（切片 3）。"""
 
 import logging
+from unittest.mock import Mock
 
 import pytest
 
+from literature_agent.application import model_gateway as gateway_module
 from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.domain.model_errors import ModelRateLimitError
 from literature_agent.domain.model_invocation import (
@@ -33,10 +35,12 @@ def _make_gateway(
     )
 
 
-async def test_embed_records_invocation() -> None:
+async def test_embed_records_invocation(monkeypatch) -> None:
     """Embedding 成功后持久化一条成功调用记录。"""
     repo = FakeModelInvocationRepository()
     gateway = _make_gateway(repo)
+    recorder = Mock()
+    monkeypatch.setattr(gateway_module, "metrics", recorder)
 
     result = await gateway.embed(["第一段文本"], run_id="run-1")
 
@@ -53,6 +57,14 @@ async def test_embed_records_invocation() -> None:
     assert record.completion_tokens is None
     assert record.error_type is None
     assert record.latency_ms >= 0
+    recorder.record_model.assert_called_once()
+    metric_call = recorder.record_model.call_args
+    assert len(metric_call.args) == 3
+    assert metric_call.args[:2] == (
+        ModelCapability.EMBEDDING,
+        InvocationStatus.SUCCEEDED,
+    )
+    assert metric_call.kwargs == {}
 
 
 async def test_generate_records_invocation() -> None:
@@ -76,11 +88,13 @@ async def test_generate_records_invocation() -> None:
     assert record.completion_tokens == 5
 
 
-async def test_failure_recorded_and_reraised() -> None:
+async def test_failure_recorded_and_reraised(monkeypatch) -> None:
     """模型失败：记录 failed（含错误分类）并把原异常抛给调用方。"""
     repo = FakeModelInvocationRepository()
     chat = FakeChatModel(responses=[ModelRateLimitError("限流")])
     gateway = _make_gateway(repo, chat_model=chat)
+    recorder = Mock()
+    monkeypatch.setattr(gateway_module, "metrics", recorder)
 
     with pytest.raises(ModelRateLimitError):
         await gateway.generate([ChatMessage(role="user", content="问题")])
@@ -90,6 +104,13 @@ async def test_failure_recorded_and_reraised() -> None:
     assert record.status == InvocationStatus.FAILED
     assert record.error_type == "ModelRateLimitError"
     assert record.prompt_tokens is None
+    recorder.record_model.assert_called_once()
+    assert len(recorder.record_model.call_args.args) == 3
+    assert recorder.record_model.call_args.args[:2] == (
+        ModelCapability.CHAT,
+        InvocationStatus.FAILED,
+    )
+    assert recorder.record_model.call_args.kwargs == {}
 
 
 async def test_recording_failure_does_not_affect_result() -> None:

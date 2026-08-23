@@ -107,7 +107,8 @@ Event notifier、Attempt close 和 heartbeat 的“记录失败不破坏业务�
 - 尚未逐行机械迁移全仓所有历史 logger；Formatter 会安全降级旧消息，关键 Worker/Run/Provider/Outbox/
   Event/Retrieval 路径已经迁移；
 - 未记录 step/thread 等未来可选上下文，Phase 4 当前最低诊断不需要提前扩展；
-- 本切片没有 Metrics；计数器、Histogram 和低基数 Label 属于切片 6。
+- Phase 4 切片 6 已在独立的 `prometheus-metrics.md` 落地进程级 Metrics。Correlation/Run/Project 等
+  高基数日志上下文不会成为 Label；日志与 Metrics 都不替代 PostgreSQL 业务事实。
 
 ## 60 秒面试说明
 

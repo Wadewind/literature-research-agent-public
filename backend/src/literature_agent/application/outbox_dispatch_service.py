@@ -23,6 +23,7 @@ from literature_agent.application.ports.session import Session
 from literature_agent.domain.event import create_event
 from literature_agent.domain.queue_outbox import QueueOutbox
 from literature_agent.domain.run import RunStatus
+from literature_agent.metrics import metrics
 from literature_agent.observability import log_event
 
 TSession = TypeVar("TSession", bound=Session)
@@ -88,7 +89,11 @@ class OutboxDispatchService:
 
         dispatched = 0
         for entry in entries:
-            if not await self._prepare_run(entry, now):
+            preparation = await self._prepare_run(entry, now)
+            if preparation == "dropped":
+                metrics.record_outbox("dropped")
+                continue
+            if preparation != "dispatch":
                 continue
             try:
                 await self._queue.enqueue_run(entry.run_id)
@@ -103,9 +108,11 @@ class OutboxDispatchService:
                     error_code=type(exc).__name__,
                 )
                 await self._record_failure(entry, now)
+                metrics.record_outbox("failed")
                 continue
             if await self._mark_dispatched(entry.outbox_id, now):
                 dispatched += 1
+                metrics.record_outbox("dispatched")
                 log_event(
                     logger,
                     logging.INFO,
@@ -116,24 +123,24 @@ class OutboxDispatchService:
                 )
         return dispatched
 
-    async def _prepare_run(self, entry: QueueOutbox, now: datetime) -> bool:
+    async def _prepare_run(self, entry: QueueOutbox, now: datetime) -> str:
         """投递前检查/准备 Run 状态。
 
-        返回 True 表示应投递；False 表示本轮跳过（已丢弃或并发冲突）。
+        返回 ``dispatch/dropped/skipped`` 表示应投递、已明确丢弃或并发跳过。
         未注入 run_repo_factory 时保持切片 5 行为：总是投递。
         """
         if self._run_repo_factory is None:
-            return True
+            return "dispatch"
         async with self._session_factory() as session:
             run_repo = self._run_repo_factory(session)
             run = await run_repo.get_by_id(entry.run_id)
             if run is None or run.status in _DROPPABLE_STATUSES:
                 # 无执行意义：标记已投递，结束该记录
-                await self._outbox_repo_factory(session).try_mark_dispatched(
+                marked = await self._outbox_repo_factory(session).try_mark_dispatched(
                     entry.outbox_id, now
                 )
                 await session.commit()
-                return False
+                return "dropped" if marked else "skipped"
             if run.status == RunStatus.RETRY_WAIT:
                 # 重投：条件转回 QUEUED 并记录事件；并发取消时放弃本轮
                 run.transition_to(RunStatus.QUEUED)
@@ -145,7 +152,7 @@ class OutboxDispatchService:
                 )
                 if not updated:
                     await session.rollback()
-                    return False
+                    return "skipped"
                 if self._event_repo_factory is not None:
                     await self._event_repo_factory(session).add(
                         create_event(
@@ -158,7 +165,7 @@ class OutboxDispatchService:
                         )
                     )
                 await session.commit()
-            return True
+            return "dispatch"
 
     async def _mark_dispatched(self, outbox_id: str, now: datetime) -> bool:
         """在独立事务中条件标记为已投递。"""

@@ -149,12 +149,19 @@ printf '启动 Worker...\n'
     exec setsid .venv/bin/python -m literature_agent.worker
 ) &
 child_pids+=("$!")
+worker_metrics_port="${AGENT_WORKER_METRICS_PORT:-8001}"
+if [[ "${worker_metrics_port}" == "0" ]]; then
+    printf 'Worker Metrics: 已禁用（AGENT_WORKER_METRICS_PORT=0）\n'
+else
+    printf 'Worker Metrics: http://127.0.0.1:%s/metrics\n' "${worker_metrics_port}"
+fi
 
 # Provider Key 只需要进入 Worker。Worker 已继承当前环境，父进程随后立即移除 Key，
 # 避免 API 与前端进程无必要地持有真实凭据。
 unset AGENT_EMBEDDING_API_KEY AGENT_CHAT_API_KEY
 
 printf '启动 API: http://127.0.0.1:8000\n'
+printf 'API Metrics: http://127.0.0.1:8000/metrics\n'
 (
     cd "${BACKEND_DIR}"
     exec setsid .venv/bin/uvicorn literature_agent.main:create_app \

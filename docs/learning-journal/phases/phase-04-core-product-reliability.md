@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：切片 1–5 已完成，待推进切片 6
+- 当前状态：切片 1–6 已完成，待推进切片 7
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -292,6 +292,17 @@ LLM-as-a-Judge。
   （安全修复前一轮，生产路径随后仅收紧日志序列化）`637 passed, 4 skipped`；相关 PostgreSQL/Valkey Run、Outbox、Worker、Event notifier、
   ModelInvocation 与 Retrieval 集成 `41 passed`；`ruff check src tests`、`pyright` 通过。普通测试未访问
   实时 arXiv 或付费 Provider。
+- 切片 6「基础 Metrics」：已完成。仅新增 `prometheus-client`，API `/metrics` 与 Worker
+  `127.0.0.1:8001/metrics` 使用各自进程内 Registry；Worker port 可用
+  `AGENT_WORKER_METRICS_PORT=0` 关闭。指标覆盖 Run/Attempt、Outbox、Model、Retrieval、Review Stage
+  与 Worker active jobs；所有 Label 使用固定低基数枚举，非法输入归一化为 `unknown`，不含任何业务 ID、
+  correlation、Provider/Model 或用户内容。Metrics 更新和 Worker endpoint 启停失败均与业务隔离。
+- Counter/Histogram 是进程内执行尝试观测：重启归零，至少一次重放可增加计数，不替代 PostgreSQL
+  Run/Event/Attempt/Outbox/ModelInvocation。API endpoint 不声称包含 Worker 指标；两个 endpoint 无认证，
+  只适用于可信本地开发。切片 6 实际验证：定向 API/Application/Workflow/Worker/Metrics `91 passed`；
+  Backend 完整非集成 `655 passed, 4 skipped`；PostgreSQL/Valkey integration 完整 `114 passed`；
+  `ruff check src tests`、`pyright`、`bash -n scripts/dev.sh` 与 `git diff --check` 通过。普通测试未读取
+  `.env`、访问实时 arXiv 或付费 Provider。
 
 ## 11. 测试方式
 

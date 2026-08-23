@@ -135,6 +135,11 @@ from literature_agent.infrastructure.queue.valkey_event_notifier import (
 )
 from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
 from literature_agent.infrastructure.workflow.postgres_checkpoint import PostgresCheckpointStore
+from literature_agent.metrics import (
+    metrics,
+    start_worker_metrics_server,
+    stop_worker_metrics_server,
+)
 from literature_agent.observability import (
     bind_log_context,
     configure_logging,
@@ -273,7 +278,10 @@ async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
     raw_job_id = str(ctx.get("job_id", run_id))
     digest = hashlib.sha256(f"{run_id}:{raw_job_id}".encode()).hexdigest()[:24]
     correlation_id = f"worker:{digest}"
-    with bind_log_context(service="worker", correlation_id=correlation_id, run_id=run_id):
+    with (
+        metrics.active_worker_job(),
+        bind_log_context(service="worker", correlation_id=correlation_id, run_id=run_id),
+    ):
         outcome = await service.execute(run_id, correlation_id=correlation_id)
     return outcome.value
 
@@ -599,6 +607,9 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         batch_size=settings.outbox_dispatch_batch_size,
         event_notifier=event_notifier,
     )
+    # Metrics server 最后启动；端口占用只会禁用本进程 scrape，不影响 Worker。
+    if "metrics_server" not in ctx:
+        ctx["metrics_server"] = start_worker_metrics_server(settings.worker_metrics_port)
     ctx["dispatch_task"] = asyncio.create_task(_dispatch_loop(ctx))
     ctx["reconcile_task"] = asyncio.create_task(_reconcile_loop(ctx))
     ctx["dependency_reconcile_task"] = asyncio.create_task(
@@ -608,6 +619,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
     """Worker 关闭：取消后台循环并释放连接资源。"""
+    stop_worker_metrics_server(ctx.pop("metrics_server", None))
     for key in ("dispatch_task", "reconcile_task", "dependency_reconcile_task"):
         task: asyncio.Task | None = ctx.get(key)
         if task is not None:

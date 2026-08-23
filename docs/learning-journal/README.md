@@ -33,6 +33,7 @@ learning-journal/
 校准和 Review 专用前端归入 Phase 4 产品闭环。
 
 [Phase 4：Demo-ready Core 产品闭环、可靠性与评测](phases/phase-04-core-product-reliability.md)已于
-2026-08-23 完成需求收敛，计划按离线 Fake arXiv、Review UI、JSON Logs/Correlation、低基数 Metrics、
-可靠性审计、固定评测/性能基线和 Playwright 发布收尾依次开发。该阶段明确面向本地演示开发环境，
+2026-08-24 已完成切片 1–6，包括离线 Fake arXiv、Review UI、JSON Logs/Correlation 和
+[低基数 Prometheus Metrics](modules/prometheus-metrics.md)；下一步依次完成可靠性审计、固定评测/性能
+基线和 Playwright 发布收尾。该阶段明确面向本地演示开发环境，
 不包含公网认证、备份恢复、永久删除/GC、OpenTelemetry 或 SLA。

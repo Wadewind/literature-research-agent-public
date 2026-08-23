@@ -60,6 +60,8 @@ projects.owner_id = :owner_id AND projects.project_id = :project_id
 - 日志只记录候选数量摘要（semantic/fts/merged/final 计数），不记录问题文本、Chunk 内容或分数；
 - Phase 4 切片 5 将该摘要固定为 `retrieval_completed` JSON 事件，字段限于 Project/Run 关联和
   semantic/fulltext/merged/final 数量；不记录 query、选中论文列表、向量、Chunk/Evidence 正文或分数。
+- Phase 4 切片 6 在成功结果边界记录 retrieval duration/evidence count；scope 只允许
+  project/selected_papers/version_snapshot/unknown，不把 owner、Project、Run、论文 ID 或 query 做 Label。
 - 查询向量调用经 ModelGateway 记录（provider/model/usage/延迟/错误分类，含 run_id 接线位），不存 Prompt；
 - `search_vector` 固定 english 配置，中文分词不在本阶段范围（2026-08-20 定稿）。
 
