@@ -33,10 +33,7 @@ import logging
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
-from functools import lru_cache
 from typing import TypeVar
-
-import tiktoken
 
 from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.evidence_service import EvidenceService
@@ -87,6 +84,7 @@ from literature_agent.domain.exceptions import (
 )
 from literature_agent.domain.model_types import ChatMessage
 from literature_agent.domain.run import Run, RunStatus, RunType
+from literature_agent.domain.tokenization import count_tokens
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -105,17 +103,6 @@ _SYSTEM_PROMPT = (
     "answered 时每个段落级 Claim 必须至少绑定一个证据 ID；"
     "证据不足时 answer_status 为 insufficient_evidence 且 claims 为空。"
 )
-
-
-@lru_cache(maxsize=1)
-def _get_encoding() -> tiktoken.Encoding:
-    """加载 cl100k_base 编码（进程内缓存，与 ChunkBuilder 一致）。"""
-    return tiktoken.get_encoding("cl100k_base")
-
-
-def _count_tokens(text: str) -> int:
-    """精确计算文本 token 数。"""
-    return len(_get_encoding().encode(text))
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +146,7 @@ class RagAnswerExecutor[TSession: Session]:
         context_token_budget: int = 3000,
         max_run_attempts: int = 3,
         event_notifier: EventNotifier | None = None,
+        tokenizer: str = "cl100k_base",
     ) -> None:
         """初始化 RagAnswerExecutor。
 
@@ -180,6 +168,7 @@ class RagAnswerExecutor[TSession: Session]:
                 超预算按 rank 从低到高丢弃 Evidence 缩减一次。
             max_run_attempts: 最大执行尝试次数（含首次）。
             event_notifier: 事件通知器，默认 Noop。
+            tokenizer: 上下文预算使用的 tokenizer，必须与活动 ChunkProfile 一致。
         """
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -196,6 +185,7 @@ class RagAnswerExecutor[TSession: Session]:
         self._context_token_budget = context_token_budget
         self._max_run_attempts = max_run_attempts
         self._event_notifier = event_notifier or NoopEventNotifier()
+        self._tokenizer = tokenizer
 
     async def execute(self, run: Run, correlation_id: str) -> None:
         """执行一次 rag_answer Run，自行推进终态。
@@ -396,13 +386,14 @@ class RagAnswerExecutor[TSession: Session]:
             ChatMessage(role="user", content=user_content),
         ]
 
-    @staticmethod
-    def _context_tokens(question: str, evidence: Sequence[Evidence]) -> int:
+    def _context_tokens(self, question: str, evidence: Sequence[Evidence]) -> int:
         """估算模板 + 问题 + 证据上下文的总 token 数。"""
-        total = _count_tokens(_SYSTEM_PROMPT) + _count_tokens(question)
+        total = count_tokens(self._tokenizer, _SYSTEM_PROMPT) + count_tokens(
+            self._tokenizer, question
+        )
         for e in evidence:
             # 每条证据的开销含定位元信息行
-            total += _count_tokens(e.excerpt) + 30
+            total += count_tokens(self._tokenizer, e.excerpt) + 30
         return total
 
     async def _generate_and_validate(

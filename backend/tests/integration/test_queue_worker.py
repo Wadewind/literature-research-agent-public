@@ -35,6 +35,7 @@ from literature_agent.domain.project import create_project
 from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import RunStatus, RunType, create_run
+from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.models.fake_models import (
     FakeChatModel,
     FakeEmbeddingModel,
@@ -203,6 +204,7 @@ def _make_dispatcher(session_factory) -> RunDispatcher:
             embedding_provider="fake",
             embedding_model="fake-embedding",
             embedding_dimensions=1024,
+            tokenizer=OFFLINE_TOKENIZER,
         ),
         model_gateway=model_gateway,
         embedding_batch_size=2,
@@ -229,6 +231,7 @@ def _make_dispatcher(session_factory) -> RunDispatcher:
         retriever=retriever,
         evidence_service=evidence_service,
         model_gateway=model_gateway,
+        tokenizer=OFFLINE_TOKENIZER,
     )
     return RunDispatcher(
         session_factory=session_factory,

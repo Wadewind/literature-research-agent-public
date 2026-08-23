@@ -1,0 +1,62 @@
+{
+  "schema_version": "review-demo.v1",
+  "description": "完全合成的离线 Review Demo 语料；前三篇可导入，第四篇稳定模拟单篇下载失败。Fake Chat 会让每篇仅 method 维度有证据，其余维度明确证据不足。",
+  "scenarios": [
+    "successful_review",
+    "partial_source_failure",
+    "insufficient_evidence",
+    "outline_feedback_interrupt"
+  ],
+  "papers": [
+    {
+      "arxiv_id": "2608.00001",
+      "arxiv_version": "v1",
+      "title": "GraphWeave: Synthetic Evidence for Reliable Reviews",
+      "abstract": "A synthetic study of evidence-first review workflows.",
+      "authors": ["Ada Example", "Mira Fixture"],
+      "categories": ["cs.AI"],
+      "published_at": "2026-08-01T00:00:00+00:00",
+      "updated_at": "2026-08-01T00:00:00+00:00",
+      "pdf_file": "papers/2608.00001v1.pdf",
+      "pdf_size": 121,
+      "pdf_sha256": "0485c1dbaf572492627fc38facf67c19a30af17b618ca787f1ea2a4f7c4c4a04"
+    },
+    {
+      "arxiv_id": "2608.00002",
+      "arxiv_version": "v1",
+      "title": "Helix: Synthetic Long-context Review Methods",
+      "abstract": "A synthetic comparison designed for deterministic local demos.",
+      "authors": ["Priya Example"],
+      "categories": ["cs.CL"],
+      "published_at": "2026-08-02T00:00:00+00:00",
+      "updated_at": "2026-08-02T00:00:00+00:00",
+      "pdf_file": "papers/2608.00002v1.pdf",
+      "pdf_size": 121,
+      "pdf_sha256": "a4d2432f024aec1cb9822561d391852466e1557a077e63912a47dad35531ce06"
+    },
+    {
+      "arxiv_id": "2608.00003",
+      "arxiv_version": "v1",
+      "title": "AquaSol: Synthetic Evidence Matrix Evaluation",
+      "abstract": "A synthetic evaluation paper with intentionally limited evidence.",
+      "authors": ["Lucia Example"],
+      "categories": ["cs.LG"],
+      "published_at": "2026-08-03T00:00:00+00:00",
+      "updated_at": "2026-08-03T00:00:00+00:00",
+      "pdf_file": "papers/2608.00003v1.pdf",
+      "pdf_size": 121,
+      "pdf_sha256": "c0deb6f12705c5d6ad9547115acdcbdf6e098b92cfe5b6fda4bdc69b106492cd"
+    },
+    {
+      "arxiv_id": "2608.00004",
+      "arxiv_version": "v1",
+      "title": "Unavailable Synthetic Source",
+      "abstract": "A deterministic unavailable source for partial-failure demos.",
+      "authors": ["Failure Fixture"],
+      "categories": ["cs.AI"],
+      "published_at": "2026-08-04T00:00:00+00:00",
+      "updated_at": "2026-08-04T00:00:00+00:00",
+      "download_failure_code": "fake_arxiv_pdf_unavailable"
+    }
+  ]
+}

@@ -45,6 +45,7 @@ from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.parse_revision import create_parse_revision
 from literature_agent.domain.project import create_project
 from literature_agent.domain.project_paper import create_project_paper
+from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.models.fake_models import (
     FakeChatModel,
@@ -221,6 +222,7 @@ async def _run() -> int:
         embedding_provider="fake",
         embedding_model="fake-embedding",
         embedding_dimensions=1024,
+        tokenizer=OFFLINE_TOKENIZER,
     )
     manifest = json.loads((EVAL_DIR / "manifest.json").read_text(encoding="utf-8"))
 

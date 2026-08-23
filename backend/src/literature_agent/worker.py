@@ -26,6 +26,7 @@ from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
 from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
+from literature_agent.application.ports.arxiv_gateway import ArxivGateway
 from literature_agent.application.ports.chat_model import ChatModel
 from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.ports.embedding_model import EmbeddingModel
@@ -51,8 +52,10 @@ from literature_agent.application.waiting_run_resume_service import WaitingRunRe
 from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
+from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.arxiv import HttpxArxivGateway
 from literature_agent.infrastructure.config import Settings
+from literature_agent.infrastructure.fake_arxiv import FixtureArxivGateway
 from literature_agent.infrastructure.models.fake_models import (
     EMBEDDING_COLUMN_DIMENSIONS,
     FakeChatModel,
@@ -202,6 +205,7 @@ def _build_model_stack(
             embedding_provider=FakeEmbeddingModel.provider,
             embedding_model=FakeEmbeddingModel.model,
             embedding_dimensions=EMBEDDING_COLUMN_DIMENSIONS,
+            tokenizer=OFFLINE_TOKENIZER,
         )
         closables: list[Any] = []
     elif settings.embedding_backend == "openai_compatible":
@@ -242,6 +246,16 @@ def _build_model_stack(
         invocation_repo_factory=SqlalchemyModelInvocationRepository,
     )
     return gateway, profile, closables
+
+
+def _build_arxiv_gateway(settings: Settings) -> tuple[ArxivGateway, list[Any]]:
+    """按显式 backend 选择离线 Fixture 或真实 HTTP arXiv Adapter。"""
+    if settings.arxiv_backend == "fake":
+        return FixtureArxivGateway(), []
+    if settings.arxiv_backend == "httpx":
+        gateway = HttpxArxivGateway(max_file_bytes=settings.max_upload_size_bytes)
+        return gateway, [gateway]
+    raise ValueError(f"未知 arxiv_backend: {settings.arxiv_backend}")
 
 
 async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
@@ -393,10 +407,11 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         context_token_budget=settings.retrieval_token_budget,
         max_run_attempts=settings.max_run_attempts,
         event_notifier=event_notifier,
+        tokenizer=chunk_profile.tokenizer,
     )
     storage = LocalFileStorage(settings.storage_root)
-    arxiv_gateway = HttpxArxivGateway(max_file_bytes=settings.max_upload_size_bytes)
-    model_adapters.append(arxiv_gateway)
+    arxiv_gateway, arxiv_adapters = _build_arxiv_gateway(settings)
+    model_adapters.extend(arxiv_adapters)
     review_repo = SqlalchemyReviewRepository
     strategy_service = ReviewSearchStrategyService(
         session_factory=session_factory,

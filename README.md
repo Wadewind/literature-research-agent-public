@@ -40,14 +40,15 @@ chmod 600 .env
 
 ## 一键启动
 
-默认 Fake 模式不联网、不产生模型费用：
+默认 Fake 模式同时选择仓库内版本化的 Parser、Embedding、Chat 和 arXiv Fixture，
+不读取 `.env`、不联网、不产生模型费用：
 
 ```bash
 ./scripts/dev.sh
 # 等价于 ./scripts/dev.sh --fake
 ```
 
-真实模式读取根目录 `.env`，启用 Docling、真实 Embedding 和 Chat：
+真实模式读取根目录 `.env`，启用 Docling、真实 Embedding/Chat 和官方 arXiv：
 
 ```bash
 ./scripts/dev.sh --real
@@ -60,6 +61,13 @@ chmod 600 .env
 - Web：<http://localhost:5173>
 - API：<http://127.0.0.1:8000>
 - 健康检查：<http://127.0.0.1:8000/health/ready>
+
+Fake arXiv 使用 `review-demo.v1` 合成语料：固定返回 4 条版本化来源，其中 3 条可离线导入，1 条稳定
+模拟 PDF 不可用。Fake Parser、Embedding 与 Chat 会继续完成解析、索引、Evidence Matrix 和 Review；
+Matrix 有明确的证据不足行，Outline 可以先提交 feedback 再 approve，从而重复演示第二次 interrupt。
+Fake Chunk/RAG 使用无需下载词表的版本化 tokenizer；manifest 会按 size/SHA-256 校验 PDF，避免语料
+静默漂移。Fixture 位于 `backend/src/literature_agent/infrastructure/fixtures/review/v1/`，不包含真实论文
+或用户数据。
 
 如需使用其他配置文件：
 
@@ -85,6 +93,8 @@ AGENT_CHAT_BASE_URL=https://api.deepseek.com
 AGENT_CHAT_API_KEY=...
 AGENT_CHAT_MODEL=deepseek-v4-flash
 AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false
+
+AGENT_ARXIV_BACKEND=httpx
 ```
 
 - Embedding Base URL 是 API 根路径；Adapter 会自行追加 `/embeddings`。
@@ -113,6 +123,7 @@ cd backend
 AGENT_PARSER_BACKEND=fake \
 AGENT_EMBEDDING_BACKEND=fake \
 AGENT_CHAT_BACKEND=fake \
+AGENT_ARXIV_BACKEND=fake \
 .venv/bin/python -m literature_agent.worker
 
 # 终端 4：Web
@@ -130,6 +141,7 @@ set +a
 export AGENT_PARSER_BACKEND=docling
 export AGENT_EMBEDDING_BACKEND=openai_compatible
 export AGENT_CHAT_BACKEND=openai_compatible
+export AGENT_ARXIV_BACKEND=httpx
 .venv/bin/python -m literature_agent.worker
 ```
 

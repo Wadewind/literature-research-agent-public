@@ -37,8 +37,8 @@ usage() {
     printf '%s\n' \
         "用法: ./scripts/dev.sh [--fake|--real]" \
         "" \
-        "  --fake  使用 Fake Parser/Embedding/Chat（默认，不联网）" \
-        "  --real  从 .env 读取配置，并启用 Docling 与真实 Provider"
+        "  --fake  使用 Fake Parser/Embedding/Chat/arXiv（默认，不联网）" \
+        "  --real  从 .env 读取配置，并启用 Docling、真实 Provider 与 arXiv"
 }
 
 case "${1:-}" in
@@ -91,6 +91,7 @@ if [[ "${MODE}" == "real" ]]; then
     export AGENT_PARSER_BACKEND="docling"
     export AGENT_EMBEDDING_BACKEND="openai_compatible"
     export AGENT_CHAT_BACKEND="openai_compatible"
+    export AGENT_ARXIV_BACKEND="httpx"
     for variable_name in \
         AGENT_EMBEDDING_BASE_URL \
         AGENT_EMBEDDING_API_KEY \
@@ -113,6 +114,7 @@ else
     export AGENT_PARSER_BACKEND="fake"
     export AGENT_EMBEDDING_BACKEND="fake"
     export AGENT_CHAT_BACKEND="fake"
+    export AGENT_ARXIV_BACKEND="fake"
 fi
 
 printf '启动模式: %s\n' "${MODE}"

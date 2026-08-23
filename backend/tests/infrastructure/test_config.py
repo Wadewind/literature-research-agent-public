@@ -15,3 +15,12 @@ def test_chat_json_schema_supported_can_fallback_to_json_object(monkeypatch) -> 
     monkeypatch.setenv("AGENT_CHAT_JSON_SCHEMA_SUPPORTED", "false")
 
     assert Settings.from_env().chat_json_schema_supported is False
+
+
+def test_arxiv_backend_defaults_offline_and_requires_explicit_real(monkeypatch) -> None:
+    """未设置开关时必须 fail closed 到 Fake，真实 HTTP 需显式选择。"""
+    monkeypatch.delenv("AGENT_ARXIV_BACKEND", raising=False)
+    assert Settings.from_env().arxiv_backend == "fake"
+
+    monkeypatch.setenv("AGENT_ARXIV_BACKEND", "httpx")
+    assert Settings.from_env().arxiv_backend == "httpx"

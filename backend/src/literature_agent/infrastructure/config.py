@@ -48,6 +48,8 @@ _DEFAULT_RETRIEVAL_TOKEN_BUDGET = 3000
 _DEFAULT_CHAT_BACKEND = "fake"
 _DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED = True
 _DEFAULT_ANSWER_MAX_OUTPUT_TOKENS = 2048
+# arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。
+_DEFAULT_ARXIV_BACKEND = "fake"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +102,7 @@ class Settings:
         default=_DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED
     )
     answer_max_output_tokens: int = field(default=_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS)
+    arxiv_backend: str = field(default=_DEFAULT_ARXIV_BACKEND)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -227,4 +230,5 @@ class Settings:
             ).lower()
             in {"1", "true", "yes"},
             answer_max_output_tokens=answer_max_output_tokens,
+            arxiv_backend=os.getenv("AGENT_ARXIV_BACKEND", _DEFAULT_ARXIV_BACKEND),
         )

@@ -21,6 +21,10 @@ Actor + Project + Review Run + 已验证 SearchQuery
 搜索策略模型不属于本模块。后续图节点只能把模型输出解析为 `ArxivSearchQuery` 后调用 Adapter，不能
 让模型提供 URL 或绕过允许字段、排序、分页和预算校验。
 
+Phase 4 增加生产组装边界 `_build_arxiv_gateway()`：`fake` 读取仓库内 `review-demo.v1`，不创建 HTTP
+客户端；`httpx` 才实例化真实 Adapter。配置默认值为 `fake`，未知值直接启动失败，避免遗漏配置时
+静默出网。`scripts/dev.sh --fake|--real` 会与 Parser/Embedding/Chat 一起显式设置该开关。
+
 ## HTTP、下载与安全
 
 - API 固定为 `https://export.arxiv.org/api/query`，PDF 仅允许 `arxiv.org` 和
@@ -84,6 +88,9 @@ Graph State。
   跨 Project Run 和归档 Paper；
 - PostgreSQL：两个 Review Run 并发首次导入同 hash 收敛为一套导入 bundle；注入失败验证 Paper、
   Version、ProjectPaper、Ingestion Run、Run Event、Outbox 与 Dependency 整体回滚而缓存保留。
+- Phase 4 离线 Fixture：Adapter 搜索/下载确定性、剩余预算、未知 URL 和稳定永久失败，manifest 固定
+  PDF size/SHA-256 并覆盖篡改、缺失和非法契约的 fail-fast；生产装配只在 `httpx` 模式持有可关闭
+  HTTP Adapter；真实导入服务重复执行后保持 3 个成功来源和 1 个失败来源，不重复创建 Ingestion Run。
 
 实际结果：最终补强后的定向领域/Adapter/应用测试 `47 passed`，定向 PostgreSQL 集成测试
 `2 passed`；Backend
@@ -95,6 +102,8 @@ diff check 通过。
 - `backend/src/literature_agent/domain/arxiv.py`
 - `backend/src/literature_agent/application/ports/arxiv_gateway.py`
 - `backend/src/literature_agent/infrastructure/arxiv.py`
+- `backend/src/literature_agent/infrastructure/fake_arxiv.py`
+- `backend/src/literature_agent/infrastructure/fixtures/review/v1/`
 - `backend/src/literature_agent/application/arxiv_import_service.py`
 - `backend/src/literature_agent/infrastructure/persistence/review_repository.py`
 - `backend/src/literature_agent/infrastructure/persistence/paper_version_repository.py`
@@ -105,6 +114,8 @@ diff check 通过。
 - Service 已由生产 Review Executor 调用，Project-scoped API 创建的 Run 经 Worker 进入本流程；arXiv
   仍保持图外执行，依赖等待由独立 Reconciler 恢复，不伪装成 LangGraph Interrupt；
 - 当前只顺序下载，不实现多来源、任意 URL、候选人工筛选或用户可调并发；
+- Fake Adapter 不模拟实时检索相关性、限流或临时网络错误；这些故障继续由 HTTP Adapter Mock 和应用
+  故障注入测试覆盖。Fixture PDF 只服务于 Fake Parser 闭环，不作为真实 Parser 质量样本；
 - 事务失败可能留下未引用缓存，尚无孤立缓存清理器；删除前必须先做引用对账；
 - Phase 1 上传入口仍沿用既有事务内 `Storage.write()`；本切片没有静默改变其 storage key/API。Phase 3
   arXiv 路径已满足文件写入不在数据库事务内，Phase 1 重构应是独立可靠性变更；

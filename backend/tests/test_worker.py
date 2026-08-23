@@ -5,8 +5,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.config import Settings
 from literature_agent.worker import (
+    _build_arxiv_gateway,
+    _build_model_stack,
     _dependency_reconcile_loop,
     execute_run,
     make_worker_settings,
@@ -43,3 +46,33 @@ async def test_dependency_reconcile_loop_is_independent(monkeypatch) -> None:
         await _dependency_reconcile_loop(ctx)
 
     service.reconcile_waiting.assert_awaited_once_with()
+
+
+def test_fake_mode_builds_offline_arxiv_gateway() -> None:
+    """生产组装边界必须显式选择不持有网络客户端的 Fake arXiv。"""
+    gateway, closables = _build_arxiv_gateway(Settings(arxiv_backend="fake"))
+
+    assert gateway.__class__.__name__ == "FixtureArxivGateway"
+    assert closables == []
+
+
+def test_real_mode_builds_http_arxiv_gateway() -> None:
+    """只有显式 real 配置才装配真实 HTTP arXiv Adapter。"""
+    gateway, closables = _build_arxiv_gateway(Settings(arxiv_backend="httpx"))
+
+    assert gateway.__class__.__name__ == "HttpxArxivGateway"
+    assert closables == [gateway]
+
+
+def test_unknown_arxiv_backend_fails_closed() -> None:
+    """遗漏或拼错 Adapter 不能静默回退到真实网络。"""
+    with pytest.raises(ValueError, match="arxiv_backend"):
+        _build_arxiv_gateway(Settings(arxiv_backend="unknown"))
+
+
+def test_fake_model_stack_uses_offline_tokenizer() -> None:
+    """Fake Indexing/RAG 必须共享不读取外部词表的确定性 tokenizer。"""
+    _gateway, profile, closables = _build_model_stack(Settings(), lambda: None)  # type: ignore[arg-type]
+
+    assert profile.tokenizer == OFFLINE_TOKENIZER
+    assert closables == []

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：需求已收敛，待按切片开发
+- 当前状态：切片 1–2 已完成，待推进切片 3
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -224,6 +224,26 @@ LLM-as-a-Judge。
 9. **Playwright 与发布收尾**：Phase 1–4 核心旅程、README、模块笔记、限制和完成复盘。
 
 每个切片遵循：契约/失败测试 → 最小实现 → 集成测试 → 文档更新 → 独立 Git 提交。
+
+### 切片进度
+
+- 切片 1「阶段契约收敛」：已完成（`cd565b6`）；
+- 切片 2「离线 Demo Fixture 与 Fake arXiv」：已完成实现与验证，生产 Worker 通过
+  `AGENT_ARXIV_BACKEND=fake|httpx` 显式装配，默认 fail closed 到 `fake`；`dev.sh --fake` 同时固定
+  Fake Parser/Embedding/Chat/arXiv，并以 `unicode-word.v1` 完成无需外部词表的 Chunk/RAG token 计数；
+  `--real` 才选择 Docling、真实 Provider、HTTP arXiv 与原有 `cl100k_base` tokenizer；
+- `review-demo.v1` 包含 4 条完全合成的版本化来源：3 条成功下载、1 条稳定永久失败。生产 Fake
+  Adapter 在启动时按 manifest 固定的 size/SHA-256 校验成功 PDF，篡改、缺失或非法文件契约立即失败；
+  与 `ArxivProjectImportService` 的应用测试验证重复导入收敛为 3 个 Ingestion Run 和 1 个稳定失败
+  Source。Fake Matrix 的证据不足、Outline feedback 再次 interrupt、approve 后继续以及 Review 重放
+  单效果由分层确定性测试共同覆盖，不声称由某一个测试完成完整 Review E2E；
+- 切片 2 实际验证：离线定向 Backend（含 Fixture 完整性、无 tiktoken 缓存的 Fake Indexing/RAG、
+  Fixture 导入、feedback interrupt 和 Review 重放）`113 passed`，其中显式空 `TIKTOKEN_CACHE_DIR` 的
+  Fake Chunk/Indexing/RAG/Worker `45 passed`；完整非集成 `613 passed, 4 skipped`；
+  arXiv 导入与 Queue Worker PostgreSQL/Testcontainers 集成 `7 passed`；`ruff check src tests`、`pyright`、
+  `bash -n scripts/dev.sh` 和 `git diff --check` 通过。`uv build` 生成的 wheel/sdist 均包含 manifest/PDF，
+  wheel 安装到独立 `/tmp` 目录后可读取 4 条来源和首篇 121-byte PDF。普通测试没有读取 `.env`、访问
+  arXiv、下载 tiktoken 资源或调用付费 Provider。
 
 ## 11. 测试方式
 

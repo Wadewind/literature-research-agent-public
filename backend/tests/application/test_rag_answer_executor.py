@@ -37,6 +37,7 @@ from literature_agent.domain.model_types import ChatMessage, ChatResult, ModelUs
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.retrieval import RetrievedChunk
 from literature_agent.domain.run import Run, RunStatus, RunType, create_run
+from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.models.fake_models import (
     FakeChatModel as EvidenceDrivenFakeChatModel,
 )
@@ -220,6 +221,7 @@ def _make_executor(
         retriever=retriever,
         evidence_service=evidence_service,
         model_gateway=gateway,
+        tokenizer=OFFLINE_TOKENIZER,
     )
 
 

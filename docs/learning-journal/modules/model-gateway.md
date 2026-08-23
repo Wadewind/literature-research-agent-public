@@ -27,7 +27,7 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 
 - `model_invocations`：`invocation_id`、`run_id`（可空 FK → runs）、`capability`（embedding/chat）、`provider`、`model`、`status`（succeeded/failed）、`prompt_tokens`/`completion_tokens`（可空）、`latency_ms`、`error_type`（可空）、`created_at`。**不存 Prompt 与响应内容**。
 - 调用记录是独立短事务：模型调用本身不持有任何数据库事务，记录失败不反向影响业务调用结果。
-- `ModelGateway` 不接进 lifespan 的 API 侧；Worker 装配时按 `AGENT_EMBEDDING_BACKEND` 选择 Fake 或真实 Adapter（切片 5）。
+- `ModelGateway` 不接进 lifespan 的 API 侧；Worker 装配时按 `AGENT_EMBEDDING_BACKEND` 选择 Fake 或真实 Adapter（切片 5）。Phase 4 起 Fake 模型栈同时固定 `unicode-word.v1` 离线 tokenizer，Indexing 与 RAG 共享该 profile；真实模型栈仍使用 `cl100k_base`。
 
 ## 关键决定与替代方案
 

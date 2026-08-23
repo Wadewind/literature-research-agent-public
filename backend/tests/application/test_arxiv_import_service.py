@@ -28,6 +28,7 @@ from literature_agent.domain.review import (
     create_review_run,
 )
 from literature_agent.domain.run import RunType, create_run
+from literature_agent.infrastructure.fake_arxiv import FixtureArxivGateway
 from tests.fakes.fake_chunk_set_repository import FakeChunkSetRepository
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_outbox_repository import FakeOutboxRepository
@@ -89,7 +90,12 @@ def _paper(identifier: str, *, rank: int = 1) -> ArxivPaper:
     )
 
 
-async def _fixture(papers: list[ArxivPaper], *, budget: int = 100):
+async def _fixture(
+    papers: list[ArxivPaper],
+    *,
+    budget: int = 100,
+    gateway_override: ArxivGateway | None = None,
+):
     state = {"in_transaction": False}
 
     class Session:
@@ -121,7 +127,7 @@ async def _fixture(papers: list[ArxivPaper], *, budget: int = 100):
     events = FakeEventRepository()
     outboxes = FakeOutboxRepository()
     reviews = FakeReviewRepository()
-    gateway = FakeArxivGateway(papers)
+    gateway = gateway_override or FakeArxivGateway(papers)
     storage = TransactionAwareStorage(state)
     project = create_project("owner-1", "Review", "")
     await projects.add(project)
@@ -311,6 +317,40 @@ async def test_partial_download_failure_is_stable_and_next_source_continues() ->
         ReviewSourceStatus.IMPORTING,
     ]
     assert ctx["reviews"].sources[0].failure_code == "arxiv_pdf_not_found"
+
+
+@pytest.mark.asyncio
+async def test_versioned_demo_fixture_imports_three_and_keeps_one_stable_failure() -> None:
+    """生产 Fake arXiv 与真实导入服务组成可重复的部分失败离线闭环。"""
+    gateway = FixtureArxivGateway()
+    ctx = await _fixture([], budget=100_000, gateway_override=gateway)
+    scope = {
+        "actor": ActorContext(owner_id="owner-1"),
+        "project_id": ctx["project"].project_id,
+        "review_run_id": ctx["run"].run_id,
+        "correlation_id": "demo-fixture",
+    }
+    await ctx["service"].search_sources(
+        **scope,
+        query=ArxivSearchQuery("all:agent", max_results=4),
+    )
+
+    first = await ctx["service"].import_sources(**scope)
+    replay = await ctx["service"].import_sources(**scope)
+
+    assert (first.imported, first.failed) == (3, 1)
+    assert replay == first
+    assert [source.status for source in ctx["reviews"].sources] == [
+        ReviewSourceStatus.IMPORTING,
+        ReviewSourceStatus.IMPORTING,
+        ReviewSourceStatus.IMPORTING,
+        ReviewSourceStatus.FAILED,
+    ]
+    assert ctx["reviews"].sources[-1].failure_code == "fake_arxiv_pdf_unavailable"
+    ingestion_runs = [
+        run for run in ctx["runs"]._runs.values() if run.run_type == RunType.INGESTION.value
+    ]
+    assert len(ingestion_runs) == 3
 
 
 @pytest.mark.asyncio

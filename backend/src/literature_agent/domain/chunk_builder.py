@@ -14,15 +14,13 @@
 - text 为空的 Element（如未抽取的 figure）不成 Chunk；表格无 text
   时把 payload 单元格渲染为纯文本；
 - page_start/page_end 取 Chunk 内 Element 来源定位的最小/最大页码；
-- token 计数使用 tiktoken（默认 ``cl100k_base``）；content_hash 为
-  text 的 SHA-256。
+- token 计数由 ChunkProfile 固定：真实模式默认 tiktoken ``cl100k_base``，
+  Fake 模式使用无需外部词表的 ``unicode-word.v1``；content_hash 为 text 的 SHA-256。
 """
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
-
-import tiktoken
 
 from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.document_element import (
@@ -30,6 +28,7 @@ from literature_agent.domain.document_element import (
     ElementSourceLocation,
     ElementType,
 )
+from literature_agent.domain.tokenization import get_token_counter
 
 # 不进入 Chunk 的 Element 类型
 _EXCLUDED_TYPES = frozenset({ElementType.PAGE_HEADER, ElementType.PAGE_FOOTER})
@@ -81,15 +80,9 @@ class _Heading:
     section_path: str | None
 
 
-@lru_cache(maxsize=4)
-def _get_encoding(tokenizer: str) -> tiktoken.Encoding:
-    """按名称加载 tiktoken 编码（进程内缓存）。"""
-    return tiktoken.get_encoding(tokenizer)
-
-
-def _count_tokens(encoding: tiktoken.Encoding, text: str) -> int:
+def _count_tokens(counter: Callable[[str], int], text: str) -> int:
     """计算文本 token 数。"""
-    return len(encoding.encode(text))
+    return counter(text)
 
 
 def _element_text(element: DocumentElement) -> str | None:
@@ -112,7 +105,7 @@ def _element_text(element: DocumentElement) -> str | None:
 
 def _build_units(
     elements: list[DocumentElement],
-    encoding: tiktoken.Encoding,
+    counter: Callable[[str], int],
 ) -> list[_Unit | _Heading]:
     """把 Element 序列整理为原子单元流（含章节标题标记）。
 
@@ -146,13 +139,13 @@ def _build_units(
             assert isinstance(unit, _Unit)
             unit.elements.append(element)
             unit.text = f"{unit.text}{_UNIT_SEPARATOR}{text}"
-            unit.tokens = _count_tokens(encoding, unit.text)
+            unit.tokens = _count_tokens(counter, unit.text)
             continue
         stream.append(
             _Unit(
                 elements=[element],
                 text=text,
-                tokens=_count_tokens(encoding, text),
+                tokens=_count_tokens(counter, text),
                 section_path=element.section_path,
             )
         )
@@ -175,8 +168,8 @@ def build_chunks(
     返回:
         有序 Chunk 草稿列表；无可用内容时返回空列表（空文档合法）。
     """
-    encoding = _get_encoding(profile.tokenizer)
-    stream = _build_units(elements, encoding)
+    counter = get_token_counter(profile.tokenizer)
+    stream = _build_units(elements, counter)
     pages_by_element: dict[str, list[int]] = {}
     for loc in locations:
         pages_by_element.setdefault(loc.element_id, []).append(loc.page)
@@ -204,7 +197,7 @@ def build_chunks(
             ChunkDraft(
                 sequence=len(drafts) + 1,
                 text=text,
-                token_count=_count_tokens(encoding, text),
+                token_count=_count_tokens(counter, text),
                 section_path=buffer[0].section_path,
                 page_start=min(pages) if pages else None,
                 page_end=max(pages) if pages else None,
@@ -237,7 +230,7 @@ def build_chunks(
                 new_units_in_buffer = 0
             heading = item
             prefix_tokens = (
-                _count_tokens(encoding, item.text)
+                _count_tokens(counter, item.text)
                 if profile.include_section_prefix and item.text
                 else 0
             )

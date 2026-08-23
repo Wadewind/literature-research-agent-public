@@ -54,6 +54,7 @@ from literature_agent.domain.citation_validator import validate_citations
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.project import create_project
 from literature_agent.domain.run import RunStatus, RunType
+from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.models.fake_models import (
     FakeChatModel,
@@ -207,6 +208,7 @@ def _execution_stack(session_factory, storage: LocalFileStorage, settings: Setti
         embedding_provider="fake",
         embedding_model="fake-embedding",
         embedding_dimensions=1024,
+        tokenizer=OFFLINE_TOKENIZER,
     )
     indexing = IndexingExecutor(
         session_factory=session_factory,
@@ -250,6 +252,7 @@ def _execution_stack(session_factory, storage: LocalFileStorage, settings: Setti
         model_gateway=gateway,
         answer_max_output_tokens=settings.answer_max_output_tokens,
         context_token_budget=settings.retrieval_token_budget,
+        tokenizer=OFFLINE_TOKENIZER,
     )
     dispatcher = RunDispatcher(
         session_factory=session_factory,

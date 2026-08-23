@@ -39,7 +39,7 @@ Worker：RunExecutionService → RunDispatcher（按 run_type 分发）
 - `chunk_sets`：`chunk_set_id`、`parse_revision_id`（FK）、`profile_hash`、`config`、`status`（`running`/`ready`/`failed`）、`error`、`created_at`、`completed_at`；唯一约束 `(parse_revision_id, profile_hash)`——与 ParseRevision 相同的「唯一约束即幂等键」模式，重复 Job/重跑只能产生一行。
 - `chunks`：`chunk_id`、`chunk_set_id`、`sequence`、`text`、`token_count`、`section_path`、`page_start`/`page_end`、`content_hash`、`embedding vector(1024)` 可空、`search_vector` tsvector 生成列（`to_tsvector('english', text)` STORED + GIN 索引）；唯一约束 `(chunk_set_id, sequence)`。
 - `chunk_element_links`：复合主键 `(chunk_id, element_id)` + `sequence`；`element_id` 有普通索引支持反查。
-- `ChunkProfile` 七字段（max_tokens 512 / overlap_tokens 64 / tokenizer cl100k_base / include_section_prefix / embedding_provider/model/dimensions）共同参与规范化 JSON 的 `profile_hash`；profile 变化产生新 ChunkSet，旧索引保留。
+- `ChunkProfile` 七字段（max_tokens 512 / overlap_tokens 64 / tokenizer / include_section_prefix / embedding_provider/model/dimensions）共同参与规范化 JSON 的 `profile_hash`；真实模式的 tokenizer 仍为 `cl100k_base`，Fake 模式固定为不需要下载词表的 `unicode-word.v1`。profile 变化产生新 ChunkSet，旧索引保留。
 - 向量维度在迁移期固定 1024，与 `AGENT_EMBEDDING_DIMENSIONS` 默认值一致；改维度需要新迁移（有意取舍）。
 
 ## 关键决定与替代方案
@@ -48,7 +48,7 @@ Worker：RunExecutionService → RunDispatcher（按 run_type 分发）
 - **整 Element 重叠回带**：相邻 Chunk 的 overlap 按整 Element 回带，不切半个 Element，保证每个 Chunk 的 Element 映射和页码回溯完整；单个超限 Element（大表格）允许独立成 Chunk 存在，不硬切。
 - **章节标题作前缀而非 Chunk**：`section_heading` 是 Chunk 边界，标题文本拼入后续 Chunk 开头并计入 token_count，让孤立段落保留章节语境；caption 并入 table/figure 父 Element 同 Chunk；页眉页脚与空文本 Element 不进入索引。
 - **chunks 与 embedding 分事务提交**：chunking 结果先落库，Embedding 分批写回——长模型调用不持有事务，崩溃/取消后重跑只补 `embedding IS NULL` 的批次，chunks 由唯一约束兜底不重复。代价：取消后 ChunkSet 停在 running，靠下一次触发补齐。
-- **fake/真实 backend 开关**：`AGENT_EMBEDDING_BACKEND=fake|openai_compatible`（默认 fake，仿 `AGENT_PARSER_BACKEND`）；fake 模式下 profile 三元组固定 `("fake", "fake-embedding", 1024)`，避免 fake 产出的 ChunkSet 与真实 profile 混淆。
+- **fake/真实 backend 开关**：`AGENT_EMBEDDING_BACKEND=fake|openai_compatible`（默认 fake，仿 `AGENT_PARSER_BACKEND`）；fake 模式下 profile 固定 `("fake", "fake-embedding", 1024, "unicode-word.v1")`，避免 fake 产出的 ChunkSet 与真实 profile 混淆，也避免全新机器为 `cl100k_base` 隐式下载 tiktoken 资源。真实 profile 继续使用 tiktoken，不能静默降级到离线计数器。
 - **tsvector 用生成列**：`to_tsvector('english', text)` STORED，写入路径零额外代码，FTS 配置随列定义固定为 english（语料为英文论文）。
 - **RunDispatcher 显式分发**（同属切片 4）：Worker 按 `run.run_type` 分发到 ingestion/indexing 执行器，未知类型推进 FAILED（`unknown_run_type`）不静默执行；`RunExecutionService` 单 executor 签名不变。
 
@@ -70,13 +70,14 @@ Worker：RunExecutionService → RunDispatcher（按 run_type 分发）
 ## 重要测试和运行结果
 
 - Domain：`test_chunk_profile.py`（哈希确定性、参数校验）、`test_chunk_builder.py`（分组/重叠/表格题注/章节前缀/排除规则/页码/空文档）；
+- Phase 4 补充验证 Fake profile 不调用 `tiktoken.get_encoding`，真实 profile 仍显式委托 tiktoken；
 - Application：`test_indexing_executor.py`（全链路事件、复用、重跑只补 null、取消竞争、错误分类、空 ChunkSet、invocation 记录）、`test_run_dispatcher.py`、ingestion 触发 indexing；
 - Integration：`test_chunk_repository.py`（约束与查询、向量往返、cosine `<=>` Top-K、tsvector `@@` 命中/不命中）、`test_queue_worker.py` 端到端（上传 → ingestion → 自动 indexing → ChunkSet ready、chunks 带 embedding/search_vector）、`test_index_status.py`（API 各分支）；
 - 切片 5 完成时：非集成 258 passed + 4 skipped，integration 51 passed（pgvector/pgvector:pg18 容器），ruff/pyright 全绿，迁移 upgrade/downgrade 实跑通过。
 
 ## 代码入口
 
-- 领域：`domain/chunk_profile.py`、`chunk_builder.py`、`chunk.py`、`run.py`（RunType）
+- 领域：`domain/chunk_profile.py`、`chunk_builder.py`、`tokenization.py`、`chunk.py`、`run.py`（RunType）
 - 端口：`application/ports/chunk_set_repository.py`、`chunk_repository.py`
 - 服务：`application/indexing_executor.py`、`run_dispatcher.py`、`document_query_service.py`（get_index_status）
 - 适配器：`infrastructure/persistence/chunk_set_repository.py`、`chunk_repository.py`、`infrastructure/models/fake_models.py`

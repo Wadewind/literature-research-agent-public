@@ -32,6 +32,7 @@ from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.parse_revision import create_parse_revision
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import Run, RunStatus, RunType, create_run
+from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.parsing.fake_parser import FakeDocumentParser
 from tests.fakes.fake_attempt_repository import FakeAttemptRepository
 from tests.fakes.fake_chat_model import FakeChatModel
@@ -49,7 +50,10 @@ from tests.fakes.fake_project_repository import fake_session
 from tests.fakes.fake_run_repository import FakeRunRepository
 
 _PROFILE = ChunkProfile(
-    embedding_provider="test", embedding_model="m", embedding_dimensions=1024
+    embedding_provider="test",
+    embedding_model="m",
+    embedding_dimensions=1024,
+    tokenizer=OFFLINE_TOKENIZER,
 )
 
 
