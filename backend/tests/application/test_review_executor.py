@@ -12,7 +12,8 @@ from literature_agent import metrics as metrics_module
 from literature_agent.application import review_executor as review_executor_module
 from literature_agent.application.review_executor import ReviewExecutor
 from literature_agent.application.review_search_strategy_service import SearchStrategyResult
-from literature_agent.domain.exceptions import NoReviewablePapersError
+from literature_agent.domain.exceptions import CheckpointDataError, NoReviewablePapersError
+from literature_agent.domain.retry_policy import is_permanent_error
 from literature_agent.domain.review import (
     HumanInputAction,
     ReviewOutputType,
@@ -412,3 +413,96 @@ async def test_human_resume_replays_pregraph_services_without_duplicate_external
     assert (matrix.calls, matrix.external_calls) == (2, 1)
     assert export.finalize_calls == 1
     assert (await runs.get_by_id(run.run_id)).status is RunStatus.SUCCEEDED
+
+
+async def test_corrupt_checkpoint_is_not_replaced_with_new_graph(monkeypatch) -> None:
+    """Checkpoint 损坏必须原样永久失败，不能降级为首次启动覆盖历史。"""
+    runs = FakeRunRepository()
+    reviews = FakeReviewRepository()
+    run = replace(
+        create_run("project-1", "owner-1", RunType.REVIEW).transition_to(RunStatus.RUNNING),
+        run_id="review-corrupt-checkpoint",
+    )
+    await runs.add(run)
+    reviews.authorize_run(run.run_id, run.project_id, run.owner_id)
+    await reviews.add_review_run(
+        create_review_run(
+            run_id=run.run_id,
+            research_question="研究问题",
+            workflow_version="review.v1",
+            model_profile_version="review-default.v1",
+            prompt_versions={"search_strategy": "search_strategy.v1"},
+            config_snapshot={"source_limit": 10},
+        )
+    )
+    await reviews.add_source(
+        create_review_source(
+            review_run_id=run.run_id,
+            arxiv_id="2401.00001",
+            arxiv_version="v1",
+            rank=1,
+            metadata_snapshot={"title": "论文"},
+        ).mark_ready("paper-1", "version-1")
+    )
+    strategy_output = create_review_output(
+        review_run_id=run.run_id,
+        output_type=ReviewOutputType.SEARCH_STRATEGY,
+        output_key="search-strategy",
+        version=1,
+        schema_version="search-strategy.v1",
+        payload={"arxiv_query": "all:agent"},
+        idempotency_key="strategy-corrupt",
+    )
+    matrix_output = create_review_output(
+        review_run_id=run.run_id,
+        output_type=ReviewOutputType.EVIDENCE_MATRIX,
+        output_key="evidence-matrix",
+        version=1,
+        schema_version="evidence-matrix.v1",
+        payload={"rows": []},
+        idempotency_key="matrix-corrupt",
+    )
+
+    class Matrix:
+        async def build(self, **_kwargs):
+            return SimpleNamespace(output=matrix_output)
+
+    calls = {"start": 0, "resume": 0}
+    corrupt = CheckpointDataError("Checkpoint 无法安全读取")
+
+    class CorruptRuntime:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def has_checkpoint(self, _run_id: str) -> bool:
+            raise corrupt
+
+        async def start(self, _state) -> None:
+            calls["start"] += 1
+
+        async def resume(self, _run_id: str) -> None:
+            calls["resume"] += 1
+
+    monkeypatch.setattr(review_executor_module, "ReviewWorkflowRuntime", CorruptRuntime)
+    unexpected = _Unexpected()
+    executor = ReviewExecutor(
+        session_factory=fake_session,
+        run_repo_factory=lambda _session: runs,
+        review_repo_factory=lambda _session: reviews,
+        strategy_service=_Strategy(strategy_output),
+        arxiv_service=_Arxiv(),
+        dependency_wait_service=_DependencyWait(),
+        matrix_service=Matrix(),
+        outline_service=unexpected,
+        outline_decision_service=unexpected,
+        section_service=unexpected,
+        export_service=unexpected,
+        checkpoint_store=_CheckpointStore(),
+    )
+
+    with pytest.raises(CheckpointDataError) as raised:
+        await executor.execute(run, "correlation-1")
+
+    assert raised.value is corrupt
+    assert is_permanent_error(raised.value)
+    assert calls == {"start": 0, "resume": 0}

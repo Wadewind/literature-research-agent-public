@@ -83,6 +83,8 @@ Outbox。
 - psycopg checkpoint 读写错误归一化为临时 `CheckpointUnavailableError`；
 - Workflow 版本不匹配或恢复结果缺失归为永久 `CheckpointDataError`；节点自己的 `ValueError`/
   `TypeError` 原样传播，避免把业务失败误报为 checkpoint 损坏；
+- Phase 4 切片 7 的 Application 证据把损坏读取异常传入生产 Review Executor，确认异常原样按永久错误
+  传播，且 Runtime 的 `start`/`resume` 均未调用；损坏历史不会被新初始 State 覆盖；
 - `CANCEL_REQUESTED` 最新 Attempt 不由残留对账提前关闭；心跳新鲜时继续由 Worker 协作完成，lease
   过期才由崩溃对账安全收敛；
 - strict msgpack 降低被篡改 checkpoint 实例化任意 Python 类型的风险；业务权限仍须单独校验。

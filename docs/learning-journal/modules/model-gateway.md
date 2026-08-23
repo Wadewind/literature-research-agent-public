@@ -42,6 +42,9 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - 429/5xx/超时：Adapter 内最多 `AGENT_MODEL_MAX_RETRIES`（默认 2）次短重试（固定退避 1s/2s），耗尽后抛临时错误，由 Run 层按预算 RETRY_WAIT；
 - 401/403/400/响应畸形：不重试，直接永久错误；
 - 每次最终尝试（无论成败）产生一条 invocation 记录，重试中间过程不记录（记录在 Gateway 层，包住整个 Adapter 调用）；
+- Provider 响应与本地持久化不是分布式原子事务：响应成功后、业务 Output 或 `ModelInvocation` 提交前
+  崩溃仍可能导致重放再次调用；第一次远端调用也可能来不及留下 Invocation。多条记录可解释重复尝试，
+  单条记录不能证明 Provider 只执行一次，系统不宣称外部调用 Exactly Once；
 - 模型调用本身不可中断：取消由执行器在调用前后检查点处理（见 chunk-and-indexing 笔记）。
 
 ## 安全和可观测性

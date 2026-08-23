@@ -108,7 +108,7 @@ Worker 进程（python -m literature_agent.worker）│
 - `tests/application/test_outbox_dispatch_service.py`：派发成功、未到期跳过、失败退避、上限进入 FAILED、崩溃后补投安全。
 - `tests/application/test_run_execution_service.py`：QUEUED → SUCCEEDED、重复 Job 跳过、缺失/已取消跳过、执行失败进入 FAILED、并发只有一个完成。
 - `tests/integration/test_outbox_repository.py`：PostgreSQL 唯一约束、外键、到期查询、`try_mark_dispatched` 条件更新。
-- `tests/integration/test_queue_worker.py`：Valkey + ARQ + PostgreSQL 端到端——Outbox → ARQ → Worker → Run SUCCEEDED；队列故障后恢复补投；相同 Job ID 去重；Attempt 以 succeeded 关闭。
+- `tests/integration/test_queue_worker.py`：Valkey + ARQ + PostgreSQL 端到端——Outbox → ARQ → Worker → Run SUCCEEDED；队列故障后恢复补投；相同 Job ID 去重；两个不同物理 Job ID 重复携带同一 `run_id` 时仍只有一个 Attempt、一组 Event/Revision/Element；Attempt 以 succeeded 关闭。
 - `tests/domain/test_run_attempt.py`、`test_retry_policy.py`：Attempt 生命周期、永久/临时分类、退避上限。
 - `tests/application/test_run_reconcile_service.py`：lease 过期收回重投、心跳新鲜不动、终态跳过、预算耗尽 FAILED。
 - `tests/integration/test_attempt_repository.py`：唯一约束、心跳/结束条件更新、过期查询 join Run 状态。

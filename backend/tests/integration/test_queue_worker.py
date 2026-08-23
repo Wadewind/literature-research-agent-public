@@ -368,6 +368,62 @@ async def test_duplicate_enqueue_deduplicated_by_job_id(valkey_url: str) -> None
         await pool.aclose()
 
 
+async def test_distinct_physical_jobs_create_one_business_effect(
+    db_engine, valkey_url: str, queued_run: str
+) -> None:
+    """不同 ARQ Job ID 重复投递同一 run_id，业务事实仍只提交一次。"""
+    pool = await create_pool(RedisSettings.from_dsn(valkey_url))
+    try:
+        first = await pool.enqueue_job(
+            "execute_run", queued_run, _job_id=f"retry-a:{queued_run}"
+        )
+        second = await pool.enqueue_job(
+            "execute_run", queued_run, _job_id=f"retry-b:{queued_run}"
+        )
+        assert first is not None and second is not None
+    finally:
+        await pool.aclose()
+
+    session_factory = _session_factory(db_engine)
+    worker = Worker(
+        redis_settings=RedisSettings.from_dsn(valkey_url),
+        functions=[execute_run],
+        burst=True,
+        handle_signals=False,
+        max_tries=1,
+        ctx={"run_execution_service": _make_execution_service(session_factory)},
+    )
+    await worker.async_run()
+
+    async with session_factory() as session:
+        run = await SqlalchemyRunRepository(session).get_by_id(queued_run)
+        assert run is not None and run.status is RunStatus.SUCCEEDED
+        events = await SqlalchemyEventRepository(session).list_by_run(queued_run)
+        assert [event.event_type for event in events] == [
+            "run_started",
+            "parse_started",
+            "parse_completed",
+            "normalize_completed",
+            "result_committed",
+        ]
+        attempts = await SqlalchemyAttemptRepository(session).list_by_run(queued_run)
+        assert len(attempts) == 1
+        version = await SqlalchemyPaperVersionRepository(session).get_by_id(
+            run.input_payload["version_id"]
+        )
+        assert version is not None and version.current_parse_revision_id is not None
+        revision = await SqlalchemyParseRevisionRepository(session).get_by_id(
+            version.current_parse_revision_id
+        )
+        assert revision is not None
+        assert (
+            await SqlalchemyElementRepository(session).count_by_revision(
+                version.current_parse_revision_id
+            )
+            == 8
+        )
+
+
 async def test_ingestion_then_indexing_completes_end_to_end(
     db_engine, valkey_url: str, queued_run: str
 ) -> None:

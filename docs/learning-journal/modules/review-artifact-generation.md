@@ -110,6 +110,11 @@ Prompt 或 Secret。
 存在与损坏区分、完整图 Resume 到 Export/Finalize、API 三元隔离、SSE Review owner 隔离和
 `Last-Event-ID` 重放。
 
+Phase 4 切片 7 进一步以真实 PostgreSQL session 在 flush 后确定性注入 commit 失败：新 session
+确认 Output/Artifact/Step/Event 全部回滚、Stage 与 Run sequence 未推进，而稳定 Storage 缓存保留；
+正常 session 重放后只提交一组事实。取消竞争测试用显式 `asyncio.Event` 控制锁顺序，不使用 sleep：
+取消先持有 Run 行锁时，导出随后只能拒绝，除 `run_cancel_requested` 外没有导出业务效果。
+
 实际结果：导出/策略/执行器/完整图定向测试 `26 passed`，Review Finalize/Attempt 收尾定向测试
 `1 passed`，Review API 与通用 SSE 定向测试 `10 passed`，新增 PostgreSQL Artifact 集成测试
 `1 passed`；Backend 完整非集成回归 `596 passed, 4 skipped`，完整

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：切片 1–6 已完成，待推进切片 7
+- 当前状态：切片 1–7 已完成，待推进切片 8
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -303,6 +303,20 @@ LLM-as-a-Judge。
   Backend 完整非集成 `655 passed, 4 skipped`；PostgreSQL/Valkey integration 完整 `114 passed`；
   `ruff check src tests`、`pyright`、`bash -n scripts/dev.sh` 与 `git diff --check` 通过。普通测试未读取
   `.env`、访问实时 arXiv 或付费 Provider。
+- 切片 7「可靠性矩阵审计与补缺」：已完成。Phase 4 §7 实际包含十类故障，逐行复用既有
+  Domain/Application/API/Workflow/PostgreSQL/Valkey 证据，并只补四个跨模块空白：两个不同物理
+  ARQ Job 仍只携带同一 `run_id` 时，真实 Worker 只提交一个 Attempt、一组 Event 与解析事实；Storage
+  成功后真实 PostgreSQL commit 失败时，Output/Artifact/Step/Event 全回滚且 Stage/Run sequence 不变，
+  稳定缓存可由重放复用；取消先持 Run 行锁时导出只能拒绝且无部分业务效果；损坏 Checkpoint 在
+  Review Executor 中保持永久错误，既不 `start` 也不 `resume`，不会覆盖为新图。
+- Provider 响应与本地业务 Output/ModelInvocation 提交之间仍存在不可消除的崩溃窗口：重放可能再次
+  调用 Provider，第一次远端调用也可能来不及留下 Invocation。矩阵明确只承诺 PostgreSQL 业务事实
+  Effectively Once，不宣称外部调用或分布式 Exactly Once。API 重启采用无状态 API 契约、PostgreSQL
+  Repository 与跨连接 Runtime 的组合证据，不夸大为双 Uvicorn 黑盒 E2E。完整证据、测试层级和未证明
+  内容见 [可靠性测试矩阵](../modules/reliability-test-matrix.md)。新增定向 Application `1 passed`，新增
+  PostgreSQL/Valkey 集成 `3 passed`；Backend 完整非集成 `656 passed, 4 skipped`，完整
+  PostgreSQL/Valkey integration `117 passed`；`ruff check src tests`、`pyright` 与 `git diff --check`
+  通过。普通测试未读取 `.env`、访问实时 arXiv 或付费 Provider。
 
 ## 11. 测试方式
 
