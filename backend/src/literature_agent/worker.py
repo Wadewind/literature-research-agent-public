@@ -19,7 +19,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
-from arq.worker import run_worker
+from arq.worker import func, run_worker
 
 from literature_agent.application.arxiv_import_service import ArxivProjectImportService
 from literature_agent.application.evidence_service import EvidenceService
@@ -663,7 +663,9 @@ def make_worker_settings(settings: Settings) -> type:
         ARQ 不叠加自动重试，避免多层重试相乘。
         """
 
-        functions = [execute_run]
+        # 稳定 Job ID 只用于“当前排队/执行中”去重；等待恢复后的合法新 Attempt
+        # 必须能够复用同一 ID。ARQ result 不是业务事实，因此不保留。
+        functions = [func(execute_run, keep_result=0)]
         on_startup = startup
         on_shutdown = shutdown
         redis_settings = RedisSettings.from_dsn(settings.redis_url)

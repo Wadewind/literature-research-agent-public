@@ -44,6 +44,12 @@ cd backend
 
 Fake Chat 的规则是“Prompt 中有 Evidence ID 就回答”，所以无答案题只要检索到任意相关词块便会误报 answered。该失败被如实保留，未针对 Fixture 编写答案脚本。没有运行人工 Groundedness、性能或真实语料质量评测，因此不报告这些指标。
 
+2026-08-24 Phase 4 再次运行相同正式管线，结论仍为 8/8、11/11、14/14、3/3 和
+insufficient 0/6。Runner 现额外记录冷一次性数据库/Storage 下的实际 Element/Chunk 数、Embedding
+维度、PostgreSQL 版本、导入解析索引总耗时及逐题 Retrieval/RAG 耗时；这些是性能观察，不进入普通
+测试的耗时断言。该次 Fake tokenizer/profile 形成 16 Elements、8 Chunks，不能与 2026-08-21 笔记中
+旧运行的 33 Chunks 混为同一数据规模。
+
 ## 可靠性证据矩阵
 
 - API 幂等重放/冲突、busy 与终态 `active_run_id` 自愈：`test_conversation_service.py`、`test_conversations.py`；
@@ -69,6 +75,7 @@ Fake Chat 的规则是“Prompt 中有 Evidence ID 就回答”，所以无答�
 - Fake Embedding 只表达词汇重叠，Fake Chat 不判断语义充分性；本报告不证明真实检索/回答质量。
 - 真实 Provider 只做一次 Embedding 与一次结构化 Chat 最小请求，没有用真实 Provider 重跑 14 题，也没有宣称生产可用。
 - `json_object` 模式依赖 Prompt 明确字段形状，确定性 Pydantic 解析和 Citation Validator 仍是必须边界。
+- 2026-08-24 未重跑真实 Provider；既有 Smoke 与本次未执行内容已在 Phase 4 真实 Provider 报告中分开。
 
 ## 60 秒面试说明
 

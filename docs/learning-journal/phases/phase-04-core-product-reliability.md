@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：切片 1–7 已完成，待推进切片 8
+- 当前状态：切片 1–8 已完成，待推进切片 9
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -317,6 +317,39 @@ LLM-as-a-Judge。
   PostgreSQL/Valkey 集成 `3 passed`；Backend 完整非集成 `656 passed, 4 skipped`，完整
   PostgreSQL/Valkey integration `117 passed`；`ruff check src tests`、`pyright` 与 `git diff --check`
   通过。普通测试未读取 `.env`、访问实时 arXiv 或付费 Provider。
+- 切片 8「固定评测与性能基线」：已完成。复用 Phase 2 的 4 篇合成 PDF、14 题和正式
+  Ingestion/Indexing/Retriever/RAG/Citation runner，并增加 3 个固定 Review 研究问题的版本化组合工程门。
+  三个问题及 3/4/3 篇语料实际进入生产 Matrix/Citation/Section Validator 和确定性导出器；首次实跑
+  固定五项 100% 阻断阈值：场景 3/3、Citation 接受/跨 Run 拒绝 6/6、导出引用映射 6/6、Evidence
+  跨 Project/Run 拒绝 18/18 和伪造 Evidence 拒绝 3/3。Owner 隔离由 Project-scoped Application/PG
+  组合回归证明，不折算成领域质量比例。
+  feedback/HITL、持久化、Run/Step/Event 终态和重放是独立固定 12 节点组合回归，实跑 `12/12`，不
+  折算为质量比例；100% 不代表语义 Groundedness。Phase 2
+  再跑仍为 answered Retrieval 8/8、Citation 11/11、Validator 14/14、scope 3/3，Fake insufficient
+  继续 0/6 并作为已知失败保留。
+- 本机基线为 WSL2/4 vCPU/Python 3.13.14/PostgreSQL 18.6/Valkey 9.1.1，冷库 4 篇、16 Elements、
+  8 Chunks、Fake Embedding 1024 维：解析索引总计 0.575 s；Retrieval p95 14.927 ms；RAG p95
+  154.562 ms；TestClient 存活端点 p95 1.032 ms；3–4 篇 Review 生产 Domain Validator/导出三场景
+  总计 0.970 ms（不含 PG/Worker/HITL/Storage）；真实 PG+Valkey+ARQ 非 Review Worker 路径
+  `2 passed / 12.77 s`、测试进程峰值 152,688 KiB。正式 API+PG+Valkey/ARQ Worker+Runtime 的 4 Source
+  完整 Review wall 5.372 s、active 4.371 s、自动 HITL pause 1.000 s，Worker RSS/VmHWM 133,220 KiB；
+  3 ready + 1 failed，13 Steps 全成功、22 Events、两轮 HITL、6 个 Artifact/8,646 bytes 均可读。
+  结果是一轮观察值，不是 SLA；8 Chunk 规模没有证据需要 ANN。
+  本切片无显式 Provider 凭证，未读 `.env` 或发网；报告只引用 Phase 2 历史最小 Smoke，并明确本次
+  未重跑及未来 opt-in 必须记录的字段。完整结果、失败样例和复现命令见
+  [固定评测报告](../reports/phase-04-evaluation-baseline.md)、
+  [性能基线](../reports/phase-04-performance-baseline.md)与
+  [真实 Provider 记录](../reports/phase-04-real-provider-evaluation.md)。
+  首次完整 Fake Review 性能旅程还暴露稳定 ARQ Job ID 的恢复缺口：首次 PAUSED Job 默认保留 Result，
+  Dependency/HITL 恢复的同 ID 重投被 ARQ 去重，Run 停在 `queued` 且没有第二 Attempt。Worker 现仅对
+  `execute_run` 使用 `func(..., keep_result=0)`；执行中重复仍按稳定 ID 去重，结束后同一 Run 可合法
+  创建新 Attempt，业务单效果继续由 PostgreSQL 条件认领保证。真实 PG+Valkey 修复回归 `3 passed`；
+  重启 Worker 后第四次全新 Project 完整旅程成功，且外部 HTTP/付费 Provider 调用为零。
+  切片 8 实跑：评测指标单元 `6 passed`，Review 固定组合回归 `12 passed`；性能/评测/Worker/Application
+  最终定向 `44 passed`；ARQ Result 修复的真实 PostgreSQL+Valkey 集成 `3 passed`。修复前已跑 Backend
+  完整非集成 `660 passed, 4 skipped` 和完整 PostgreSQL/Valkey integration `117 passed`；修复后全量
+  非集成重跑在本地测试进程无输出挂起后中止，不报告伪造结果。最终 `ruff check src tests`、`pyright`
+  与 `git diff --check` 通过。
 
 ## 11. 测试方式
 

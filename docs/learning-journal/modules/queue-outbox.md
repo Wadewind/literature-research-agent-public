@@ -59,7 +59,10 @@ Worker 进程（python -m literature_agent.worker）│
 - **Outbox 而不是 API 直接投递**：API 直接 enqueue 会在“DB 已提交、队列未投递”的崩溃窗口丢任务；Outbox 把投递变成可重放的后台动作。
 - **run_type 显式分发**（Phase 2 切片 4）：Worker 装配 `RunDispatcher` 组合执行器（`application/run_dispatcher.py`），按 `run.run_type` 分发到 ingestion/indexing 执行器；未知或未接线类型把 Run 推进 FAILED（错误类型 `unknown_run_type`），不静默执行。`RunExecutionService` 的单 executor 签名不变，dispatcher 作为组合 executor 注入；各执行器另有 run_type 防御。
 - **indexing Run 的触发**（Phase 2 切片 4）：IngestionExecutor 结果提交事务内（含复用路径）同时创建 indexing Run + `run_created` + Outbox，保证解析成功必然跟随索引，不引入独立扫描循环。
-- **ARQ Job ID 去重**：`_job_id = "run:<run_id>"`，队列内同一 Run 同一时间只有一个待执行 Job，Outbox 补投天然去重。
+- **ARQ Job ID 去重**：`_job_id = "run:<run_id>"`，队列内同一 Run 同一时间只有一个待执行/执行中 Job，Outbox 补投天然去重。`execute_run` 以
+  `func(..., keep_result=0)` 注册；ARQ Result 不是业务事实，完成后立即释放 result/job key，使同一业务
+  Run 从 Dependency/HITL 恢复时能用相同稳定 ID 创建合法新 Attempt。并发重复仍由执行中的 Job key
+  去重，业务单效果仍由 PostgreSQL Run 条件认领保证。
 - **Worker 端幂等执行**：`RunExecutionService` 只认领 `QUEUED` 的 Run（条件更新），重复 Job、已终态、已取消一律跳过。
 - **`max_tries = 1`**：ARQ 不叠加自动重试，重试只有 Outbox 退避一层主导，避免多层重试相乘。
 - **派发器在 Worker 进程内**：首版不单建 Dispatcher 部署单元；多实例并发派发时由 Job ID 去重和条件更新兜底。
@@ -108,7 +111,7 @@ Worker 进程（python -m literature_agent.worker）│
 - `tests/application/test_outbox_dispatch_service.py`：派发成功、未到期跳过、失败退避、上限进入 FAILED、崩溃后补投安全。
 - `tests/application/test_run_execution_service.py`：QUEUED → SUCCEEDED、重复 Job 跳过、缺失/已取消跳过、执行失败进入 FAILED、并发只有一个完成。
 - `tests/integration/test_outbox_repository.py`：PostgreSQL 唯一约束、外键、到期查询、`try_mark_dispatched` 条件更新。
-- `tests/integration/test_queue_worker.py`：Valkey + ARQ + PostgreSQL 端到端——Outbox → ARQ → Worker → Run SUCCEEDED；队列故障后恢复补投；相同 Job ID 去重；两个不同物理 Job ID 重复携带同一 `run_id` 时仍只有一个 Attempt、一组 Event/Revision/Element；Attempt 以 succeeded 关闭。
+- `tests/integration/test_queue_worker.py`：Valkey + ARQ + PostgreSQL 端到端——Outbox → ARQ → Worker → Run SUCCEEDED；队列故障后恢复补投；相同 Job ID 执行中去重；首次 Attempt PAUSED 后用同一稳定 Job ID 恢复并创建第二 Attempt；两个不同物理 Job ID 重复携带同一 `run_id` 时仍只有一个业务效果；Attempt 按 paused/succeeded 关闭。
 - `tests/domain/test_run_attempt.py`、`test_retry_policy.py`：Attempt 生命周期、永久/临时分类、退避上限。
 - `tests/application/test_run_reconcile_service.py`：lease 过期收回重投、心跳新鲜不动、终态跳过、预算耗尽 FAILED。
 - `tests/integration/test_attempt_repository.py`：唯一约束、心跳/结束条件更新、过期查询 join Run 状态。
@@ -137,6 +140,7 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 
 - 执行体已接入真实 Docling + pypdf 降级组合（切片 7，见 document-parsing 笔记）。
 - 单实例派发与对账循环；多实例依赖 Job ID 去重和条件更新，未使用 SKIP LOCKED 认领。
+- ARQ 结果已按函数禁用保留，不能使用 ARQ Result 查询业务结果；这与既有“PostgreSQL 是事实来源”一致。
 - Outbox `failed` 终态（投递层）与 Run `failed`（预算耗尽）暂无自动告警和人工重放入口。
 - `schedule_again` 已由 Review Dependency Reconciler 与 HumanInput 服务在各自正常恢复事务中调用；
 - Run 已提交等待/终态后、Attempt best-effort 关闭前的崩溃已由 Phase 3 切片 5 补偿；无法从业务

@@ -26,8 +26,13 @@ from literature_agent.application.rag_answer_executor import RagAnswerExecutor
 from literature_agent.application.retriever import Retriever
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
+from literature_agent.application.waiting_run_resume_service import (
+    ResumeReason,
+    WaitingRunResumeService,
+)
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.chunk_profile import ChunkProfile
+from literature_agent.domain.event import create_event
 from literature_agent.domain.paper import create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.parse_profile import ParseProfile
@@ -36,6 +41,7 @@ from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import RunStatus, RunType, create_run
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
+from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.models.fake_models import (
     FakeChatModel,
     FakeEmbeddingModel,
@@ -100,7 +106,7 @@ from literature_agent.infrastructure.persistence.run_repository import (
     SqlalchemyRunRepository,
 )
 from literature_agent.infrastructure.queue.arq_run_queue import ArqRunQueue
-from literature_agent.worker import execute_run
+from literature_agent.worker import execute_run, make_worker_settings
 
 
 @pytest_asyncio.fixture
@@ -366,6 +372,122 @@ async def test_duplicate_enqueue_deduplicated_by_job_id(valkey_url: str) -> None
         assert job2 is None
     finally:
         await pool.aclose()
+
+
+async def test_stable_job_id_can_run_again_after_paused_attempt(
+    db_engine, valkey_url: str, queued_run: str
+) -> None:
+    """已完成的 PAUSED Job 不保留 result，恢复后同一稳定 ID 可创建第二 Attempt。"""
+    session_factory = _session_factory(db_engine)
+    execution_count = 0
+
+    async def pause_then_succeed(run, correlation_id: str) -> None:
+        nonlocal execution_count
+        execution_count += 1
+        target = RunStatus.WAITING_INPUT if execution_count == 1 else RunStatus.SUCCEEDED
+        event_type = "test_waiting_input" if execution_count == 1 else "test_succeeded"
+        async with session_factory() as session:
+            current = await SqlalchemyRunRepository(session).get_by_id(run.run_id)
+            assert current is not None and current.status is RunStatus.RUNNING
+            assert await SqlalchemyRunRepository(session).update_status(
+                run.run_id,
+                RunStatus.RUNNING,
+                target,
+                current.event_sequence + 1,
+            )
+            await SqlalchemyEventRepository(session).add(
+                create_event(
+                    run_id=run.run_id,
+                    sequence=current.event_sequence,
+                    event_type=event_type,
+                    actor_type="system",
+                    correlation_id=correlation_id,
+                    payload={},
+                )
+            )
+            await session.commit()
+
+    execution_service = RunExecutionService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        executor=pause_then_succeed,
+        worker_id="test-worker:paused-resume",
+        heartbeat_interval_seconds=3600,
+    )
+    queue = ArqRunQueue(valkey_url)
+    dispatch = OutboxDispatchService(
+        session_factory=session_factory,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        queue=queue,
+        max_attempts=10,
+        batch_size=20,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+    )
+    worker_functions = make_worker_settings(Settings(redis_url=valkey_url)).functions
+
+    assert await dispatch.dispatch_pending() == 1
+    worker = Worker(
+        redis_settings=RedisSettings.from_dsn(valkey_url),
+        functions=worker_functions,
+        burst=True,
+        handle_signals=False,
+        max_tries=1,
+        ctx={"run_execution_service": execution_service},
+    )
+    await worker.async_run()
+
+    async with session_factory() as session:
+        paused = await SqlalchemyRunRepository(session).get_by_id(queued_run)
+        assert paused is not None and paused.status is RunStatus.WAITING_INPUT
+        project_id = paused.project_id
+        attempts = await SqlalchemyAttemptRepository(session).list_by_run(queued_run)
+        assert [item.status.value for item in attempts] == ["paused"]
+
+    resume = WaitingRunResumeService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+    )
+    await resume.resume(
+        queued_run,
+        "user-1",
+        project_id,
+        ResumeReason.HUMAN_INPUT_SUBMITTED,
+        "test-resume",
+    )
+    assert await dispatch.dispatch_pending() == 1
+    assert await dispatch.dispatch_pending() == 0
+    worker = Worker(
+        redis_settings=RedisSettings.from_dsn(valkey_url),
+        functions=worker_functions,
+        burst=True,
+        handle_signals=False,
+        max_tries=1,
+        ctx={"run_execution_service": execution_service},
+    )
+    await worker.async_run()
+
+    async with session_factory() as session:
+        completed = await SqlalchemyRunRepository(session).get_by_id(queued_run)
+        assert completed is not None and completed.status is RunStatus.SUCCEEDED
+        attempts = await SqlalchemyAttemptRepository(session).list_by_run(queued_run)
+        assert [item.attempt_number for item in attempts] == [1, 2]
+        assert [item.status.value for item in attempts] == ["paused", "succeeded"]
+        events = await SqlalchemyEventRepository(session).list_by_run(queued_run)
+        assert [item.event_type for item in events] == [
+            "run_started",
+            "test_waiting_input",
+            "human_input_submitted",
+            "run_started",
+            "test_succeeded",
+        ]
+    assert execution_count == 2
+    await queue.aclose()
 
 
 async def test_distinct_physical_jobs_create_one_business_effect(

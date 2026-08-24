@@ -18,6 +18,9 @@ tests/evaluation/
 ├─ test_metrics.py          # 指标边界单元测试
 ├─ run_retrieval_eval.py    # 切片 6 的检索参数校准入口
 ├─ run_phase2_eval.py       # 切片 10 的完整确定性管线评测入口
+├─ review_manifest.json     # Phase 4 的 3 个固定 Review 研究问题与 100% 结构门
+├─ review_metrics.py        # Review 结构门纯汇总逻辑
+├─ run_phase4_review_eval.py # 编排正式测试证据的离线 Review 工程门
 └─ README.md
 ```
 
@@ -102,6 +105,31 @@ answered，不能判断语义证据是否充分，不能解释成真实模型质
 
 Fixture 改动后必须重跑 `generate.py` 与
 `pytest tests/infrastructure/test_evaluation_fixtures.py`，保证 PDF 与 manifest 不漂移。
+
+## Phase 4 Review 工程门
+
+`review_manifest.json` 复用同一份 Phase 2 合成语料，固定 3 个研究问题。每个问题和 3–4 个语料 ID
+实际传入生产 Matrix/Citation/Section Validator 与确定性 Review 导出器，计算 ready/failed Source、
+Matrix 行、Citation scope、导出引用映射和伪造 Evidence 拒绝的事实计数。Runner 另行执行 12 个固定
+Application/LangGraph/PostgreSQL 回归节点；这些节点证明 partial source、feedback interrupt/resume、
+持久化、终态和重放，但不会被折算为质量比例：
+
+```bash
+cd backend
+.venv/bin/python tests/evaluation/run_phase4_review_eval.py \
+  --json-output /tmp/phase-04-review-evaluation.json
+```
+
+门限来自 2026-08-24 首次成功实跑，而非预填：场景 3/3、Citation 接受/跨 Run 拒绝 6/6、导出
+citation mapping 6/6、Evidence 跨 Project/Run 拒绝 18/18、伪造 Evidence 拒绝 3/3，五项均须
+`1.0`；固定回归必须严格为 12/12。Owner 隔离由 Project-scoped Application/PG 回归证明，不冒充
+领域对象自身能够证明的百分比。这里的 100% 只证明领域结构闭包，不证明 Claim 被 Evidence 语义蕴含，也不报告
+Groundedness、Coverage 或 Redundancy。详细结果与首轮环境失败见
+`docs/learning-journal/reports/phase-04-evaluation-baseline.md`。
+
+完整 Review 性能不由这个质量 runner 推导。另用
+`tests/performance/run_phase4_review_baseline.py` 驱动正式 API、PostgreSQL、Valkey/ARQ Worker、两轮自动
+HITL 和 Artifact 读取；实际低敏结果与前三次失败样例见 Phase 4 性能报告。
 
 ## 已知限制
 

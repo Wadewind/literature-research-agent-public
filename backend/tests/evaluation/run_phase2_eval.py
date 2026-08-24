@@ -21,6 +21,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
+from time import perf_counter
 from typing import Any, cast
 
 from metrics import (
@@ -128,6 +129,7 @@ class RecordingRetriever:
     def __init__(self, delegate: Retriever) -> None:
         self._delegate = delegate
         self.by_run: dict[str, list[RetrievalResult]] = {}
+        self.duration_seconds_by_run: dict[str, float] = {}
 
     async def retrieve_for_scope(
         self,
@@ -137,6 +139,7 @@ class RecordingRetriever:
         version_scope: list[tuple[str, str]],
         run_id: str | None = None,
     ) -> list[RetrievalResult]:
+        started = perf_counter()
         results = await self._delegate.retrieve_for_scope(
             owner_id=owner_id,
             query=query,
@@ -145,6 +148,7 @@ class RecordingRetriever:
         )
         if run_id is not None:
             self.by_run[run_id] = results
+            self.duration_seconds_by_run[run_id] = perf_counter() - started
         return results
 
 
@@ -476,6 +480,7 @@ async def _run(json_output: Path | None) -> int:
         execution_service, recording_retriever, parser_profile, chunk_profile = (
             _execution_stack(session_factory, storage, settings)
         )
+        import_started = perf_counter()
         corpus_ids = await _import_corpus(
             manifest=manifest,
             actor=actor,
@@ -484,21 +489,45 @@ async def _run(json_output: Path | None) -> int:
             ingestion_service=ingestion_service,
             execution_service=execution_service,
         )
+        import_duration_seconds = perf_counter() - import_started
         conversation_service = _conversation_service(session_factory)
-        results = [
-            await _evaluate_question(
-                question=question,
-                actor=actor,
-                project_id=project.project_id,
-                corpus_ids=corpus_ids,
-                conversation_service=conversation_service,
-                execution_service=execution_service,
-                recording_retriever=recording_retriever,
-                session_factory=session_factory,
+        results = []
+        rag_duration_seconds_by_question: dict[str, float] = {}
+        retrieval_duration_seconds_by_question: dict[str, float] = {}
+        for question in manifest["questions"]:
+            question_started = perf_counter()
+            results.append(
+                await _evaluate_question(
+                    question=question,
+                    actor=actor,
+                    project_id=project.project_id,
+                    corpus_ids=corpus_ids,
+                    conversation_service=conversation_service,
+                    execution_service=execution_service,
+                    recording_retriever=recording_retriever,
+                    session_factory=session_factory,
+                )
             )
-            for question in manifest["questions"]
-        ]
+            rag_duration_seconds_by_question[question["id"]] = (
+                perf_counter() - question_started
+            )
+            latest_run_id = next(reversed(recording_retriever.duration_seconds_by_run))
+            retrieval_duration_seconds_by_question[question["id"]] = (
+                recording_retriever.duration_seconds_by_run[latest_run_id]
+            )
         summary = summarize(results)
+        async with session_factory() as session:
+            chunk_count = int(
+                (await session.execute(text("SELECT count(*) FROM chunks"))).scalar_one()
+            )
+            element_count = int(
+                (
+                    await session.execute(text("SELECT count(*) FROM document_elements"))
+                ).scalar_one()
+            )
+            postgres_version = str(
+                (await session.execute(text("SHOW server_version"))).scalar_one()
+            )
         await engine.dispose()
 
     report = {
@@ -523,6 +552,23 @@ async def _run(json_output: Path | None) -> int:
             "retrieval_token_budget": settings.retrieval_token_budget,
         },
         "summary": asdict(summary),
+        "measurements": {
+            "corpus_count": len(corpus_ids),
+            "element_count": element_count,
+            "chunk_count": chunk_count,
+            "embedding_dimensions": chunk_profile.embedding_dimensions,
+            "cache_state": "cold_ephemeral_database_and_storage",
+            "postgres_version": postgres_version,
+            "import_parse_index_total_seconds": round(import_duration_seconds, 6),
+            "retrieval_seconds_by_question": {
+                question_id: round(duration, 6)
+                for question_id, duration in retrieval_duration_seconds_by_question.items()
+            },
+            "rag_total_seconds_by_question": {
+                question_id: round(duration, 6)
+                for question_id, duration in rag_duration_seconds_by_question.items()
+            },
+        },
         "questions": [asdict(item) for item in results],
         "limitations": [
             "pypdf fallback 只提供页级 Paragraph，不提供 Docling 版面与章节结构。",

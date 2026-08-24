@@ -25,7 +25,9 @@ def test_make_worker_settings_registers_execute_run() -> None:
 
     worker_settings = make_worker_settings(settings)
 
-    assert execute_run in worker_settings.functions
+    [registered] = worker_settings.functions
+    assert registered.coroutine is execute_run
+    assert registered.keep_result_s == 0
     assert worker_settings.max_tries == 1
     assert worker_settings.on_startup is not None
     assert worker_settings.on_shutdown is not None
