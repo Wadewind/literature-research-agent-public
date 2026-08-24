@@ -42,11 +42,11 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
   await expect(page.locator(".evidence-drawer blockquote")).not.toBeEmpty();
   await expect(page.getByTitle("Evidence 来源 PDF")).toHaveAttribute("src", /#page=\d+$/);
 
-  await page.getByRole("link", { name: "← 返回项目文献库" }).click();
+  await page.getByRole("link", { name: "文献库", exact: true }).click();
   await page.getByRole("button", { name: "询问此篇" }).click();
   await expect(page.getByText(/CITED RAG \/ 1 篇文献/)).toBeVisible();
 
-  await page.getByRole("link", { name: "← 返回项目文献库" }).click();
+  await page.getByRole("link", { name: "文献库", exact: true }).click();
   await page.getByRole("button", { name: "归档 Project" }).click();
   await expect(page.getByText(/该 Project 当前只读/)).toBeVisible();
   await expect(page.getByRole("button", { name: /询问整个项目/ })).toBeDisabled();

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：切片 1–8 已完成，待推进切片 9
+- 当前状态：切片 1–9 已完成，Phase 4 已完成
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -350,6 +350,25 @@ LLM-as-a-Judge。
   完整非集成 `660 passed, 4 skipped` 和完整 PostgreSQL/Valkey integration `117 passed`；修复后全量
   非集成重跑在本地测试进程无输出挂起后中止，不报告伪造结果。最终 `ruff check src tests`、`pyright`
   与 `git diff --check` 通过。
+- 切片 9「Playwright 与发布收尾」：已完成。隔离 harness 显式选择 Fake Parser/Embedding/Chat/arXiv、
+  清除 Provider Key、使用临时 PostgreSQL/Valkey/Storage 且不读取 `.env`；浏览器阻断所有非 localhost
+  请求。新增成功 Review 与取消两条旅程：成功旅程实际观察 3 ready + 1 stable failed Source，并从持久
+  Event 验证 `dependency_wait_started`/`dependency_wait_completed`、
+  首轮 Outline、feedback 后 `outline.v2`/Request v2、approve、最终 succeeded/finalize、Matrix 的证据不足、
+  Section/Claim/Citation、Evidence → Project-scoped PDF 页码、六类 Artifact 下载/JSON 或 Markdown 可读，
+  并在首轮 HITL、第二轮 HITL、终态和取消终态刷新验证 REST/PostgreSQL 恢复；错误 Project 的 PDF 与
+  Artifact content 均为 404。SSE 只促使 Query 重载，不作为事实来源。两条旅程均无 `pageerror`、关键
+  console error 或外部请求。仅当当前 Project/Run 的 Outline/Matrix GET 已实际返回 404 且
+  `ConsoleMessage.location().url` 精确匹配时，才消费对应通用日志；另一条主动触发的本机 404 必须进入
+  错误列表，因此不会隐藏其他 404、5xx 或脚本错误。
+- 首次 Phase 4 实跑为 `2 failed`：下载端点按安全通用文件名返回 `content.md/json`，测试误期待内部业务
+  文件名；等待结果的 404 被浏览器打印为通用 console error。修正测试契约后 Phase 4 `2 passed`。
+  首次 Phase 1–4 全套又暴露 Phase 2 旧导航选择器，3 passed/1 failed；更新为当前 Project 工作区
+  `文献库` 导航后 Phase 2 单跑 `1 passed`，最终全套 `4 passed (37.5s)`。Web Vitest `118 passed`、
+  TypeScript/Vite build 均通过；E2E harness/开发脚本/Fake arXiv `11 passed`、Review Application
+  `3 passed`、Review API `6 passed`。`ruff check src tests`、`pyright`、`bash -n web/e2e/run.sh` 与
+  `git diff --check` 也均通过。完整范围、失败样例和未承诺内容见
+  [Phase 4 发布复盘](../reports/phase-04-release-retrospective.md)。
 
 ## 11. 测试方式
 

@@ -34,10 +34,11 @@ learning-journal/
 校准和 Review 专用前端归入 Phase 4 产品闭环。
 
 [Phase 4：Demo-ready Core 产品闭环、可靠性与评测](phases/phase-04-core-product-reliability.md)已于
-2026-08-24 完成切片 1–8，包括离线 Fake arXiv、Review UI、JSON Logs/Correlation、
+2026-08-24 完成切片 1–9，包括离线 Fake arXiv、Review UI、JSON Logs/Correlation、
 [低基数 Prometheus Metrics](modules/prometheus-metrics.md)和
 [可靠性测试矩阵](modules/reliability-test-matrix.md)，以及
 [固定评测与本机性能基线](modules/review-evaluation-and-performance.md)。固定基线已实际走通正式
-API+PostgreSQL+Valkey/ARQ Worker 的 4 Source Fake Review、两轮 HITL 与六类 Artifact；下一步完成 Playwright
-发布收尾。该阶段明确面向本地演示开发环境，
+API+PostgreSQL+Valkey/ARQ Worker 的 4 Source Fake Review、两轮 HITL 与六类 Artifact；Phase 1–4
+Playwright 又从浏览器验证同一核心旅程、取消、归档和刷新恢复。完成证据与边界见
+[Phase 4 发布复盘](reports/phase-04-release-retrospective.md)。该阶段明确面向本地演示开发环境，
 不包含公网认证、备份恢复、永久删除/GC、OpenTelemetry 或 SLA。

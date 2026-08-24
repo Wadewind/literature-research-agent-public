@@ -111,6 +111,17 @@ Artifact 下载。
 - 手动闭环（本地 postgres/valkey + uvicorn + 本地 Worker，真实 Docling 解析）：上传 `text_two_pages.pdf` → SSE 实时事件 → succeeded → papers 列表 `parse_ready=true` → file 端点字节与原件一致（inline disposition）→ SSE `Last-Event-ID: 2` 正确从 sequence 3 重放；queued 状态取消 → cancelled；终态取消 → 409；Playwright 截图验证 4 个页面与 404 呈现。
 - 切片 11 Playwright E2E（1 passed）：隔离 PostgreSQL/Valkey Compose + 宿主 API/Worker/Web + 共享临时 Storage；用 Fake Parser 验证创建 Project、新 PDF 异步解析、Run 事件与刷新恢复、Element/PDF 预览、跨 Project 哈希复用、移出只删关系、个人库保留和重新收录。失败时保留 screenshot/video/trace，不维护易碎的像素截图基线。
 - Phase 2 Playwright E2E（1 passed；与 Phase 1 合跑 2 passed）：导入后等待 ingestion/indexing、Project 问答与 rag_answer SSE、刷新恢复 Message/Claim/Citation、引用查看 Evidence 与 PDF `#page=N`、单篇 scope、Project 归档只读。E2E 发现并修复 active Project 的归档按钮误调用 restore 的缺陷。
+- Phase 4 Playwright 新增 2 条 Review 旅程：成功旅程从 UI 创建固定 Review，观察 3 ready + 1 stable
+  failed Source，并从持久 Event 验证 `dependency_wait_started`/`dependency_wait_completed`，刷新后从 REST
+  恢复首轮 HITL，提交 feedback 后等待 `outline.v2`/Request v2，再次刷新并
+  approve，最终读取 Matrix、证据不足、Section/Claim/Citation、Evidence → Project-scoped PDF 页码和
+  六类可下载 Artifact；第二条旅程把 UI 取消收敛到可刷新恢复的 `cancelled`。浏览器阻断非 localhost
+  请求，并断言无 `pageerror`、无关键 console error。只有当前 Project/Run 的 Outline/Matrix GET 已实际
+  返回 404 时，对应精确 `ConsoleMessage.location().url` 的通用浏览器日志才不计为关键错误；旅程主动
+  制造另一条本机 404，证明它仍进入错误列表。Phase 1–4 全套最终 `4 passed`。
+- E2E harness 现在显式选择 Fake Parser/Embedding/Chat/arXiv、清除 Provider Key 并关闭 Worker Metrics
+  端口；不会读取 `.env`。首轮全套暴露 Phase 2 旧测试仍查找已被 Project 工作区导航替代的“返回项目
+  文献库”链接，更新为当前 `文献库` 导航契约后单测通过；未修改产品行为。
 
 ## 代码入口
 
@@ -126,7 +137,8 @@ Artifact 下载。
 - 后端消费端点：`backend/src/literature_agent/api/conversations.py`、`documents.py`、`papers.py`、`projects.py`
 - Review 后端读路径：`backend/src/literature_agent/api/reviews.py`、
   `application/review_query_service.py`、`infrastructure/persistence/review_repository.py`
-- E2E：`web/e2e/phase-01.spec.ts`、`phase-02.spec.ts`、`web/e2e/run.sh`、`web/playwright.config.ts`、`deploy/compose/e2e.yml`
+- E2E：`web/e2e/phase-01.spec.ts`、`phase-02.spec.ts`、`phase-04.spec.ts`、`web/e2e/run.sh`、
+  `web/playwright.config.ts`、`deploy/compose/e2e.yml`
 
 ## 已知限制
 
@@ -138,9 +150,12 @@ Artifact 下载。
 - Phase 2 E2E 使用 Fake Provider 固化工程旅程，不代表真实模型回答质量；
 - Review Detail 已展示真实 Outline HITL、Matrix、Section/Citation 和 Artifact；当前不提供 Matrix/
   Section 在线重写、单节点手工重跑或引用样式切换，这些均不属于 Demo-ready Core v1；
-- Review 基础旅程尚未加入 Playwright；Phase 1–4 完整核心旅程在 Phase 4 切片 9 收尾；
-- 仅开发代理（Vite proxy），无生产构建部署与 CORS 配置；切片 11 只验证宿主 API/Worker/Web，不宣称完整容器部署。
-- E2E 使用 Fake Parser 保持确定性；真实 Docling 由独立 opt-in 契约测试和手动 Smoke 覆盖。
+- Playwright 只覆盖少量 Phase 1–4 核心旅程，不穷举全部错误码、并发竞争和跨 owner 路径；这些由
+  Domain/Application/API/PostgreSQL/Valkey 矩阵承担。
+- 仅开发代理（Vite proxy），无生产构建部署与 CORS 配置；E2E 验证宿主 API/Worker/Web，不宣称完整
+  容器部署。
+- E2E 使用全套 Fake Adapter 保持确定性；真实 Docling、arXiv 和 Provider 由独立 opt-in Smoke/报告
+  覆盖，不把 Fake 浏览器旅程包装成真实生成质量。
 
 ## 60 秒面试说明
 

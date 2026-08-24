@@ -1,8 +1,8 @@
 # Literature Review Agent System
 
-面向学习和简历展示的文献综述 Agent 系统。Phase 1–3 已完成：系统支持 Project 与个人文献库、可靠
+面向学习和简历展示的文献综述 Agent 系统。Phase 1–4 已完成：系统支持 Project 与个人文献库、可靠
 异步 PDF 导入、pgvector 混合检索、带 Evidence/PDF 页码引用的 RAG 问答，以及可暂停恢复、人工确认
-Outline 并导出引用 Artifact 的固定 Review Workflow。Phase 4 将其收束为本地可复现、可评测的
+Outline 并导出引用 Artifact 的固定 Review Workflow。Phase 4 已将其收束为本地可复现、可评测的
 Demo-ready Core v1；该里程碑不代表公网生产、登录认证、备份恢复、永久删除/GC 或 SLA 已完成。
 
 ## 仓库布局
@@ -185,8 +185,13 @@ cd backend
 cd ../web
 npm test
 npm run build
-npm run test:e2e
+npm run test:e2e  # 隔离临时 PostgreSQL/Valkey/Storage，运行 Phase 1–4 Chromium 核心旅程
 ```
+
+Playwright harness 显式选择 Fake Parser、Embedding、Chat 与 arXiv，清除继承的 Provider Key，不读取
+`.env`。浏览器只允许访问本机 API/Web；测试覆盖导入与复用、RAG 引用与归档、Review 部分来源失败、
+两轮 Outline HITL、引用定位、六类 Artifact、取消和刷新恢复。它证明本地工程旅程，不代表真实模型
+质量、公网安全或生产部署能力。
 
 真实组件测试必须显式启用：
 
