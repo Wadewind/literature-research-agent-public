@@ -3,6 +3,7 @@
 ## 状态
 
 - 当前状态：切片 1–9 已完成，Phase 4 已完成
+- 发布后维护：Real Review 的 `json_object` Schema 提示缺失已修复，尚待用户显式 Real 重建验证
 - 决策日期：2026-08-23
 - 进入条件：Phase 3 固定 Review Workflow 已完成并通过阶段审计
 - 关联决策：[ADR-0004：Demo-ready Core v1 的交付边界](../decisions/0004-demo-ready-core-v1-scope.md)
@@ -371,6 +372,18 @@ LLM-as-a-Judge。
   [Phase 4 发布复盘](../reports/phase-04-release-retrospective.md)。
 
 ## 11. 测试方式
+
+### 发布后 Real 模式修复
+
+首次 `./scripts/dev.sh --real` Review 在制定检索策略时暴露了结构化输出兼容缺陷：配置
+`AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false` 时，OpenAI-compatible Adapter 虽发送
+`response_format={"type":"json_object"}`，却丢弃了调用方传入的 `search-strategy.v1` JSON Schema。
+因此 Provider 调用本身成功，业务 Step 仍以 `search_strategy_schema_invalid` 永久失败。
+
+修复保持 `json_object` response format，并把同一完整 Schema 以确定性 system instruction 注入请求；
+调用方消息对象和相对顺序不变，严格 `json_schema` 路径及 `json_schema=None` 自由文本路径请求形状不变。
+没有加入宽松 JSON repair、额外重试、Validator 放宽或依赖。普通测试通过 HTTP mock 验证，不读取 `.env`、
+不访问 arXiv 或真实 Provider；原失败 Run 是终态，新的 Real Review 由用户自行重建验证。
 
 - Backend：pytest 单元/Application/API、PostgreSQL/Testcontainers、Worker/Queue 和故障注入；
 - Web：Vitest、TypeScript build 和 Playwright；

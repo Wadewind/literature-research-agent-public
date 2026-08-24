@@ -19,6 +19,7 @@ from literature_agent.domain.model_errors import (
     ModelTimeoutError,
 )
 from literature_agent.domain.model_types import ChatMessage
+from literature_agent.domain.review_search_strategy import SEARCH_STRATEGY_JSON_SCHEMA
 from literature_agent.infrastructure.models.openai_compatible import (
     OpenAiCompatibleChat,
     OpenAiCompatibleEmbedding,
@@ -252,30 +253,60 @@ async def test_chat_success_with_json_schema(httpx2_mock: respx.Router) -> None:
 
 
 async def test_chat_json_object_fallback(httpx2_mock: respx.Router) -> None:
-    """Provider 不支持 json_schema 时降级为 json_object。"""
+    """json_object 降级把完整 Schema 确定性注入请求且不修改调用方消息。"""
     route = httpx2_mock.post(_CHAT_URL).mock(
         return_value=httpx.Response(200, json=_chat_payload())
     )
     adapter = _chat_adapter(json_schema_supported=False)
+    messages = [
+        ChatMessage(role="system", content="原始系统约束"),
+        ChatMessage(role="user", content="问题"),
+    ]
+    original_messages = list(messages)
+    original_message_ids = [id(message) for message in messages]
 
-    await adapter.generate([ChatMessage(role="user", content="问题")], json_schema={})
+    await adapter.generate(messages, json_schema=SEARCH_STRATEGY_JSON_SCHEMA)
+    await adapter.generate(messages, json_schema=SEARCH_STRATEGY_JSON_SCHEMA)
 
-    body = json.loads(route.calls.last.request.content)
-    assert body["response_format"] == {"type": "json_object"}
+    first_body = json.loads(route.calls[0].request.content)
+    second_body = json.loads(route.calls[1].request.content)
+    assert first_body["response_format"] == {"type": "json_object"}
+    assert first_body["messages"][1:] == [
+        {"role": "system", "content": "原始系统约束"},
+        {"role": "user", "content": "问题"},
+    ]
+    schema_instruction = first_body["messages"][0]
+    assert schema_instruction["role"] == "system"
+    assert json.dumps(
+        SEARCH_STRATEGY_JSON_SCHEMA,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ) in schema_instruction["content"]
+    assert "只返回一个" in schema_instruction["content"]
+    assert "JSON object" in schema_instruction["content"]
+    assert "Markdown" in schema_instruction["content"]
+    assert "解释" in schema_instruction["content"]
+    assert "额外字段" in schema_instruction["content"]
+    assert first_body["messages"][0] == second_body["messages"][0]
+    assert messages == original_messages
+    assert [id(message) for message in messages] == original_message_ids
 
 
 async def test_chat_plain_text_no_response_format(httpx2_mock: respx.Router) -> None:
-    """不传 json_schema 时不发送 response_format。"""
+    """不传 json_schema 时即便关闭 Schema 能力也不注入或发送 response_format。"""
     route = httpx2_mock.post(_CHAT_URL).mock(
         return_value=httpx.Response(200, json=_chat_payload("自由文本"))
     )
-    adapter = _chat_adapter()
+    adapter = _chat_adapter(json_schema_supported=False)
+    messages = [ChatMessage(role="user", content="问题")]
 
-    result = await adapter.generate([ChatMessage(role="user", content="问题")])
+    result = await adapter.generate(messages)
 
     assert result.content == "自由文本"
     body = json.loads(route.calls.last.request.content)
     assert "response_format" not in body
+    assert body["messages"] == [{"role": "user", "content": "问题"}]
 
 
 async def test_chat_401_no_retry(httpx2_mock: respx.Router) -> None:

@@ -57,6 +57,19 @@ Playwright 是少量高价值旅程，不替代可靠性矩阵：跨 owner、重
 Storage/事务崩溃间隙和 SSE cursor 细节继续由分层自动测试证明。Fake 结果只证明确定性工程闭环，不证明
 真实模型语义质量。Real Provider 报告仍是显式 opt-in 且不阻断普通测试。
 
+## 发布后 Real 模式缺陷
+
+Phase 4 关闭后的首次 Real Review 在 `formulate_search_strategy` 失败。只读诊断确认 Provider invocation
+已经成功，失败来自本地 `search-strategy.v1` 严格 Schema 校验：当
+`AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false` 时，Adapter 使用 `json_object` response format，却没有把
+传入的 JSON Schema 继续提供给模型。此前 RagAnswer 的最小真实 Smoke 恰好返回合法形状，未覆盖 Review
+所需的嵌套字段，因而没有提前暴露该缺口。
+
+发布后修复在通用 OpenAI-compatible Chat Adapter 的这一分支中注入完整、确定性序列化的 Schema system
+instruction；严格 Schema Provider 和自由文本请求不变。修复没有增加 repair/retry、放宽 Validator 或
+引入依赖，Schema/messages 仍不写日志、Event 或数据库。自动回归只使用 RESPX/Fake，不读取 `.env`、
+不访问真实 Provider；修复后的 Real Review 由用户自行重新创建，因此本记录不声称已经真实复跑成功。
+
 ## 60 秒面试说明
 
 “Phase 4 把前三阶段的后端能力收束成 Demo-ready Core。我用完全离线的四篇合成 arXiv Fixture 驱动真实

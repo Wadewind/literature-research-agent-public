@@ -12,6 +12,7 @@ Provider。
 """
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -43,6 +44,11 @@ _RETRYABLE_STATUS_CODES = frozenset({429}) | frozenset(range(500, 600))
 _DEFAULT_BACKOFF_SECONDS = (1.0, 2.0)
 
 _ERROR_MESSAGE_MAX_LENGTH = 200
+
+_JSON_SCHEMA_INSTRUCTION_PREFIX = (
+    "你必须输出结构化数据。只返回一个符合下方 JSON Schema 的 JSON object。"
+    "不得返回 Markdown 代码块、解释文字或 Schema 未声明的额外字段。"
+)
 
 
 class _OpenAiCompatibleBase:
@@ -171,6 +177,22 @@ def _parse_usage(body: dict[str, Any]) -> ModelUsage:
     )
 
 
+def _json_object_schema_instruction(json_schema: dict) -> str:
+    """把结构化契约确定性编码为 ``json_object`` 模式的系统指令。"""
+    serialized_schema = json.dumps(
+        json_schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        f"{_JSON_SCHEMA_INSTRUCTION_PREFIX}\n"
+        "<BEGIN_JSON_SCHEMA>\n"
+        f"{serialized_schema}\n"
+        "<END_JSON_SCHEMA>"
+    )
+
+
 class OpenAiCompatibleEmbedding(_OpenAiCompatibleBase, EmbeddingModel):
     """OpenAI 兼容 Embedding Adapter（默认智谱 embedding-3 端点）。"""
 
@@ -241,9 +263,10 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
         max_tokens: int | None = None,
     ) -> ChatResult:
         """生成回复；结构化意图经 OpenAI ``response_format`` 表达。"""
+        request_messages = [{"role": m.role, "content": m.content} for m in messages]
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": request_messages,
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
@@ -255,6 +278,13 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
                 }
             else:
                 payload["response_format"] = {"type": "json_object"}
+                payload["messages"] = [
+                    {
+                        "role": "system",
+                        "content": _json_object_schema_instruction(json_schema),
+                    },
+                    *request_messages,
+                ]
         response = await self._post("/chat/completions", payload)
         body = _parse_json(self.provider, response)
         choices = body.get("choices")

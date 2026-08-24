@@ -12,7 +12,10 @@ from literature_agent.application.review_search_strategy_service import (
 from literature_agent.domain.exceptions import RunNotFoundError
 from literature_agent.domain.model_types import ChatResult, ModelUsage
 from literature_agent.domain.review import ReviewStage, create_review_run
-from literature_agent.domain.review_search_strategy import SearchStrategyValidationError
+from literature_agent.domain.review_search_strategy import (
+    SEARCH_STRATEGY_JSON_SCHEMA,
+    SearchStrategyValidationError,
+)
 from literature_agent.domain.run import RunStatus, RunType, create_run
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_project_repository import fake_session
@@ -24,10 +27,12 @@ class _Model:
     def __init__(self, content: str) -> None:
         self.content = content
         self.calls = 0
+        self.last_kwargs: dict = {}
         self.after_generate: Callable[[], Awaitable[None]] | None = None
 
-    async def generate(self, *_args, **_kwargs):
+    async def generate(self, *_args, **kwargs):
         self.calls += 1
+        self.last_kwargs = kwargs
         if self.after_generate is not None:
             await self.after_generate()
         return ChatResult(self.content, "fake", ModelUsage(10, 5))
@@ -103,6 +108,7 @@ async def test_valid_strategy_is_persisted_and_replay_skips_model() -> None:
     assert first.output.output_id == second.output.output_id
     assert (first.model_invocations, second.model_invocations) == (1, 0)
     assert model.calls == 1
+    assert model.last_kwargs["json_schema"] == SEARCH_STRATEGY_JSON_SCHEMA
     assert repo.steps[0].status.value == "succeeded"
     assert repo.review_runs["review-1"].current_stage is ReviewStage.SEARCH_ARXIV
     assert [item.event_type for item in await events.list_by_run("review-1")] == [

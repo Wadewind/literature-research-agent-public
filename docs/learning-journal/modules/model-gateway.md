@@ -19,7 +19,11 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
             记录失败只记日志，不影响调用结果）
 ```
 
-- Port 只表达意图：`json_schema` 由 Adapter 映射为 OpenAI `response_format`（`json_schema` 优先，`json_schema_supported=False` 时降级 `json_object`）；Worker 由 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED` 显式配置能力（默认 true）；JSON 解析与业务 Schema 校验在上层（RAG 切片）；
+- Port 只表达意图：`json_schema` 由 Adapter 映射为 OpenAI `response_format`（`json_schema` 优先，
+  `json_schema_supported=False` 时降级 `json_object`）；降级路径还会把同一 Schema 以排序、紧凑 JSON
+  确定性注入一条新的 system message，要求只返回单个 JSON object、无 Markdown/解释/额外字段。调用方
+  messages 不被修改，原消息相对顺序不变。Worker 由 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED` 显式配置
+  能力（默认 true）；JSON 解析与业务 Schema 校验仍在上层；
 - 空批量 `embed([])` 直接返回空结果，不发起请求；
 - Port 暴露 `provider`/`model` 属性供调用记录使用。
 
@@ -34,6 +38,9 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - **窄 Port + 手写 OpenAI-compatible Adapter（httpx2）**：不引入 openai/LangChain SDK——依赖轻、mock 层薄（pytest-httpx2/RESPX 直接拦 HTTP），且智谱/DeepSeek 这类「OpenAI 兼容但细节有偏差」的端点用裸 HTTP 更可控；代价是要自己维护请求/响应形状解析。
 - **错误六分两类**（`domain/model_errors.py`，接入既有 `is_permanent_error`）：临时——`ModelRateLimitError`（429）、`ModelServerError`（5xx、网络连接失败）、`ModelTimeoutError`；永久——`ModelAuthError`（401/403/缺 Key）、`ModelInvalidRequestError`（其余 4xx）、`ModelResponseError`（响应 JSON 畸形或缺字段）。Adapter 只对临时错误做最多 2 次短重试，耗尽交 Run 层预算重试，不叠加多层重试。
 - **响应畸形属永久错误**：Adapter 层不做结构修复重试；「让模型修复自己的输出」是业务层策略（切片 8 的修复重试一次），不混进传输层。
+- **`json_object` 保留结构化意图**：Provider 不能像 `json_schema` 模式一样强制 Schema，但 Adapter
+  不能静默丢弃调用方已经提供的契约。统一注入 Schema 比给 Search Strategy 单独复制字段样例更不易
+  漂移；严格 Provider 路径和自由文本路径的请求形状保持不变。
 - **缺 API Key 不在启动时崩溃**：本地开发默认 Fake backend；真实模式下首次调用抛 `ModelAuthError`，与「开发绕过必须显式」的安全基线一致。
 - **Provider 默认值可替换**：智谱 `embedding-3`（`https://open.bigmodel.cn/api/paas/v4`，维度默认 1024 可选 256/512/2048）与 DeepSeek `deepseek-v4-flash`（`https://api.deepseek.com`）只是 Settings 默认值，base_url/key/model 全部环境变量可配（2026-08-20 与用户定稿）。
 
@@ -61,11 +68,18 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 
 ## 重要测试和运行结果
 
-- RESPX 契约 `tests/infrastructure/test_openai_compatible_models.py`（16 例）：成功形状与请求体、usage 解析、空批量不发请求、429 重试后成功、429/5xx/超时耗尽、401/400 永久不重试、JSON 畸形与缺字段、json_schema/json_object response_format；
+- RESPX 契约 `tests/infrastructure/test_openai_compatible_models.py`（16 例）：成功形状与请求体、usage 解析、空批量不发请求、429 重试后成功、429/5xx/超时耗尽、401/400 永久不重试、JSON 畸形与缺字段、
+  `json_schema` 请求形状，以及 `json_object` 的完整 Search Strategy Schema 注入、确定性、调用方消息
+  不变和纯文本不注入；
 - Gateway `tests/application/test_model_gateway.py`（5 例）：成功/失败记录、error_type、记录失败不影响结果、不掩盖模型错误、run_id 可空；
 - PostgreSQL 集成 `tests/integration/test_model_invocation_repository.py`（3 例）；
 - 切片 3 完成时：非集成 216 passed + 4 skipped，integration 43 passed，ruff/pyright 全绿。
 - 切片 10 真实 Smoke（2026-08-21）：`embedding-3` 返回 1 个 1024 维向量且 usage 非空；真实 Chat 在 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false` 的 `json_object` 模式返回符合 `RagAnswerOutput` 的 `insufficient_evidence`，usage 非空。普通入口仍为 2 skipped，不触网。初次实跑还验证了 401 正确映射认证错误、完整端点误作 Base URL 会形成 404，以及不支持 `json_schema` 时 400 被归为永久非法请求；修正配置后通过。
+- Phase 4 发布后首次 Real Review 暴露：Provider 调用成功，但旧 `json_object` 分支丢弃传入的
+  `search-strategy.v1` Schema，输出未通过本地严格校验并以 `search_strategy_schema_invalid` 稳定失败。
+  修复只补传输请求中的 Schema system instruction，不增加 repair/retry、不放宽 Validator，也不写入日志、
+  Event 或数据库；本次普通回归使用 RESPX/Fake，未读取 `.env`、未调用真实 Provider，Real Review 由用户
+  自行重新创建验证。
 
 ## 代码入口
 
@@ -83,7 +97,9 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - 网络连接失败（非超时）归类为 `ModelServerError`（临时），是三类具名临时错误之外的归类选择；
 - 重试是固定退避，不读 `Retry-After`；无并发限制与配额管理（个人项目规模）；
 - `model_invocations` 尚无查询 API，只作运维记录。
-- `json_object` 降级不能由 Provider 强制 Schema，依赖 Prompt 明确字段形状；Pydantic 解析、一次修复和 Citation Validator 仍是不可省略的确定性边界。
+- `json_object` 降级不能由 Provider 强制 Schema；新 system instruction 只是提高遵循概率，严格 Pydantic
+  解析和各业务 Validator 仍是确定性边界。Search Strategy 当前不做结构修复，非法输出仍稳定失败；其他
+  用例是否允许有限修复由各自业务契约决定。
 
 ## 60 秒面试说明
 
