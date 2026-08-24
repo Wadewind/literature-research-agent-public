@@ -40,5 +40,7 @@ learning-journal/
 [固定评测与本机性能基线](modules/review-evaluation-and-performance.md)。固定基线已实际走通正式
 API+PostgreSQL+Valkey/ARQ Worker 的 4 Source Fake Review、两轮 HITL 与六类 Artifact；Phase 1–4
 Playwright 又从浏览器验证同一核心旅程、取消、归档和刷新恢复。完成证据与边界见
-[Phase 4 发布复盘](reports/phase-04-release-retrospective.md)。该阶段明确面向本地演示开发环境，
+[Phase 4 发布复盘](reports/phase-04-release-retrospective.md)。发布后通过真实 Provider 体验发现的问题、
+证据边界和候选修复持续记录在 [Phase 4 Real 模式体验缺陷台账](reports/phase-04-real-mode-defect-log.md)。
+该阶段明确面向本地演示开发环境，
 不包含公网认证、备份恢复、永久删除/GC、OpenTelemetry 或 SLA。
