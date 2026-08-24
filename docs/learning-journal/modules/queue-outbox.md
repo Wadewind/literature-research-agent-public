@@ -15,6 +15,9 @@ Worker 进程（python -m literature_agent.worker）│
   │    → list_due_pending → 投递前检查 Run 状态
   │       （RETRY_WAIT 条件转回 QUEUED + run_requeued Event；终态/取消中直接丢弃）
   │    → ARQ enqueue_job(run_id, _job_id="run:<run_id>")
+  │       → 新 Job：接受；活跃同 ID Job：幂等接受
+  │       → 旧 complete Result：精确删除该 result key，受限重投
+  │       → 无法确认：抛错并保留 Outbox pending
   │    → try_mark_dispatched（条件更新，独立短事务）
   │    → 失败：attempt_count + 1，指数退避，达上限进入 failed
   ├─ 对账循环（RunReconcileService，周期 30s）
@@ -59,10 +62,15 @@ Worker 进程（python -m literature_agent.worker）│
 - **Outbox 而不是 API 直接投递**：API 直接 enqueue 会在“DB 已提交、队列未投递”的崩溃窗口丢任务；Outbox 把投递变成可重放的后台动作。
 - **run_type 显式分发**（Phase 2 切片 4）：Worker 装配 `RunDispatcher` 组合执行器（`application/run_dispatcher.py`），按 `run.run_type` 分发到 ingestion/indexing 执行器；未知或未接线类型把 Run 推进 FAILED（错误类型 `unknown_run_type`），不静默执行。`RunExecutionService` 的单 executor 签名不变，dispatcher 作为组合 executor 注入；各执行器另有 run_type 防御。
 - **indexing Run 的触发**（Phase 2 切片 4）：IngestionExecutor 结果提交事务内（含复用路径）同时创建 indexing Run + `run_created` + Outbox，保证解析成功必然跟随索引，不引入独立扫描循环。
-- **ARQ Job ID 去重**：`_job_id = "run:<run_id>"`，队列内同一 Run 同一时间只有一个待执行/执行中 Job，Outbox 补投天然去重。`execute_run` 以
-  `func(..., keep_result=0)` 注册；ARQ Result 不是业务事实，完成后立即释放 result/job key，使同一业务
-  Run 从 Dependency/HITL 恢复时能用相同稳定 ID 创建合法新 Attempt。并发重复仍由执行中的 Job key
+- **ARQ Job ID 去重与接受契约**：`_job_id = "run:<run_id>"`，队列内同一 Run 同一时间只有一个待执行/
+  执行中 Job。`enqueue_job()` 返回 `None` 不能直接等价于成功：Adapter 只有在状态为
+  `queued/deferred/in_progress` 时才按幂等成功返回；若为 `complete`，仅精确删除当前
+  `arq:result:run:<run_id>` 后有界重投；`not_found` 竞态也只有限重试，最终无法确认则抛错，使 Outbox
+  保持 `pending`。Adapter 不读取 Result 内容，也不把 Valkey 当业务事实。并发重复仍由活跃 Job key
   去重，业务单效果仍由 PostgreSQL Run 条件认领保证。
+- **所有 ARQ Result 均不保留**：`execute_run` 同时使用函数级 `func(..., keep_result=0)` 和 Worker 级
+  `keep_result=0`。后者覆盖 ARQ `max tries exceeded`、反序列化失败等不经过函数级完成配置的提前失败
+  路径，使等待恢复或失败恢复后的合法新 Attempt 能复用同一稳定 Job ID。
 - **Worker 端幂等执行**：`RunExecutionService` 只认领 `QUEUED` 的 Run（条件更新），重复 Job、已终态、已取消一律跳过。
 - **`max_tries = 1`**：ARQ 不叠加自动重试，重试只有 Outbox 退避一层主导，避免多层重试相乘。
 - **派发器在 Worker 进程内**：首版不单建 Dispatcher 部署单元；多实例并发派发时由 Job ID 去重和条件更新兜底。
@@ -88,6 +96,8 @@ Worker 进程（python -m literature_agent.worker）│
 ## 失败、重试、重复和取消行为
 
 - 队列不可用：投递抛错 → `attempt_count + 1`、按退避推迟，记录保持 `pending`，恢复后补投（有集成测试）。
+- ARQ 拒绝创建 Job 且仅有旧完成 Result：Adapter 精确清理该稳定 ID 的 Result 后有界重投；无法确认
+  新 Job 或活跃 Job 时抛错，禁止 Outbox 假标 `dispatched`。
 - 投递成功但标记前崩溃：记录保持 `pending`，下一轮重复投递，队列去重 + Worker 幂等保证 Effectively Once。
 - 执行体抛错（切片 8 起按错误分类）：永久错误 → FAILED + `run_failed`；临时错误且预算内 → RETRY_WAIT + `run_retry_scheduled` + Outbox 重置，派发循环到点重投；预算耗尽 → FAILED。Event 只记录错误类型和截断消息，不记录堆栈。
 - Worker 在 Run 仍为 RUNNING 时崩溃：Attempt 停止心跳，lease 过期（600s）后对账循环收回——
@@ -112,6 +122,11 @@ Worker 进程（python -m literature_agent.worker）│
 - `tests/application/test_run_execution_service.py`：QUEUED → SUCCEEDED、重复 Job 跳过、缺失/已取消跳过、执行失败进入 FAILED、并发只有一个完成。
 - `tests/integration/test_outbox_repository.py`：PostgreSQL 唯一约束、外键、到期查询、`try_mark_dispatched` 条件更新。
 - `tests/integration/test_queue_worker.py`：Valkey + ARQ + PostgreSQL 端到端——Outbox → ARQ → Worker → Run SUCCEEDED；队列故障后恢复补投；相同 Job ID 执行中去重；首次 Attempt PAUSED 后用同一稳定 Job ID 恢复并创建第二 Attempt；两个不同物理 Job ID 重复携带同一 `run_id` 时仍只有一个业务效果；Attempt 按 paused/succeeded 关闭。
+- `tests/infrastructure/test_arq_run_queue.py`：首次接受、活跃 Job 幂等、旧 Result 精确清理后重投，以及
+  `not_found` 竞态耗尽后向 Outbox 抛错。
+- `tests/integration/test_queue_worker.py` 的失败恢复回归：构造历史 `worker_crashed` attempt 1 与遗留
+  Result，验证真实 Valkey/ARQ 重投后产生 succeeded attempt 2；另覆盖 Worker 级零 Result 对
+  `max tries exceeded` 提前失败路径生效。
 - `tests/domain/test_run_attempt.py`、`test_retry_policy.py`：Attempt 生命周期、永久/临时分类、退避上限。
 - `tests/application/test_run_reconcile_service.py`：lease 过期收回重投、心跳新鲜不动、终态跳过、预算耗尽 FAILED。
 - `tests/integration/test_attempt_repository.py`：唯一约束、心跳/结束条件更新、过期查询 join Run 状态。
@@ -124,6 +139,11 @@ Worker 进程（python -m literature_agent.worker）│
 Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 integration
 `86 passed`；`ruff check src tests` 与 `pyright` 通过。新增的 7 个定向 PostgreSQL 用例覆盖
 `PAUSED`、等待状态活跃性、`schedule_again` 计数差异及恢复事务回滚。
+
+2026-08-24 P4-REAL-002 修复验证：Queue Adapter、Outbox Application 与 Worker 定向
+`22 passed`；完整 Queue/Worker PostgreSQL + Valkey/ARQ 集成文件 `9 passed`；
+`ruff check src tests`、`pyright` 与 `git diff --check` 通过。测试未访问实时 arXiv、付费 Provider 或
+读取 `.env`。
 
 ## 代码入口
 
@@ -140,7 +160,10 @@ Phase 3 切片 1 验证：Backend 非集成 `387 passed, 4 skipped`，完整 int
 
 - 执行体已接入真实 Docling + pypdf 降级组合（切片 7，见 document-parsing 笔记）。
 - 单实例派发与对账循环；多实例依赖 Job ID 去重和条件更新，未使用 SKIP LOCKED 认领。
-- ARQ 结果已按函数禁用保留，不能使用 ARQ Result 查询业务结果；这与既有“PostgreSQL 是事实来源”一致。
+- ARQ 结果已按函数和 Worker 两级禁用保留，不能使用 ARQ Result 查询业务结果；这与既有
+  “PostgreSQL 是事实来源”一致。Adapter 仅会清理当前重投稳定 ID 的精确 Result key，不做通配删除。
+- 修复不会自动找回历史上已经被错误标记为 `dispatched` 的 Outbox；存量卡住 Run 仍需在确认
+  `Run=queued`、无活跃 Attempt/Job 后进行受控数据恢复，不能手工批量删除 `arq:*`。
 - Outbox `failed` 终态（投递层）与 Run `failed`（预算耗尽）暂无自动告警和人工重放入口。
 - `schedule_again` 已由 Review Dependency Reconciler 与 HumanInput 服务在各自正常恢复事务中调用；
 - Run 已提交等待/终态后、Attempt best-effort 关闭前的崩溃已由 Phase 3 切片 5 补偿；无法从业务

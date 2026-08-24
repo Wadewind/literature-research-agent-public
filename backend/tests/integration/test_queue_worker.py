@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from arq.connections import RedisSettings, create_pool
+from arq.constants import result_key_prefix
 from arq.worker import Worker
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from testcontainers.community.redis import RedisContainer
@@ -40,6 +41,7 @@ from literature_agent.domain.project import create_project
 from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import RunStatus, RunType, create_run
+from literature_agent.domain.run_attempt import AttemptStatus, create_run_attempt
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.models.fake_models import (
@@ -372,6 +374,106 @@ async def test_duplicate_enqueue_deduplicated_by_job_id(valkey_url: str) -> None
         assert job2 is None
     finally:
         await pool.aclose()
+
+
+async def test_worker_level_zero_result_covers_max_tries_failure(
+    valkey_url: str,
+) -> None:
+    """ARQ 提前判定 max tries 失败时也不得遗留 Result key。"""
+
+    async def must_not_execute(ctx: dict) -> None:
+        del ctx
+        raise AssertionError("超过 max tries 的 Job 不应进入函数体")
+
+    job_id = "max-tries-result-cleanup"
+    pool = await create_pool(RedisSettings.from_dsn(valkey_url))
+    try:
+        job = await pool.enqueue_job("must_not_execute", _job_id=job_id, _job_try=2)
+        assert job is not None
+    finally:
+        await pool.aclose()
+
+    worker = Worker(
+        redis_settings=RedisSettings.from_dsn(valkey_url),
+        functions=[must_not_execute],
+        burst=True,
+        handle_signals=False,
+        max_tries=1,
+        keep_result=0,
+    )
+    await worker.async_run()
+
+    check_pool = await create_pool(RedisSettings.from_dsn(valkey_url))
+    try:
+        assert not await check_pool.exists(result_key_prefix + job_id)
+    finally:
+        await check_pool.aclose()
+
+
+async def test_failed_result_does_not_block_reconciled_run_retry(
+    db_engine, valkey_url: str, queued_run: str
+) -> None:
+    """旧失败 Result 被精确清理后，恢复的 Run 能创建 attempt 2 并收敛。"""
+    session_factory = _session_factory(db_engine)
+    failed_attempt = create_run_attempt(
+        queued_run, attempt_number=1, worker_id="test-worker:crashed"
+    ).finish(
+        AttemptStatus.FAILED,
+        datetime.now(UTC),
+        {"type": "worker_crashed", "message": "Worker lease 过期，执行被收回"},
+    )
+    async with session_factory() as session:
+        await SqlalchemyAttemptRepository(session).add(failed_attempt)
+        await session.commit()
+
+    job_id = f"run:{queued_run}"
+    pool = await create_pool(RedisSettings.from_dsn(valkey_url))
+    try:
+        # 模拟 ARQ max-tries 提前失败路径留下的 Result；其内容不是业务事实。
+        await pool.set(result_key_prefix + job_id, b"stale-failed-result", ex=3600)
+    finally:
+        await pool.aclose()
+
+    queue = ArqRunQueue(valkey_url)
+    dispatch = OutboxDispatchService(
+        session_factory=session_factory,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        queue=queue,
+        max_attempts=10,
+        batch_size=20,
+        run_repo_factory=SqlalchemyRunRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+    )
+
+    assert await dispatch.dispatch_pending() == 1
+    worker_settings = make_worker_settings(Settings(redis_url=valkey_url))
+    worker = Worker(
+        redis_settings=worker_settings.redis_settings,
+        functions=worker_settings.functions,
+        burst=True,
+        handle_signals=False,
+        max_tries=worker_settings.max_tries,
+        keep_result=worker_settings.keep_result,
+        ctx={"run_execution_service": _make_execution_service(session_factory)},
+    )
+    await worker.async_run()
+
+    async with session_factory() as session:
+        run = await SqlalchemyRunRepository(session).get_by_id(queued_run)
+        assert run is not None and run.status is RunStatus.SUCCEEDED
+        attempts = await SqlalchemyAttemptRepository(session).list_by_run(queued_run)
+        assert [item.attempt_number for item in attempts] == [1, 2]
+        assert [item.status for item in attempts] == [
+            AttemptStatus.FAILED,
+            AttemptStatus.SUCCEEDED,
+        ]
+
+    check_pool = await create_pool(RedisSettings.from_dsn(valkey_url))
+    try:
+        assert not await check_pool.exists(result_key_prefix + job_id)
+    finally:
+        await check_pool.aclose()
+    await queue.aclose()
 
 
 async def test_stable_job_id_can_run_again_after_paused_attempt(

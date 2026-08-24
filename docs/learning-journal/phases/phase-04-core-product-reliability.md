@@ -351,6 +351,14 @@ LLM-as-a-Judge。
   完整非集成 `660 passed, 4 skipped` 和完整 PostgreSQL/Valkey integration `117 passed`；修复后全量
   非集成重跑在本地测试进程无输出挂起后中止，不报告伪造结果。最终 `ruff check src tests`、`pyright`
   与 `git diff --check` 通过。
+- 2026-08-24 Real 体验继续暴露失败路径的同类缺口：ARQ `max tries exceeded` 等提前失败使用 Worker
+  默认 `keep_result=3600`，不会读取 `execute_run` 的函数级 `keep_result=0`；同时 Queue Adapter 忽略
+  `enqueue_job()` 的 `None`，使旧失败 Result 阻塞合法重投时 Outbox 被假标 `dispatched`。现增加 Worker
+  级 `keep_result=0`，并把 Queue 正常返回收紧为“新 Job 已创建或同 ID 活跃 Job 已确认”；旧 complete
+  Result 只按精确 key 清理后有界重投，无法确认则抛错并保留 Outbox `pending`。真实业务中已错误标记
+  `dispatched` 的存量 Run 不会由代码变更自动修复，仍需另行受控恢复；Real 新旅程验证尚未执行。
+  本次定向单元/Application `22 passed`，完整 Queue/Worker PostgreSQL + Valkey/ARQ 集成 `9 passed`；
+  `ruff check src tests`、`pyright` 与 `git diff --check` 通过。
 - 切片 9「Playwright 与发布收尾」：已完成。隔离 harness 显式选择 Fake Parser/Embedding/Chat/arXiv、
   清除 Provider Key、使用临时 PostgreSQL/Valkey/Storage 且不读取 `.env`；浏览器阻断所有非 localhost
   请求。新增成功 Review 与取消两条旅程：成功旅程实际观察 3 ready + 1 stable failed Source，并从持久

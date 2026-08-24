@@ -58,7 +58,7 @@ Provider 回归测试。
 ## P4-REAL-002：旧失败 ingestion Run 的 ARQ 重投递被误判为成功
 
 - 发现日期：2026-08-24
-- 状态：待修复
+- 状态：已修复，待 Real 旅程验证
 - 影响 Project：`a8a53cf8-32d6-48f2-b5f5-d915220394d0`
 - 影响 Review：`0e76f1a9-07ce-4708-9137-61f99f89db09`
 - 关联提交：无
@@ -85,28 +85,36 @@ Review 检索到 10 篇论文，其中 5 篇进入 `ready`，另 5 篇长期停�
 此前针对成功/暂停 Job 设置 `keep_result=0` 的修复，不能证明失败 Job 的 Result key 不会保留；两类
 问题不能混为同一个已修复缺陷。
 
-### 尚未确认项
+### 修复方案
 
-- 物理 Job ID 的最终代次方案，以及 ARQ 对不同失败/重试路径的 Result TTL，需要在实现前用集成测试
-  固化。
-- 已卡住 Run 的受控恢复入口尚未确定，不能依赖手工批量删除 `arq:*` key。
+- 保留稳定物理 Job ID `run:<run_id>`。Queue Adapter 把正常返回收紧为“ARQ 已创建新 Job”或
+  “相同 ID 的 `queued/deferred/in_progress` Job 已存在”，不再把 `None` 无条件视为成功。
+- `enqueue_job()` 返回 `None` 且状态为 `complete` 时，只删除精确的
+  `arq:result:run:<run_id>`，随后受限重投；`not_found` 竞态同样只有严格上界。最终仍无法确认时抛出
+  `RunQueueEnqueueError`，让 Outbox 保持 `pending` 并进入既有退避。
+- Worker 级增加 `keep_result=0`，同时保留 `func(execute_run, keep_result=0)`。Worker 级配置覆盖 ARQ
+  `max tries exceeded` 等提前失败路径，避免后续继续产生一小时 TTL 的失败 Result。
+- PostgreSQL 继续作为 Run/Attempt/Outbox 事实来源；Adapter 不读取 Result 内容、不做通配删除。
 
-### 候选修复（待决策）
+### 回归证据
 
-- Queue Adapter 将 `enqueue_job()` 返回 `None` 视为“未接受投递”，Outbox 只有在确认 Job 已入队或
-  存在可证明的活跃执行时才能标记 `dispatched`。
-- 为每次投递代次生成不同的物理 Job ID，同时继续以 PostgreSQL 的条件领取、Run 状态和 attempt 约束
-  保证业务上的 Effectively Once；需要明确模糊响应后的重复投递语义。
-- 仅在数据库锁、业务状态和 lease 都确认没有活跃执行后，受控清理指定旧 Result key，再重新投递；该
-  方案风险更高，不能扩大为通配删除。
-- 为已经卡住的 Run 提供可审计、幂等的受控重投入口。
+- Adapter 单元测试覆盖首次接受、三种活跃状态幂等、旧 complete Result 精确清理并重投、`not_found`
+  竞态达到上界后抛错。
+- 真实 PostgreSQL + Valkey/ARQ 集成测试构造历史 `worker_crashed` attempt 1 和遗留失败 Result；重投后
+  Run 收敛为 `succeeded`，Attempt 序列为 `failed`、`succeeded`，编号为 1、2。
+- 独立 Valkey/ARQ 集成测试覆盖超过 `max_tries` 的提前失败路径，确认 Worker 级 `keep_result=0` 不留下
+  Result key。
+- 实际运行 Queue Adapter、Outbox Application 与 Worker 定向测试 `22 passed`，完整 Queue/Worker
+  PostgreSQL + Valkey/ARQ 集成文件 `9 passed`；`ruff check src tests`、`pyright` 与
+  `git diff --check` 通过。普通测试未访问实时 arXiv、付费 Provider 或读取 `.env`。
 
-### 所需回归测试
+### 已知限制与后续验证
 
-- 使用真实 PostgreSQL + Valkey/ARQ 的集成测试构造 attempt 1 失败且 Result key 保留的场景。
-- 对账恢复后必须实际入队、产生 attempt 2 并收敛，不能只断言 Outbox 状态。
-- 覆盖重复分发、活跃 Job 已存在、Result key 残留、Worker lease 竞争和取消竞争。
-- 断言 PostgreSQL 始终是业务事实来源，修复不依赖 Valkey 保存业务状态。
+- 修复不会自动改变已经错误标记为 `dispatched` 的 5 个历史 Outbox，也没有修改运行中的数据库或
+  Valkey。它们仍需在精确核对 `Run=queued`、无运行中 Attempt/Job 后，通过可审计、幂等方式恢复为
+  `pending`；禁止手工批量删除 `arq:*`。
+- 尚未重新创建 Real Review 验证完整用户旅程，因此状态不写“Real 已验证”。
+- 取消竞争继续由既有 Run 状态、条件认领和可靠性矩阵覆盖；本修复不改变取消状态机。
 
 ## P4-REAL-003：章节输出触及 token 上限后结构校验失败
 

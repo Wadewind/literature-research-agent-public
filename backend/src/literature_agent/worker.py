@@ -670,6 +670,9 @@ def make_worker_settings(settings: Settings) -> type:
         on_shutdown = shutdown
         redis_settings = RedisSettings.from_dsn(settings.redis_url)
         max_tries = 1
+        # ARQ 的 max-tries/反序列化等提前失败路径不会读取函数级配置；
+        # Worker 级也禁用 Result，避免旧失败 key 阻塞合法的同 ID 重投。
+        keep_result = 0
         # ARQ Job 超时必须大于 Parser 超时，给状态提交留出余量
         job_timeout = int(settings.parser_timeout_seconds) + 60
 
