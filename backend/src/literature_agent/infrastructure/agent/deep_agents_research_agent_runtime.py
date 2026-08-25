@@ -24,13 +24,19 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ToolCallRequest,
 )
+from langchain.tools import ToolRuntime
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.types import Command, StateSnapshot
 
+from literature_agent.application.ports.project_research_context import (
+    ProjectContextToolResult,
+    ProjectResearchContext,
+    ProjectResearchContextError,
+)
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntimeError,
     RuntimeErrorKind,
@@ -42,10 +48,12 @@ from literature_agent.application.ports.research_agent_runtime import (
     RuntimeTurnRequest,
     RuntimeTurnResult,
 )
+from literature_agent.domain.agent_answer import parse_agent_answer
 from literature_agent.domain.research_agent import (
     RuntimeSessionBinding,
     RuntimeTurnBinding,
 )
+from literature_agent.domain.tool_execution import ToolErrorKind, canonical_tool_args
 
 _TURN_METADATA_KEY = "agent_runtime_turn_id"
 _SESSION_METADATA_KEY = "agent_runtime_session_id"
@@ -144,6 +152,7 @@ class DeepAgentsResearchAgentRuntime:
         model: BaseChatModel,
         checkpointer: BaseCheckpointSaver[str],
         tools: Sequence[BaseTool] = (),
+        project_context: ProjectResearchContext | None = None,
         summarization_trigger: tuple[str, int | float] = ("messages", 100),
         summarization_keep: tuple[str, int | float] = ("messages", 20),
     ) -> None:
@@ -152,8 +161,13 @@ class DeepAgentsResearchAgentRuntime:
 
         backend = StateBackend()
         self._register_restricted_harness_profile(model)
+        project_tools = self._project_context_tools(project_context)
+        all_tools = (*tools, *project_tools)
+        names = [item.name for item in all_tools]
+        if len(names) != len(set(names)):
+            raise ValueError("Deep Agents Tool 名称不得重复")
         registered_tool_names = (
-            _FILESYSTEM_TOOL_NAMES | frozenset(tool.name for tool in tools)
+            _FILESYSTEM_TOOL_NAMES | frozenset(item.name for item in all_tools)
         ) - _FORBIDDEN_TOOL_NAMES
         filesystem = FilesystemMiddleware(
             backend=backend,
@@ -167,10 +181,13 @@ class DeepAgentsResearchAgentRuntime:
         )
         self._graph = create_deep_agent(
             model=model,
-            tools=tools,
+            tools=all_tools if project_context is not None else tools,
             system_prompt=(
                 "你是绑定 Research Project 的受限研究助手。只使用当前允许的工具；"
                 "不得声称访问了未提供的论文、网络、Sandbox 或外部系统。"
+                "使用 Evidence 回答时，每个非空论述独占一行并严格以"
+                " [evidence:<id>[,<id>...]] 结尾；证据不足时只输出"
+                "‘当前授权上下文证据不足。’。"
             ),
             middleware=cast(
                 Sequence[AgentMiddleware[Any, Any, Any]],
@@ -479,7 +496,66 @@ class DeepAgentsResearchAgentRuntime:
                 "runtime_result_not_ready",
                 "Runtime 结果尚未就绪",
             )
-        return RuntimeTurnResult(turn_run_id=turn_run_id, assistant_content=assistant_content)
+        evidence_ids: tuple[str, ...] = ()
+        if "[evidence:" in assistant_content:
+            try:
+                _, evidence_ids = parse_agent_answer(assistant_content)
+            except ValueError as exc:
+                raise _runtime_error(
+                    RuntimeErrorKind.PERMANENT,
+                    "runtime_output_invalid",
+                    "Deep Agents 最终回答的 Evidence 标记非法",
+                ) from exc
+        return RuntimeTurnResult(
+            turn_run_id=turn_run_id,
+            assistant_content=assistant_content,
+            evidence_ids=evidence_ids,
+        )
+
+    @staticmethod
+    def _project_context_tools(
+        project_context: ProjectResearchContext | None,
+    ) -> tuple[BaseTool, ...]:
+        if project_context is None:
+            return ()
+
+        @tool
+        async def search_project_chunks(
+            query: str,
+            runtime: ToolRuntime[_TurnContext],
+        ) -> str:
+            """在本轮冻结的 Project ChunkSet 中检索证据；只需提供研究问题。"""
+            try:
+                result = await project_context.search_project_chunks(
+                    runtime.context.turn_run_id,
+                    query=query,
+                )
+            except ProjectResearchContextError as exc:
+                raise _runtime_error(
+                    _runtime_kind(exc),
+                    exc.code,
+                    exc.safe_message,
+                ) from exc
+            return _tool_result_json(result)
+
+        @tool
+        async def read_review_evidence_matrix(
+            runtime: ToolRuntime[_TurnContext],
+        ) -> str:
+            """读取本轮 ContextSnapshot 指定的 Review Evidence Matrix。"""
+            try:
+                result = await project_context.read_review_evidence_matrix(
+                    runtime.context.turn_run_id
+                )
+            except ProjectResearchContextError as exc:
+                raise _runtime_error(
+                    _runtime_kind(exc),
+                    exc.code,
+                    exc.safe_message,
+                ) from exc
+            return _tool_result_json(result)
+
+        return search_project_chunks, read_review_evidence_matrix
 
     def _local_reconciliation(self, local: _LocalTurn) -> RuntimeTurnReconciliation:
         request = local.request
@@ -657,3 +733,21 @@ def _runtime_error(
     kind: RuntimeErrorKind, code: str, safe_message: str
 ) -> ResearchAgentRuntimeError:
     return ResearchAgentRuntimeError(kind=kind, code=code, safe_message=safe_message)
+
+
+def _runtime_kind(error: ProjectResearchContextError) -> RuntimeErrorKind:
+    return {
+        ToolErrorKind.TEMPORARY: RuntimeErrorKind.TEMPORARY,
+        ToolErrorKind.PERMANENT: RuntimeErrorKind.PERMANENT,
+        ToolErrorKind.CANCELLED: RuntimeErrorKind.CANCELLED,
+    }[error.kind]
+
+
+def _tool_result_json(result: ProjectContextToolResult) -> str:
+    return canonical_tool_args(
+        {
+            "effect_id": result.effect_id,
+            "result_hash": result.result_hash,
+            **result.payload,
+        }
+    )

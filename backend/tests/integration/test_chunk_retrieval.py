@@ -459,6 +459,83 @@ async def test_scope_search_only_hits_snapshot_entries(session, project: str) ->
     assert excluded.chunk_ids[0] not in {r.chunk.chunk_id for r in semantic}
 
 
+async def test_scope_search_pins_exact_chunk_set_for_same_version(
+    session, project: str
+) -> None:
+    """同一 Version 有两个 READY ChunkSet 时，两路 SQL 只命中冻结 ChunkSet。"""
+    paper = create_paper(owner_id="user-1")
+    await SqlalchemyPaperRepository(session).add(paper)
+    await session.flush()
+    version = create_paper_version(
+        paper_id=paper.paper_id,
+        owner_id="user-1",
+        file_hash=uuid4().hex,
+        storage_key="user-1/frozen-version.pdf",
+        size_bytes=1,
+        content_type="application/pdf",
+    )
+    await SqlalchemyPaperVersionRepository(session).add(version)
+    await session.flush()
+    chunk_sets = []
+    chunks = []
+    for index in range(2):
+        revision = create_parse_revision(
+            version.version_id,
+            "fake",
+            f"{index + 1}.0",
+            uuid4().hex,
+        ).mark_succeeded(datetime.now(UTC))
+        await SqlalchemyParseRevisionRepository(session).add(revision)
+        await session.flush()
+        chunk_set = create_chunk_set(
+            revision.revision_id,
+            uuid4().hex,
+            _CHUNK_PROFILE.config,
+        ).mark_ready(datetime.now(UTC))
+        await SqlalchemyChunkSetRepository(session).add(chunk_set)
+        await session.flush()
+        chunk = Chunk(
+            chunk_id=str(uuid4()),
+            chunk_set_id=chunk_set.chunk_set_id,
+            sequence=1,
+            text=f"graphweave ready set {index}",
+            token_count=10,
+            content_hash=compute_content_hash("paragraph", f"set-{index}", {}),
+        )
+        await SqlalchemyChunkRepository(session).add_many([chunk])
+        await session.flush()
+        await SqlalchemyChunkRepository(session).save_embeddings(
+            {chunk.chunk_id: _one_hot(0)}
+        )
+        chunk_sets.append(chunk_set)
+        chunks.append(chunk)
+    await SqlalchemyProjectPaperRepository(session).add(
+        create_project_paper(project, paper.paper_id, version.version_id)
+    )
+    await session.commit()
+    repo = SqlalchemyChunkRepository(session)
+    scope = [(paper.paper_id, version.version_id)]
+    frozen = [chunk_sets[0].chunk_set_id]
+
+    fts = await repo.search_fulltext_by_scope(
+        owner_id="user-1",
+        query="graphweave",
+        limit=10,
+        version_scope=scope,
+        chunk_set_scope=frozen,
+    )
+    semantic = await repo.search_semantic_by_scope(
+        owner_id="user-1",
+        query_vector=_one_hot(0),
+        limit=10,
+        version_scope=scope,
+        chunk_set_scope=frozen,
+    )
+
+    assert [item.chunk.chunk_id for item in fts] == [chunks[0].chunk_id]
+    assert [item.chunk.chunk_id for item in semantic] == [chunks[0].chunk_id]
+
+
 async def test_scope_search_survives_project_paper_removal(
     session, project: str
 ) -> None:

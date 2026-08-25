@@ -568,6 +568,8 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=FakeResearchAgentRuntime(),
         event_notifier=event_notifier,
     )

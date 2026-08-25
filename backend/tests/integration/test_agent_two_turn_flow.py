@@ -38,7 +38,13 @@ from literature_agent.infrastructure.persistence.attempt_repository import (
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
+from literature_agent.infrastructure.persistence.claim_set_repository import (
+    SqlalchemyClaimSetRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import SqlalchemyEventRepository
+from literature_agent.infrastructure.persistence.evidence_repository import (
+    SqlalchemyEvidenceRepository,
+)
 from literature_agent.infrastructure.persistence.idempotency_repository import (
     SqlalchemyIdempotencyRepository,
 )
@@ -183,6 +189,8 @@ async def test_two_turns_reuse_runtime_session_and_persist_staged_candidates(db_
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(

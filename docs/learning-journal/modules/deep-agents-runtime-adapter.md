@@ -62,8 +62,12 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   `PolicySnapshot.allowed_tool_names` 才能对模型可见；
 - 同一策略中间件在实际 Tool 调用 wrapper 再校验一次，避免模型伪造未展示的 Tool 名称绕过 schema
   可见性；空 allowlist 时文件与自定义 Tool 均不可见且不能执行；
-- 未接 MCP、Browser、Sandbox、网络、长期 Memory、Skill 或 Project Retriever/Matrix Reader；后两者
-  属于切片 5；
+- 切片 5 在 Adapter 内注册 `search_project_chunks` 与 `read_review_evidence_matrix`，但实现只依赖
+  SDK-neutral `ProjectResearchContext` Port。两个工具用锁定的 `ToolRuntime` 注入 `turn_run_id`：模型
+  schema 只能看到 query 或空参数，不能伪造 owner/Project/Snapshot/ReviewOutput/ChunkSet ID；
+- Project Context 的 temporary/permanent/cancelled 安全错误会映射为既有 `RuntimeErrorKind`，最终回答
+  Evidence 标记解析为小型 `RuntimeTurnResult.evidence_ids`；Application 仍负责 Citation 授权与事务提交；
+- 未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；
 - Runtime Event 只产生 `bound/started/assistant_delta/completed`，不输出模型思考、Tool 原始结果或 Graph
   State。
 
@@ -105,6 +109,12 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   Port/Executor/Fake/两轮/崩溃恢复为 `28 passed in 61.85s`，完整非集成为
   `739 passed, 4 skipped in 58.95s`；独立 Ruff 与 Pyright 同样通过。
 
+切片 5 补充验证（2026-08-26）：开发智能体完全离线 Adapter 套件为 `21 passed in 1.15s`，主智能体
+独立复验为 `21 passed in 1.12s`；新增覆盖两个 Project Tool 的 ToolRuntime scope 注入、模型 schema 隐藏平台 ID、
+未授权 Tool 拒绝、安全错误分类与 Evidence ID 提取。受控命令沙箱内，未修改 HEAD Adapter 也会在
+`STARTED` 后、模型调用前出现 selector 假性等待；同一命令在已批准非沙箱环境正常通过，因此该现象仍
+只记录为开发工具环境限制。
+
 受控命令沙箱内运行 Deep Agents 异步链时曾出现 selector 假性等待；相同完全离线命令在沙箱外会正常
 给出断言失败或通过结果。该现象只描述开发工具环境，不是产品 Sandbox 的能力或安全验证。
 
@@ -125,9 +135,11 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   进程；失败/取消终态没有独立持久 Runtime registry，orphan `RUNNING` checkpoint 不会自动 resume；
 - Runtime 部署拓扑与 Execution lease/recovery owner 尚未决定；这是切片 6 的显式门槛，不由 Adapter
   默认假设。门槛通过前不能把同进程测试描述为执行中 Worker 崩溃恢复；
-- 没有真实模型、Usage、流式 token、模型/Tool 动态预算、Project Context Tool、MCP、Browser、Sandbox、
-  Skill、正式 Artifact 或 WorkspaceSnapshot；`max_model_calls/max_tool_calls` 尚未由本 Adapter 执行层强制；
-- Tool 执行后、checkpoint 提交前的崩溃窗口没有 Effectively Once 证据；
+- 没有真实模型、Usage、流式 token、统一模型/Tool 动态预算、MCP、Browser、Sandbox、Skill、正式
+  Artifact 或 WorkspaceSnapshot；两个 Project Tool 已由平台按稳定 effect 强制 `max_tool_calls`，但
+  Adapter 的其他内置/自定义 Tool 与 `max_model_calls` 尚未统一计数；
+- Project Tool 成功后的重放、并发和 temporary retry 已有持久 effect 证据；Tool 外部调用完成后、
+  ToolExecution 成功记录提交前的崩溃窗口仍没有 Exactly Once 证据，orphan RUNNING 留给切片 6；
 - StateBackend 对话历史文件仍依赖 Thread checkpoint，不能替代业务 Artifact/WorkspaceSnapshot 的保留、
   权限和清理策略。
 

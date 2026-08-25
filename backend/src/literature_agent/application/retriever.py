@@ -167,6 +167,7 @@ class Retriever[TSession: Session]:
         owner_id: str,
         query: str,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
         run_id: str | None = None,
     ) -> list[RetrievalResult]:
         """按 Run 固化的版本范围快照执行混合检索（切片 8）。
@@ -205,12 +206,14 @@ class Retriever[TSession: Session]:
                 query_vector=query_vector,
                 limit=self._top_k,
                 version_scope=version_scope,
+                chunk_set_scope=chunk_set_scope,
             )
             fts = await chunk_repo.search_fulltext_by_scope(
                 owner_id=owner_id,
                 query=query,
                 limit=self._top_k,
                 version_scope=version_scope,
+                chunk_set_scope=chunk_set_scope,
             )
 
         result = self._merge_and_rank(semantic, fts, run_id=run_id)

@@ -90,6 +90,14 @@ class SqlalchemyChunkRepository(ChunkRepository):
         )
         return [_chunk_to_domain(row) for row in result.scalars().all()]
 
+    async def list_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
+        if not chunk_ids:
+            return []
+        rows = await self._session.execute(
+            select(ChunkORM).where(ChunkORM.chunk_id.in_(chunk_ids))
+        )
+        return [_chunk_to_domain(row) for row in rows.scalars().all()]
+
     async def list_links(self, chunk_ids: list[str]) -> list[ChunkElementLink]:
         """按 Chunk ID 列表查询 Element 映射，按 (chunk_id, sequence) 升序。"""
         if not chunk_ids:
@@ -248,12 +256,17 @@ class SqlalchemyChunkRepository(ChunkRepository):
         query_vector: list[float],
         limit: int,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """按版本范围快照的向量检索 Top-K（不依赖当前收录关系）。"""
         if not version_scope:
             return []
         statement = (
-            self._snapshot_select(owner_id=owner_id, version_scope=version_scope)
+            self._snapshot_select(
+                owner_id=owner_id,
+                version_scope=version_scope,
+                chunk_set_scope=chunk_set_scope,
+            )
             .where(ChunkORM.embedding.is_not(None))
             .order_by(ChunkORM.embedding.cosine_distance(query_vector), ChunkORM.chunk_id)
             .limit(limit)
@@ -271,13 +284,18 @@ class SqlalchemyChunkRepository(ChunkRepository):
         query: str,
         limit: int,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """按版本范围快照的全文检索 Top-K（english 配置，ts_rank 降序）。"""
         if not version_scope:
             return []
         ts_query = func.plainto_tsquery("english", query)
         statement = (
-            self._snapshot_select(owner_id=owner_id, version_scope=version_scope)
+            self._snapshot_select(
+                owner_id=owner_id,
+                version_scope=version_scope,
+                chunk_set_scope=chunk_set_scope,
+            )
             .where(ChunkORM.search_vector.bool_op("@@")(ts_query))
             .order_by(func.ts_rank(ChunkORM.search_vector, ts_query).desc(), ChunkORM.chunk_id)
             .limit(limit)
@@ -293,6 +311,7 @@ class SqlalchemyChunkRepository(ChunkRepository):
         *,
         owner_id: str,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
     ):
         """构造按版本范围快照过滤的 Chunk 查询（不含排序与 limit）。
 
@@ -300,7 +319,7 @@ class SqlalchemyChunkRepository(ChunkRepository):
         收录关系，只按显式 ``(paper_id, version_id)`` 快照集合过滤；
         owner 校验保留（paper_versions.owner_id），ChunkSet 仍需 ready。
         """
-        return (
+        statement = (
             select(ChunkORM, PaperVersionORM.paper_id, PaperVersionORM.version_id)
             .join(ChunkSetORM, ChunkORM.chunk_set_id == ChunkSetORM.chunk_set_id)
             .join(
@@ -319,3 +338,6 @@ class SqlalchemyChunkRepository(ChunkRepository):
                 ChunkSetORM.status == ChunkSetStatus.READY.value,
             )
         )
+        if chunk_set_scope is not None:
+            statement = statement.where(ChunkSetORM.chunk_set_id.in_(chunk_set_scope))
+        return statement

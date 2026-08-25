@@ -7,8 +7,14 @@ from typing import TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.ports.agent_repository import AgentRepository
+from literature_agent.application.ports.claim_set_repository import ClaimSetRepository
 from literature_agent.application.ports.event_notifier import EventNotifier, NoopEventNotifier
 from literature_agent.application.ports.event_repository import EventRepository
+from literature_agent.application.ports.evidence_repository import EvidenceRepository
+from literature_agent.application.ports.project_research_context import (
+    READ_REVIEW_EVIDENCE_MATRIX,
+    SEARCH_PROJECT_CHUNKS,
+)
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntime,
     ResearchAgentRuntimeError,
@@ -19,7 +25,18 @@ from literature_agent.application.ports.research_agent_runtime import (
 )
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
+from literature_agent.domain.agent_answer import (
+    INSUFFICIENT_AGENT_EVIDENCE_TEXT,
+    parse_agent_answer,
+)
+from literature_agent.domain.answer_schema import RagAnswerOutput
+from literature_agent.domain.citation_validator import validate_citations
 from literature_agent.domain.event import create_event
+from literature_agent.domain.evidence import (
+    Citation,
+    create_claim,
+    create_claim_set,
+)
 from literature_agent.domain.exceptions import RunConcurrentModificationError
 from literature_agent.domain.research_agent import (
     AgentArtifactCandidate,
@@ -43,6 +60,8 @@ class AgentTurnExecutor[TSession: Session]:
         run_repo_factory: Callable[[TSession], RunRepository],
         agent_repo_factory: Callable[[TSession], AgentRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
+        evidence_repo_factory: Callable[[TSession], EvidenceRepository],
+        claim_set_repo_factory: Callable[[TSession], ClaimSetRepository],
         runtime: ResearchAgentRuntime,
         event_notifier: EventNotifier | None = None,
         cancellation_poll_interval_seconds: float = 0.5,
@@ -51,6 +70,8 @@ class AgentTurnExecutor[TSession: Session]:
         self._run_repo_factory = run_repo_factory
         self._agent_repo_factory = agent_repo_factory
         self._event_repo_factory = event_repo_factory
+        self._evidence_repo_factory = evidence_repo_factory
+        self._claim_set_repo_factory = claim_set_repo_factory
         self._runtime = runtime
         self._event_notifier = event_notifier or NoopEventNotifier()
         self._cancellation_poll_interval_seconds = cancellation_poll_interval_seconds
@@ -98,6 +119,17 @@ class AgentTurnExecutor[TSession: Session]:
         result = await self._runtime.collect_turn_result(run.run_id)
         if result.turn_run_id != run.run_id:
             self._raise_runtime_scope_mismatch()
+        citation_contract_enabled = bool(
+            {SEARCH_PROJECT_CHUNKS, READ_REVIEW_EVIDENCE_MATRIX}
+            & set(request.policy_snapshot.allowed_tool_names)
+            or result.evidence_ids
+            or result.assistant_content.strip() == INSUFFICIENT_AGENT_EVIDENCE_TEXT
+        )
+        output = (
+            self._parse_runtime_answer(result.assistant_content, result.evidence_ids)
+            if citation_contract_enabled
+            else None
+        )
         requested_candidates: list[AgentArtifactCandidate] = []
         for candidate in result.artifact_candidates:
             requested = create_agent_artifact_candidate(
@@ -145,6 +177,34 @@ class AgentTurnExecutor[TSession: Session]:
                 or locked_session.active_turn_run_id != run.run_id
             ):
                 raise RunConcurrentModificationError(run.run_id)
+            claim_set = None
+            claims = []
+            citations = []
+            if output is not None:
+                evidence = await self._evidence_repo_factory(session).list_by_ids(
+                    list(result.evidence_ids)
+                )
+                validation = validate_citations(output, evidence=evidence, run_id=run.run_id)
+                if (
+                    not validation.passed
+                    or len(evidence) != len(set(result.evidence_ids))
+                    or any(item.project_id != locked.project_id for item in evidence)
+                ):
+                    raise ResearchAgentRuntimeError(
+                        kind=RuntimeErrorKind.PERMANENT,
+                        code="runtime_citation_invalid",
+                        safe_message="Agent 最终回答的 Evidence 引用校验失败",
+                    )
+                claim_set = create_claim_set(run.run_id, output.answer_status)
+                claims = [
+                    create_claim(claim_set.claim_set_id, index, draft.text)
+                    for index, draft in enumerate(output.claims, start=1)
+                ]
+                citations = [
+                    Citation(claim.claim_id, evidence_id)
+                    for claim, draft in zip(claims, output.claims, strict=True)
+                    for evidence_id in draft.evidence_ids
+                ]
             session_binding = await repo.get_or_add_session_binding(reconciliation.session_binding)
             if (
                 session_binding != reconciliation.session_binding
@@ -163,7 +223,15 @@ class AgentTurnExecutor[TSession: Session]:
                 content=result.assistant_content,
                 turn_run_id=run.run_id,
                 idempotency_key=f"assistant:{run.run_id}",
+                claim_set_id=claim_set.claim_set_id if claim_set is not None else None,
             )
+            if claim_set is not None:
+                claim_repo = self._claim_set_repo_factory(session)
+                await claim_repo.add_claim_set(claim_set)
+                await session.flush()
+                await claim_repo.add_claims(claims)
+                await session.flush()
+                await claim_repo.add_citations(citations)
             await repo.add_message(assistant)
             staged: list[AgentArtifactCandidate] = []
             for candidate in requested_candidates:
@@ -215,7 +283,7 @@ class AgentTurnExecutor[TSession: Session]:
                     {
                         "assistant_message_id": assistant.message_id,
                         "candidate_count": len(staged),
-                        "evidence_count": 0,
+                        "evidence_count": len(result.evidence_ids),
                     },
                 )
             )
@@ -228,6 +296,27 @@ class AgentTurnExecutor[TSession: Session]:
                 raise RunConcurrentModificationError(run.run_id)
             await session.commit()
         await notify_run_event(self._event_notifier, run.run_id)
+
+    @staticmethod
+    def _parse_runtime_answer(
+        assistant_content: str, runtime_evidence_ids: tuple[str, ...]
+    ) -> RagAnswerOutput:
+        """正文标记与 Runtime 结果必须精确一致。"""
+        try:
+            output, marked_ids = parse_agent_answer(assistant_content)
+        except ValueError as exc:
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.PERMANENT,
+                code="runtime_output_invalid",
+                safe_message="Agent 最终回答格式非法",
+            ) from exc
+        if marked_ids != runtime_evidence_ids:
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.PERMANENT,
+                code="runtime_evidence_mismatch",
+                safe_message="Agent 最终回答正文与 Runtime Evidence 不一致",
+            )
+        return output
 
     async def _reconcile_or_execute(
         self,

@@ -35,8 +35,14 @@ from literature_agent.infrastructure.persistence.agent_repository import (
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
 )
+from literature_agent.infrastructure.persistence.claim_set_repository import (
+    SqlalchemyClaimSetRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
+)
+from literature_agent.infrastructure.persistence.evidence_repository import (
+    SqlalchemyEvidenceRepository,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
@@ -89,6 +95,8 @@ def _runner(factory, runtime: FakeResearchAgentRuntime, worker_id: str) -> RunEx
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(
@@ -297,6 +305,8 @@ async def test_cancel_runtime_temporary_failure_stops_heartbeat_then_reconciles(
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
         cancellation_poll_interval_seconds=0,
     )

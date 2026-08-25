@@ -21,6 +21,10 @@ class ChunkRepository(Protocol):
         """按 ChunkSet 查询 Chunk，按 ``sequence`` 升序返回。"""
         ...
 
+    async def list_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
+        """按 ID 读取 Chunk，供 Evidence 闭包复核。"""
+        ...
+
     async def list_links(self, chunk_ids: list[str]) -> list[ChunkElementLink]:
         """按 Chunk ID 列表查询 Element 映射，按 (chunk_id, sequence) 升序返回。"""
         ...
@@ -83,6 +87,7 @@ class ChunkRepository(Protocol):
         query_vector: list[float],
         limit: int,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """按 Run 固化的版本范围快照做向量检索 Top-K（cosine 距离升序）。
 
@@ -101,6 +106,7 @@ class ChunkRepository(Protocol):
         query: str,
         limit: int,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """按版本范围快照的全文检索 Top-K（english 配置，ts_rank 降序）。
 

@@ -6,7 +6,8 @@
 “契约与 Fake Runtime”于 2026-08-25 完成；切片 2“两轮离线业务闭环”于 2026-08-25
 完成实现、主智能体审查与独立验证；切片 3“取消、恢复与对账”于 2026-08-25 完成实现、
 主智能体审查与独立验证；切片 4“Deep Agents Adapter”已于 2026-08-25 完成实现、主智能体审查与
-独立验证。2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
+独立验证；切片 5“Project Research Context”已于 2026-08-26 完成实现、主智能体审查与独立验证。
+2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
 上下文压缩、文件 Backend 与平台业务事实的所有权；该对齐不推翻切片 1/2 的实现。
 切片 4 主审同时暴露了跨进程恢复所有权尚未闭合的三项耦合缺口；本 Spec 已在 Project Research
 Context 之后增加一个独立的 Runtime 部署与崩溃恢复门槛，详见
@@ -126,8 +127,10 @@ binding generation 损坏后的受控重建使用；它不是“每轮加载到�
 `artifact_refs` 固化 Artifact ID 与内容 SHA-256。`review_output_id` 是当前普通 Turn 的必填 Evidence
 Matrix 绑定，不把 `review_run_id` 放进 Snapshot。切片 2 已沿
 `ReviewOutput → ReviewRun → Run` 校验 owner/Project 闭包，并固定要求
-`output_type=evidence_matrix`、`output_key=evidence-matrix`；不读取或复制 Matrix payload。切片 5 再接入
-正式 Matrix Reader 与 Project Retriever。
+`output_type=evidence_matrix`、`output_key=evidence-matrix`；不读取或复制 Matrix payload。切片 5 已通过
+两个固定、平台自有的只读能力 `search_project_chunks` 与 `read_review_evidence_matrix` 接入正式
+Retriever/Matrix Reader。模型只能提交 query 或空参数；owner、Project、Snapshot、ReviewOutput 与
+ChunkSet 作用域均由稳定 `turn_run_id` 在平台侧反查。
 
 `PolicySnapshot` 最小字段为 `snapshot_id`、`policy_version`、`owner_id`、`project_id`、`session_id`、
 `turn_run_id`、`allowed_tool_names`、`allowed_skill_names`、`network_enabled`、`sandbox_enabled`、
@@ -141,7 +144,8 @@ Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以�
 - `AgentSession`：`session_id`、`owner_id`、`project_id`、`title`、`status`、
   `active_turn_run_id`、`created_at`、`last_activity_at`；
 - `AgentMessage`：`message_id`、`session_id`、`sequence`、`role`、`content`、`turn_run_id`、
-  `idempotency_key`、`created_at`；
+  `idempotency_key`、`created_at`、可空 `claim_set_id`；`claim_set_id` 只在经过引用校验的 Agent 回答上
+  指向复用的通用 `ClaimSet`，旧 Fake/未启用 Project Context 的消息保持为空；
 - `AgentTurnRun`：`turn_run_id`、`session_id`、`user_message_id`、`context_snapshot_id`、
   `policy_snapshot_id`。
 
@@ -292,6 +296,35 @@ Idempotency-Key，避免内部 `ValueError` 泄漏为 500。
 descriptor 和 staged 状态，不写 Storage、不提供下载，也不能成为正式 Artifact；后续提交行为必须另行
 校验和设计。
 
+切片 5 新增 SDK-neutral `ProjectResearchContext` Port，但保持 `ResearchAgentRuntime` 五方法不变。
+Deep Adapter 内的两个 `ToolRuntime` 工具只把稳定 `turn_run_id` 注入 Application；模型 schema 中
+`search_project_chunks` 只有有界 `query`，`read_review_evidence_matrix` 没有参数，均不能提交 owner、
+Project、Snapshot、ReviewOutput 或 ChunkSet ID。Application 每次调用都重新加载并复核
+Run/AgentTurn/Session/ContextSnapshot/PolicySnapshot 闭包，并在外部 Retriever 调用前、结果物化前检查
+Run 仍为 RUNNING。Retriever 新增可选 `chunk_set_scope`，Agent 路径同时下推 Snapshot 固化的
+`(paper_id, version_id)` 与精确 ChunkSet ID；既有 RAG/Review 不传该参数时保持原行为。
+
+平台新增 `agent_tool_executions` 保存稳定
+`effect_id = hash(turn_run_id + tool_name + canonical_args_hash)`、状态、attempt、结果 hash 和有界安全
+payload；原始 query/参数不入库。唯一约束收敛重复 effect，RUNNING 重复明确拒绝，temporary 失败可由同一
+effect 增加 attempt 后重试且不重复占用 `max_tool_calls`，成功重复调用直接 replay。started/succeeded/
+failed Event 只包含 tool name、effect ID、状态、attempt/hash 或安全错误 code，不保存 query、Chunk、
+Matrix、Prompt 或 Tool 输出。数据库 CHECK 同时约束 running/succeeded/failed 的结果与错误字段一致性。
+
+Chunk 检索结果和 Matrix 实际返回行引用的 Review Evidence 会被幂等复制为当前 AgentTurn Run 的
+Evidence；完整 Matrix 与未暴露行不会复制。Matrix Reader 固定验证 Output type/key/version/schema、
+owner/Project/Review Run、聚合 rows/failures/summary，并在返回截断前验证全部 source Evidence 的
+Review Run、Project、PaperVersion 与精确 Snapshot ChunkSet 闭包，再以稳定排序、12 行和 8000 字符
+预算返回部分聚合。它不重新取得 Phase 3 Strategy dimensions，
+因此不是第二次运行完整 `validate_evidence_matrix`。
+
+Agent 最终回答采用有界逐行 `文本 [evidence:<id>[,<id>...]]` 契约，或唯一固定的证据不足文本。正文
+Evidence ID 必须与 Runtime result DTO 精确一致；随后复用既有 `validate_citations`、`ClaimSet`、Claim、
+Citation。Assistant Message 的可空 `claim_set_id`、引用事实、Runtime Binding、candidate、安全 Event 和
+Run 成功状态在同一个短事务中提交；伪造、跨 Run/Project 或缺失 Evidence 会回滚全部结果事实并走
+permanent 失败路径。生产 Worker 仍以 `max_tool_calls=0` 装配 Fake Runtime，本切片没有假装生产已启用
+Deep Agents Project Tool。
+
 ### API
 
 资源方向如下，具体路径与 Schema 在 API 切片确认：
@@ -325,7 +358,8 @@ agent_runtime_bound
 agent_turn_started
 agent_context_loaded
 agent_tool_started
-agent_tool_completed
+agent_tool_succeeded
+agent_tool_failed
 agent_approval_required
 agent_artifact_staged
 agent_artifact_committed
@@ -393,7 +427,8 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 4. **Deep Agents Adapter（已完成）**：说明新增依赖及锁文件影响后固定版本；真实调用 `create_deep_agent`，用 Fake
    Chat Model、确定性 Tool、StateBackend 与 PostgreSQL Checkpointer 验证同一 Thread 只追加新消息、
    Execution/Checkpoint、原生上下文压缩和文件卸载；不接真实模型、Sandbox、MCP、长期 Memory 或子 Agent；
-5. **Project Research Context**：正式接入 Project Retriever、Review Evidence Matrix Reader 与 Citation Validator；
+5. **Project Research Context（已完成）**：正式接入 Project Retriever、Review Evidence Matrix
+   Reader、稳定 ToolExecution effect 与 Citation Validator；
 6. **Runtime 部署与崩溃恢复门槛**：先基于切片 5 的 Project Tool 证据决定 ARQ Worker 内运行或独立
    Runtime Deployment，明确 Runtime Execution lease/recovery owner；持久化可对账的失败/取消终态，
    识别并受控认领 orphan `RUNNING` checkpoint，沿同一 Execution/Checkpoint 恢复且不重新追加用户输入；
@@ -503,6 +538,43 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   Port/Executor/Fake/两轮/崩溃恢复组合为 `28 passed in 61.85s`，完整非集成回归为
   `739 passed, 4 skipped in 58.95s`；独立 Ruff 与 Pyright 同样通过。
 
+切片 5 实现与验证（2026-08-26）：
+
+- 首组 TDD 红灯为 Project Context 模块、ToolExecution 领域对象和 ORM 均不存在，定向 pytest
+  `3 errors in 0.27s`；补强 parser 边界时得到 `4 failed, 8 passed`，canonical JSON 边界补强得到
+  `6 failed, 2 passed`；
+- Domain/Application/Schema/Retriever 非数据库契约最终为 `42 passed in 0.26s`，覆盖回答总字符、
+  Claim/行/ID/引用数量、空行策略，NaN/Infinity/非对象/超大 Tool 参数，安全结果复制，Matrix
+  rows/failures/summary 与长度边界、Tool 终态不可重写、Tool name/error code 数据库长度契约、单行唯一
+  末尾 Evidence marker，及精确 ChunkSet scope 向两路 Retriever 下推；
+- Deep Adapter 完全离线套件在非沙箱环境为 `21 passed in 1.18s`，覆盖 Search/Matrix 两个
+  ToolRuntime schema 与 turn_run_id 注入、未授权拒绝、Project Context 安全错误转换和正文 Evidence
+  提取；受控命令沙箱内连未修改 HEAD Adapter 也会在 `STARTED` 后、模型调用前受 seccomp 假性等待，
+  因而使用已批准的非沙箱离线命令验证，这不是产品 Sandbox 结论；
+- Project Context、精确 ChunkSet、引用提交和 AgentMessage Repository PostgreSQL 最终定向套件为
+  `12 passed in 39.22s`，覆盖重复/并发/temporary
+  effect、预算、调用前和检索在途取消、完整 Matrix 部分物化/replay、跨 owner Output 篡改、引用原子
+  提交与跨 Run Evidence 回滚；受影响扩大 PostgreSQL 回归首次为 `29 passed, 1 failed, 1 error`，其中
+  failure 是一个旧测试装配遗漏两个新 Repository factory，error 是 Testcontainers 容器被外部移除；
+  修正装配后两项单独复跑 `2 passed in 8.28s`；
+- 最终主审发现 Matrix 第 13 行可绕过 source Evidence 闭包；新增跨 Run Evidence 红灯为
+  `1 failed in 3.67s`，修复为先校验全部 source Evidence、再只物化选中行后，单测
+  `1 passed in 4.87s`，完整 Project Context PostgreSQL 回归 `8 passed in 26.43s`；
+- 新迁移的 `upgrade → downgrade -1 → upgrade → alembic check` 为 `2 passed in 4.94s`，`alembic heads`
+  输出单 head `e7b4c2a9d6f1`；完整 `ruff check src tests` 通过，`pyright src` 为
+  `0 errors, 0 warnings, 0 informations`。
+- 主智能体独立复验非数据库 Domain/Application/Schema/Retriever 契约为 `42 passed in 0.25s`，Deep
+  Adapter 完全离线套件为 `21 passed in 1.12s`；Project Context、精确 ChunkSet、引用提交和
+  AgentMessage Repository 的聚焦 PostgreSQL 套件为 `12 passed in 40.16s`；
+- 主智能体扩展受影响 PostgreSQL 回归得到 `31 passed, 1 error in 224.78s`；唯一 error 发生于
+  Testcontainers 启动阶段，Docker 报待探测容器已被外部移除（`No such container`），没有应用断言失败，
+  对应取消用例单独复跑为 `1 passed in 3.67s`；
+- 主智能体直接调用虚拟环境 `pytest` 执行迁移测试时，首轮因子进程 `PATH` 未包含虚拟环境而得到
+  `1 failed, 1 passed in 3.41s`（`FileNotFoundError: alembic`）；显式设置同一虚拟环境 `PATH` 后为
+  `2 passed in 5.01s`，`alembic heads` 再次确认单 head `e7b4c2a9d6f1`；独立 `ruff check` 通过，
+  `pyright src` 为 `0 errors, 0 warnings, 0 informations`；完整非集成后端回归为
+  `779 passed, 4 skipped in 72.79s`。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -544,16 +616,20 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
 - Worker 生产装配仍使用 Fake Runtime；切片 4 的 Deep Agents Adapter 仅由分层/真实 PostgreSQL 测试
-  实例化，因此尚未决定 Worker 内运行还是独立 Runtime Deployment；
+  实例化；切片 5 的两个 Project Tool 同样只在显式 Application/Adapter/PostgreSQL 测试策略中启用，
+  因此尚未决定 Worker 内运行还是独立 Runtime Deployment；
 - 切片 4 已证明成功 Execution 可跨连接/Adapter 通过 PostgreSQL Checkpoint 恢复并重复收集；取消与
   失败终态目前仍由在途 Adapter 的协作状态对账，不宣称其 Runtime 终态标记可跨进程恢复；该测试没有
   启动第二 OS 进程，新 Adapter 对 orphan `RUNNING` checkpoint 也不会自动 resume，执行途中 Worker
   崩溃恢复须由切片 6 闭合，当前证据与门槛见
   [`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)；
-- 切片 4 只证明最终成功 checkpoint 后的 replay 不重复模型/Tool 调用；正式 Project Tool 的
-  Effectively Once 仍须在切片 5 用稳定 call/effect ID、唯一约束或调用记录验证；
-- 切片 4 已执行 Tool 名称 allowlist，但尚未由 Adapter 执行层强制
-  `max_model_calls/max_tool_calls` 动态预算；
+- 切片 5 已用稳定 effect ID、唯一约束、条件状态更新和持久调用记录证明成功 Project Tool replay、
+  RUNNING 并发拒绝、temporary 同 effect 重试与平台 `max_tool_calls` 预算；但 Tool 外部效果完成后、
+  ToolExecution 成功记录提交前的崩溃窗口仍不宣称 Exactly Once，orphan RUNNING 由切片 6 处理；
+- 切片 5 只对两个平台 Project Tool 强制 `max_tool_calls`；`max_model_calls` 和其他 Deep Agents 内置/
+  自定义 Tool 的统一动态预算尚未实现；
+- Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界
+  聚合；它没有读取 Phase 3 Strategy dimensions 后重跑完整 Matrix validator；
 - 切片 3 的取消证明平台协调层停止消费 Fake 流、调用 Runtime cancel 并拒绝业务结果；尚未证明真实模型、
   Tool、Deep Agents 或远端 Provider 能立即中止已在途的外部调用；
 - Demo-ready Core v1 即使不进入 Phase 6 仍保持完整可交付。

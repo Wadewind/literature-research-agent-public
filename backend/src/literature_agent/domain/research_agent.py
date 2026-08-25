@@ -64,6 +64,7 @@ class AgentMessage:
     turn_run_id: str
     idempotency_key: str
     created_at: datetime
+    claim_set_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +285,7 @@ def create_agent_message(
     content: str,
     turn_run_id: str,
     idempotency_key: str,
+    claim_set_id: str | None = None,
 ) -> AgentMessage:
     """创建严格占用 Session 下一 sequence 的消息。"""
     _require_non_empty(
@@ -306,6 +308,7 @@ def create_agent_message(
         turn_run_id=turn_run_id,
         idempotency_key=idempotency_key,
         created_at=datetime.now(UTC),
+        claim_set_id=claim_set_id,
     )
 
 

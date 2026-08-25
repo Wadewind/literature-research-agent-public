@@ -45,7 +45,8 @@ Run 已经提交；该事务闭环属于后续切片。
 - `AgentSession` 字段为 `session_id`、`owner_id`、`project_id`、`title`、`status`、
   `active_turn_run_id`、`created_at`、`last_activity_at`；
 - `AgentMessage` 字段为 `message_id`、`session_id`、`sequence`、`role`、`content`、`turn_run_id`、
-  `idempotency_key`、`created_at`；
+  `idempotency_key`、`created_at`、可空 `claim_set_id`；后者只在平台已验证引用的 Agent 回答上指向通用
+  ClaimSet；
 - `AgentTurnRun` 字段为 `turn_run_id`、`session_id`、`user_message_id`、`context_snapshot_id`、
   `policy_snapshot_id`；
 - `claim_active_turn` 只允许一个活动 Turn，同一 `turn_run_id` 重复认领幂等；
@@ -143,8 +144,9 @@ consumer 在业务已重试或取消后继续模型/Tool 语义操作。
 文本增量或安全摘要；后续 Adapter/Application 仍必须禁止持久化思考过程、完整 Prompt、网页/论文正文、
 Secret 和大型 Tool 输出。
 
-所有 owner/Project/Evidence/Artifact 授权必须在平台 Context Builder 中完成。Fake 接收已构造 Snapshot，
-不伪造其数据库所有权检查已经实现。
+所有 owner/Project/Evidence/Artifact 授权必须在平台 Context Builder 中完成。Fake 仍只接收已构造
+Snapshot；切片 5 的 `ProjectResearchContext` 已对两个固定只读工具实现每次调用的 Run/Turn/Session/
+Context/Policy 闭包复核，但这不把 Fake 测试冒充为授权证据。
 
 ## 重要测试和运行结果
 
@@ -177,6 +179,7 @@ Secret 和大型 Tool 输出。
 - `backend/src/literature_agent/domain/research_agent.py`
 - `backend/src/literature_agent/application/ports/research_agent_runtime.py`
 - `backend/src/literature_agent/application/agent_turn_executor.py`
+- `backend/src/literature_agent/application/project_research_context_service.py`
 - `backend/src/literature_agent/application/agent_turn_lifecycle_service.py`
 - `backend/src/literature_agent/infrastructure/agent/fake_research_agent_runtime.py`
 - `backend/src/literature_agent/infrastructure/agent/deep_agents_research_agent_runtime.py`
@@ -201,16 +204,30 @@ Secret 和大型 Tool 输出。
 - 每个普通 Turn 显式绑定且校验具体 Evidence Matrix `ReviewOutput.output_id`，并固化当前 READY
   ChunkSet 引用；Fake 尚不读取其正文。
 
+## 切片 5 落地补充
+
+- 五方法 `ResearchAgentRuntime` Port 未扩大；新增的 `ProjectResearchContext` 是由 Deep Adapter 内部
+  Tool 调用的 SDK-neutral Application Port，Tool schema 不暴露业务 scope ID；
+- `ContextSnapshot.project_index_refs` 的 `(paper_id, paper_version_id, chunk_set_id)` 被精确下推到两路
+  Retrieval SQL，避免同一 Version 的另一个 READY ChunkSet 漂入恢复后的 Turn；
+- Platform `ToolExecution` 记录稳定 effect/hash/status/attempt 与有界安全结果，执行 Event 不包含 query、
+  Chunk/Matrix 正文或完整参数/输出；
+- Project Tool 实际暴露的 Evidence 被复制为当前 AgentTurn Run 的快照，最终回答再通过正文标记、Runtime
+  DTO 和既有 Citation Validator 三重闭包校验；Assistant Message 可空绑定通用 ClaimSet；
+- 引用结果与 Runtime Binding、候选 Artifact、安全 Event、Run 终态在同一短事务提交；旧生产 Fake 没有
+  Project Tool/Evidence 时继续写 `claim_set_id=NULL`，不把任意正文误标为“证据不足”。
+
 ## 已知限制
 
 - 已有同进程 Fake 的 PostgreSQL commit/响应丢失、重复 Job、取消和 Worker lease 故障注入；Fake 状态不
   跨进程，不能据此宣称跨 Worker Runtime 恢复。切片 4 用持久 Checkpoint 和新连接/新 Adapter 消除了
   成功结果恢复对 Adapter 内存状态的依赖，但没有启动第二 OS 进程或验证执行途中 Worker 崩溃；
-- 没有读取 Project Chunk、Evidence Matrix 或正式 Artifact，只有已授权稳定引用；
+- 两个固定 Project Tool 已可读取精确 ChunkSet 和指定 Evidence Matrix；正式 Artifact 仍只有授权稳定引用；
 - 只有 Artifact candidate staged，没有文件 Storage、正式 Artifact commit 或下载；
-- Fake 不返回 Evidence，当前 Agent Evidence join 为空；
+- 生产 Fake 不返回 Evidence；显式启用 Project Tool 的 Deep/Application 测试已持久化 Agent Evidence 与
+  Claim/Citation，但生产 Worker 尚未切换；
 - Worker 生产装配尚未接入 Deep Agents；真实 Adapter 已以 PostgreSQL Checkpoint 完成跨连接恢复 Spike，
-  但 MCP、Browser、Sandbox、WorkspaceSnapshot、Skill 与真实 Project Tool 仍未接入；
+  并可组装两个真实 Project Tool，但 MCP、Browser、Sandbox、WorkspaceSnapshot 与 Skill 仍未接入；
 - Fake 状态仍位于进程内；切片 4 的新连接/新 Adapter 成功恢复证据不反向改变 Fake 语义，也不能扩张为
   跨 OS 进程或 orphan `RUNNING` Execution 自动恢复结论；
 - 已验证平台能停止消费 Fake 流、事务外传播取消并拒绝结果；尚未验证真实 Deep Agents、模型/Tool 或

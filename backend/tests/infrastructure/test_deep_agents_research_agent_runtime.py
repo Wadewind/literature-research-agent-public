@@ -11,7 +11,12 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.memory import MemorySaver
+from pydantic import Field
 
+from literature_agent.application.ports.project_research_context import (
+    ProjectContextToolResult,
+    ProjectResearchContextError,
+)
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntimeError,
     RuntimeErrorKind,
@@ -24,10 +29,117 @@ from literature_agent.domain.research_agent import (
     create_context_snapshot,
     create_policy_snapshot,
 )
+from literature_agent.domain.tool_execution import ToolErrorKind
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
 )
 from tests.fakes.deep_agent_model import ScriptedDeepAgentChatModel
+
+
+class _ProjectContext:
+    def __init__(self) -> None:
+        self.search_calls: list[tuple[str, str]] = []
+        self.matrix_calls: list[str] = []
+
+    async def search_project_chunks(
+        self, turn_run_id: str, *, query: str
+    ) -> ProjectContextToolResult:
+        self.search_calls.append((turn_run_id, query))
+        return ProjectContextToolResult(
+            effect_id="effect-search-1",
+            tool_name="search_project_chunks",
+            payload={
+                "items": [
+                    {
+                        "evidence_id": "evidence-agent-1",
+                        "excerpt": "有界证据",
+                    }
+                ],
+                "returned_count": 1,
+                "truncated": False,
+            },
+            result_hash="a" * 64,
+        )
+
+    async def read_review_evidence_matrix(
+        self, turn_run_id: str
+    ) -> ProjectContextToolResult:
+        self.matrix_calls.append(turn_run_id)
+        return ProjectContextToolResult(
+            effect_id="effect-matrix-1",
+            tool_name="read_review_evidence_matrix",
+            payload={"rows": [], "returned_count": 0, "truncated": False},
+            result_hash="b" * 64,
+        )
+
+
+class _ProjectToolModel(ScriptedDeepAgentChatModel):
+    visible_tool_schemas: list[dict[str, Any]] = Field(default_factory=list)
+
+    def bind_tools(
+        self,
+        tools: list[Any],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ):
+        self.visible_tool_schemas.append(
+            {
+                item.name: item.tool_call_schema.model_json_schema()
+                for item in tools
+            }
+        )
+        return super().bind_tools(tools, tool_choice=tool_choice, **kwargs)
+
+    def _next_message(self, messages: list[Any]) -> AIMessage:
+        self.model_call_count += 1
+        if self._tool_requested:
+            return AIMessage(
+                content="该方法得到本地论文支持 [evidence:evidence-agent-1]"
+            )
+        self._tool_requested = True
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "search_project_chunks",
+                    "args": {"query": "图神经网络"},
+                    "id": "project-search-1",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+
+class _MatrixToolModel(_ProjectToolModel):
+    def _next_message(self, messages: list[Any]) -> AIMessage:
+        self.model_call_count += 1
+        if self._tool_requested:
+            return AIMessage(content="当前授权上下文证据不足。")
+        self._tool_requested = True
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "read_review_evidence_matrix",
+                    "args": {},
+                    "id": "project-matrix-1",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+
+class _FailingMatrixContext(_ProjectContext):
+    async def read_review_evidence_matrix(
+        self, turn_run_id: str
+    ) -> ProjectContextToolResult:
+        self.matrix_calls.append(turn_run_id)
+        raise ProjectResearchContextError(
+            "project_context_matrix_unavailable",
+            "Matrix 暂时不可用",
+            ToolErrorKind.TEMPORARY,
+        )
 
 
 def _request(
@@ -307,6 +419,119 @@ async def test_hidden_custom_tool_is_also_denied_at_execution_boundary() -> None
     assert tool_calls == []
     assert all(not names for names in model.visible_tool_names)
     assert (await runtime.reconcile_turn("turn-1")).state is RuntimeExecutionState.FAILED
+
+
+async def test_project_tool_injects_turn_scope_and_hides_platform_ids_from_model() -> None:
+    model = _ProjectToolModel()
+    project_context = _ProjectContext()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        project_context=project_context,
+        checkpointer=MemorySaver(),
+    )
+    request = _request(
+        allowed_tool_names=("search_project_chunks",),
+        max_tool_calls=1,
+    )
+
+    events = await _collect(runtime.execute_turn(request))
+    result = await runtime.collect_turn_result(request.turn_run_id)
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert project_context.search_calls == [(request.turn_run_id, "图神经网络")]
+    assert project_context.matrix_calls == []
+    assert result.evidence_ids == ("evidence-agent-1",)
+    search_schemas = [
+        schemas["search_project_chunks"]
+        for schemas in model.visible_tool_schemas
+        if "search_project_chunks" in schemas
+    ]
+    assert search_schemas
+    assert set(search_schemas[-1]["properties"]) == {"query"}
+    assert all(
+        forbidden not in str(search_schemas[-1])
+        for forbidden in (
+            "owner_id",
+            "project_id",
+            "snapshot_id",
+            "review_output_id",
+            "chunk_set_id",
+            "turn_run_id",
+        )
+    )
+
+
+async def test_matrix_tool_injects_turn_scope_with_no_model_controlled_arguments() -> None:
+    model = _MatrixToolModel()
+    project_context = _ProjectContext()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        project_context=project_context,
+        checkpointer=MemorySaver(),
+    )
+    request = _request(
+        allowed_tool_names=("read_review_evidence_matrix",),
+        max_tool_calls=1,
+    )
+
+    events = await _collect(runtime.execute_turn(request))
+    result = await runtime.collect_turn_result(request.turn_run_id)
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert project_context.matrix_calls == [request.turn_run_id]
+    assert project_context.search_calls == []
+    assert result.assistant_content == "当前授权上下文证据不足。"
+    matrix_schemas = [
+        schemas["read_review_evidence_matrix"]
+        for schemas in model.visible_tool_schemas
+        if "read_review_evidence_matrix" in schemas
+    ]
+    assert matrix_schemas
+    assert matrix_schemas[-1].get("properties", {}) == {}
+
+
+async def test_project_context_temporary_error_maps_to_runtime_temporary_error() -> None:
+    model = _MatrixToolModel()
+    project_context = _FailingMatrixContext()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        project_context=project_context,
+        checkpointer=MemorySaver(),
+    )
+    request = _request(
+        allowed_tool_names=("read_review_evidence_matrix",),
+        max_tool_calls=1,
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as exc_info:
+        await _collect(runtime.execute_turn(request))
+
+    assert project_context.matrix_calls == [request.turn_run_id]
+    assert exc_info.value.kind is RuntimeErrorKind.TEMPORARY
+    assert exc_info.value.code == "project_context_matrix_unavailable"
+    assert exc_info.value.safe_message == "Matrix 暂时不可用"
+
+
+async def test_unapproved_project_tool_is_hidden_and_rejected_before_port_call() -> None:
+    model = _ProjectToolModel()
+    project_context = _ProjectContext()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        project_context=project_context,
+        checkpointer=MemorySaver(),
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as exc_info:
+        await _collect(
+            runtime.execute_turn(_request(allowed_tool_names=(), max_tool_calls=0))
+        )
+
+    assert exc_info.value.kind is RuntimeErrorKind.PERMANENT
+    assert exc_info.value.code == "runtime_tool_not_allowed"
+    assert project_context.search_calls == []
+    assert all(
+        "search_project_chunks" not in names for names in model.visible_tool_names
+    )
 
 
 async def test_policy_allows_only_the_selected_filesystem_tool() -> None:

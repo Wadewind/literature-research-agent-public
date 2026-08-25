@@ -38,6 +38,9 @@ class FakeChunkRepository(ChunkRepository):
         result.sort(key=lambda c: c.sequence)
         return result
 
+    async def list_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
+        return [self._chunks[item] for item in chunk_ids if item in self._chunks]
+
     async def list_links(self, chunk_ids: list[str]) -> list[ChunkElementLink]:
         """按 Chunk ID 列表返回 Element 映射，按 (chunk_id, sequence) 升序。"""
         result = [link for link in self._links if link.chunk_id in chunk_ids]
@@ -121,6 +124,7 @@ class FakeChunkRepository(ChunkRepository):
         query_vector: list[float],
         limit: int,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """返回预设的语义检索结果并记录快照范围参数。"""
         self.search_calls.append(
@@ -129,6 +133,7 @@ class FakeChunkRepository(ChunkRepository):
                 "owner_id": owner_id,
                 "limit": limit,
                 "version_scope": version_scope,
+                "chunk_set_scope": chunk_set_scope,
             }
         )
         return list(self.semantic_results)[:limit]
@@ -140,6 +145,7 @@ class FakeChunkRepository(ChunkRepository):
         query: str,
         limit: int,
         version_scope: list[tuple[str, str]],
+        chunk_set_scope: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """返回预设的全文检索结果并记录快照范围参数。"""
         self.search_calls.append(
@@ -149,6 +155,7 @@ class FakeChunkRepository(ChunkRepository):
                 "query": query,
                 "limit": limit,
                 "version_scope": version_scope,
+                "chunk_set_scope": chunk_set_scope,
             }
         )
         return list(self.fts_results)[:limit]

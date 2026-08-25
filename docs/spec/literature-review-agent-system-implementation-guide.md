@@ -1449,6 +1449,15 @@ PostgreSQL Checkpointer 验证成功 Execution 的新连接/新 Adapter 结果�
 启动第二 OS 进程，也不证明 orphan `RUNNING` checkpoint 自动 resume 或 Tool 执行后、checkpoint 提交前
 崩溃窗口的 Effectively Once；正式 Project Tool 需要稳定 call/effect ID 与持久调用记录。
 
+Phase 5 切片 5 已以 SDK-neutral `ProjectResearchContext` 接入固定的
+`search_project_chunks`/`read_review_evidence_matrix`。Deep Agents `ToolRuntime` 只注入稳定
+`turn_run_id`；模型不能选择 owner、Project、Snapshot、ReviewOutput 或 ChunkSet。平台按每轮
+ContextSnapshot 精确下推 PaperVersion/ChunkSet，验证指定 Matrix 的 Output/Run/Evidence 闭包，并把实际
+暴露的来源 Evidence 幂等物化到当前 AgentTurn Run。稳定 `ToolExecution` effect、唯一约束、状态 CHECK、
+条件更新和平台预算支持成功 replay、并发拒绝与 temporary 同 effect 重试；安全 Event 不保存 query、正文
+或完整结果。最终回答的行内 Evidence 标记与 Runtime DTO 必须一致，再复用通用 ClaimSet/Claim/Citation
+校验和原子提交。生产 Worker 仍使用 Fake Runtime；该证据不替代后续部署与崩溃恢复门槛。
+
 切片 4 同时暴露了三项耦合缺口：没有真实第二 OS 进程恢复证据，失败/取消终态与 orphan `RUNNING`
 缺少持久对账事实，生产部署与 Runtime Execution lease/recovery owner 尚未决定。因此 Phase 5 在
 Project Research Context 后增加一个独立恢复门槛；该门槛通过前不得进入高风险外部能力或最小 Agent

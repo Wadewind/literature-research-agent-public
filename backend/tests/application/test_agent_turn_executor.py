@@ -21,6 +21,8 @@ from literature_agent.application.ports.research_agent_runtime import (
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import ExecutionOutcome, RunExecutionService
 from literature_agent.application.run_service import RunService
+from literature_agent.domain.chunk import Chunk
+from literature_agent.domain.evidence import Citation, create_evidence
 from literature_agent.domain.research_agent import RuntimeSessionBinding, RuntimeTurnBinding
 from literature_agent.domain.run import RunStatus, RunType
 from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
@@ -32,8 +34,20 @@ from literature_agent.infrastructure.persistence.agent_repository import (
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
 )
+from literature_agent.infrastructure.persistence.chunk_repository import (
+    SqlalchemyChunkRepository,
+)
+from literature_agent.infrastructure.persistence.chunk_set_repository import (
+    SqlalchemyChunkSetRepository,
+)
+from literature_agent.infrastructure.persistence.claim_set_repository import (
+    SqlalchemyClaimSetRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
+)
+from literature_agent.infrastructure.persistence.evidence_repository import (
+    SqlalchemyEvidenceRepository,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
@@ -58,6 +72,50 @@ class _TrackedFactory:
             finally:
                 self.active -= 1
                 self.closed_transactions += 1
+
+
+async def _add_turn_scope_evidence(
+    scenario,
+    service,
+    submitted,
+    *,
+    evidence_run_id: str,
+    chunk_id: str,
+):
+    view = await service.get_turn(scenario.actor, submitted.run_id)
+    ref = view.context_snapshot.project_index_refs[0]
+    async with scenario.factory() as session:
+        chunk_set = await SqlalchemyChunkSetRepository(session).get_by_id(
+            ref.chunk_set_id
+        )
+        assert chunk_set is not None
+        chunk = Chunk(
+            chunk_id=chunk_id,
+            chunk_set_id=ref.chunk_set_id,
+            sequence=1,
+            text="Agent 引用证据",
+            token_count=10,
+            section_path="Results",
+            page_start=1,
+            page_end=1,
+            content_hash="f" * 64,
+        )
+        await SqlalchemyChunkRepository(session).add_many([chunk])
+        evidence = create_evidence(
+            run_id=evidence_run_id,
+            project_id=scenario.project.project_id,
+            paper_id=ref.paper_id,
+            version_id=ref.paper_version_id,
+            parse_revision_id=chunk_set.parse_revision_id,
+            chunk_id=chunk.chunk_id,
+            section_path=chunk.section_path,
+            page_start=chunk.page_start,
+            page_end=chunk.page_end,
+            excerpt=chunk.text,
+        )
+        await SqlalchemyEvidenceRepository(session).add_many([evidence])
+        await session.commit()
+    return evidence
 
 
 class _AssertingRuntime(FakeResearchAgentRuntime):
@@ -115,6 +173,21 @@ class _ResponseLostAfterSuccessRuntime(FakeResearchAgentRuntime):
                 safe_message="Runtime 成功响应丢失",
             )
         return reconciliation
+
+
+class _CitedRuntime(FakeResearchAgentRuntime):
+    def __init__(self, *, content: str, evidence_ids: tuple[str, ...]) -> None:
+        super().__init__()
+        self.content = content
+        self.evidence_ids = evidence_ids
+
+    async def collect_turn_result(self, turn_run_id):
+        result = await super().collect_turn_result(turn_run_id)
+        return replace(
+            result,
+            assistant_content=self.content,
+            evidence_ids=self.evidence_ids,
+        )
 
 
 class _BlockingRuntime(FakeResearchAgentRuntime):
@@ -292,6 +365,8 @@ async def test_executor_calls_runtime_after_read_transaction_and_commits_result_
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(
@@ -323,12 +398,161 @@ async def test_executor_calls_runtime_after_read_transaction_and_commits_result_
     messages = await service.list_messages(scenario.actor, agent_session.session_id)
     assert view.run.status.value == "succeeded"
     assert [message.role.value for message in messages] == ["user", "assistant"]
+    assert messages[-1].claim_set_id is None
     assert len(view.candidates) == 1
     async with scenario.factory() as session:
         events = await SqlalchemyEventRepository(session).list_by_run(submitted.run_id)
     assert [event.event_type for event in events].count("agent_artifact_staged") == 1
     succeeded = next(event for event in events if event.event_type == "agent_turn_succeeded")
     assert succeeded.payload["candidate_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cited_runtime_result_commits_message_claims_and_citations_atomically(
+    db_engine,
+) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    agent_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title=None
+    )
+    submitted = await service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="生成带引用回答",
+        review_output_id=scenario.matrix.output_id,
+        idempotency_key="cited-agent-result",
+        correlation_id="cited-agent-result",
+    )
+    evidence = await _add_turn_scope_evidence(
+        scenario,
+        service,
+        submitted,
+        evidence_run_id=submitted.run_id,
+        chunk_id="agent-citation-chunk",
+    )
+    runtime = _CitedRuntime(
+        content=f"该结论有证据支持 [evidence:{evidence.evidence_id}]",
+        evidence_ids=(evidence.evidence_id,),
+    )
+    executor = AgentTurnExecutor(
+        session_factory=scenario.factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        runtime=runtime,
+    )
+    runner = RunExecutionService(
+        scenario.factory,
+        SqlalchemyRunRepository,
+        SqlalchemyEventRepository,
+        SqlalchemyAttemptRepository,
+        SqlalchemyOutboxRepository,
+        RunDispatcher(
+            scenario.factory,
+            SqlalchemyRunRepository,
+            SqlalchemyEventRepository,
+            {RunType.AGENT_TURN: executor.execute},
+        ).execute,
+        "citation-worker",
+        heartbeat_interval_seconds=3600,
+    )
+
+    outcome = await runner.execute(submitted.run_id, "citation-job")
+    async with scenario.factory() as session:
+        debug_events = await SqlalchemyEventRepository(session).list_by_run(
+            submitted.run_id
+        )
+    assert outcome is ExecutionOutcome.COMPLETED, [
+        (event.event_type, event.payload) for event in debug_events
+    ]
+
+    messages = await service.list_messages(scenario.actor, agent_session.session_id)
+    assistant = messages[-1]
+    assert assistant.claim_set_id is not None
+    async with scenario.factory() as session:
+        claim_repo = SqlalchemyClaimSetRepository(session)
+        claim_set = await claim_repo.get_by_run_id(submitted.run_id)
+        assert claim_set is not None
+        assert claim_set.claim_set_id == assistant.claim_set_id
+        claims = await claim_repo.list_claims(claim_set.claim_set_id)
+        assert [claim.text for claim in claims] == ["该结论有证据支持"]
+        assert await claim_repo.list_citations(claims[0].claim_id) == [
+            Citation(claims[0].claim_id, evidence.evidence_id)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_cross_run_evidence_rolls_back_all_runtime_result_facts(db_engine) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    agent_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title=None
+    )
+    submitted = await service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="拒绝跨 Run 引用",
+        review_output_id=scenario.matrix.output_id,
+        idempotency_key="cross-run-citation",
+        correlation_id="cross-run-citation",
+    )
+    source = await _add_turn_scope_evidence(
+        scenario,
+        service,
+        submitted,
+        evidence_run_id=scenario.matrix.review_run_id,
+        chunk_id="cross-run-source-chunk",
+    )
+    runtime = _CitedRuntime(
+        content=f"伪造引用 [evidence:{source.evidence_id}]",
+        evidence_ids=(source.evidence_id,),
+    )
+    lifecycle = AgentTurnLifecycleService(
+        scenario.factory,
+        SqlalchemyRunRepository,
+        SqlalchemyAgentRepository,
+    )
+    executor = AgentTurnExecutor(
+        session_factory=scenario.factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        runtime=runtime,
+    )
+    runner = RunExecutionService(
+        scenario.factory,
+        SqlalchemyRunRepository,
+        SqlalchemyEventRepository,
+        SqlalchemyAttemptRepository,
+        SqlalchemyOutboxRepository,
+        RunDispatcher(
+            scenario.factory,
+            SqlalchemyRunRepository,
+            SqlalchemyEventRepository,
+            {RunType.AGENT_TURN: executor.execute},
+        ).execute,
+        "citation-worker",
+        heartbeat_interval_seconds=3600,
+        terminal_callback=lifecycle.release_if_terminal,
+    )
+
+    assert await runner.execute(submitted.run_id, "citation-job") is ExecutionOutcome.FAILED
+
+    messages = await service.list_messages(scenario.actor, agent_session.session_id)
+    assert [message.role.value for message in messages] == ["user"]
+    async with scenario.factory() as session:
+        assert (
+            await SqlalchemyClaimSetRepository(session).get_by_run_id(submitted.run_id)
+            is None
+        )
+        repo = SqlalchemyAgentRepository(session)
+        assert await repo.get_session_binding(agent_session.session_id) is None
+        assert await repo.get_turn_binding(submitted.run_id) is None
 
 
 @pytest.mark.asyncio
@@ -359,6 +583,8 @@ async def test_runtime_success_response_loss_reconciles_without_second_execute(d
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(
@@ -438,6 +664,8 @@ async def test_running_cancel_propagates_to_runtime_and_commits_no_result(db_eng
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
         cancellation_poll_interval_seconds=0,
     )
@@ -540,6 +768,8 @@ async def test_queued_cancel_releases_active_turn_without_starting_runtime(db_en
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(
@@ -596,6 +826,8 @@ async def test_permanent_runtime_failure_fails_once_and_releases_session(db_engi
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(
@@ -659,6 +891,8 @@ async def test_existing_running_execution_retries_without_appending_input(db_eng
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(
@@ -724,6 +958,8 @@ async def test_status_watch_failure_cancels_and_awaits_runtime_stream(db_engine)
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
         runtime_started=runtime.started,
         fail_watch=True,
@@ -789,6 +1025,8 @@ async def test_outer_cancellation_cleans_runtime_stream_and_status_watcher(db_en
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
         runtime_started=runtime.started,
         fail_watch=False,
@@ -864,6 +1102,8 @@ async def test_runtime_scope_mismatch_is_permanent_and_persists_no_result(
         run_repo_factory=SqlalchemyRunRepository,
         agent_repo_factory=SqlalchemyAgentRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
     )
     dispatcher = RunDispatcher(

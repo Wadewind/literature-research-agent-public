@@ -67,6 +67,10 @@ class AgentMessageORM(Base):
     turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), index=True, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    claim_set_id: Mapped[str | None] = mapped_column(
+        ForeignKey("claim_sets.claim_set_id", name="fk_agent_messages_claim_set"),
+        nullable=True,
+    )
     __table_args__ = (
         CheckConstraint("sequence >= 1", name="ck_agent_messages_sequence"),
         CheckConstraint("role IN ('user','assistant')", name="ck_agent_messages_role"),
@@ -227,6 +231,54 @@ class AgentArtifactCandidateORM(Base):
         CheckConstraint("size_bytes BETWEEN 0 AND 1000000", name="ck_agent_candidate_size"),
         CheckConstraint("status = 'staged'", name="ck_agent_candidate_status"),
         UniqueConstraint("turn_run_id", "content_hash", name="uq_agent_candidate_turn_hash"),
+    )
+
+
+class AgentToolExecutionORM(Base):
+    """Project Tool 的稳定 effect 与安全有界结果。"""
+
+    __tablename__ = "agent_tool_executions"
+    effect_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), index=True, nullable=False
+    )
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    args_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    result_payload: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    result_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    safe_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("status IN ('running','succeeded','failed')", name="ck_agent_tool_status"),
+        CheckConstraint(
+            "error_kind IS NULL OR error_kind IN ('temporary','permanent','cancelled')",
+            name="ck_agent_tool_error_kind",
+        ),
+        CheckConstraint(
+            "(status = 'running' AND result_payload IS NULL AND result_hash IS NULL "
+            "AND error_kind IS NULL AND error_code IS NULL AND safe_message IS NULL) OR "
+            "(status = 'succeeded' AND result_payload IS NOT NULL "
+            "AND result_hash IS NOT NULL AND error_kind IS NULL "
+            "AND error_code IS NULL AND safe_message IS NULL) OR "
+            "(status = 'failed' AND result_payload IS NULL AND result_hash IS NULL "
+            "AND error_kind IS NOT NULL AND error_code IS NOT NULL "
+            "AND safe_message IS NOT NULL)",
+            name="ck_agent_tool_state_consistency",
+        ),
+        CheckConstraint("attempt_count >= 1", name="ck_agent_tool_attempt_count"),
+        UniqueConstraint(
+            "turn_run_id",
+            "tool_name",
+            "args_hash",
+            name="uq_agent_tool_executions_turn_tool_args",
+        ),
     )
 
 

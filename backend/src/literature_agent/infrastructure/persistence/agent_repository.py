@@ -141,6 +141,7 @@ class SqlalchemyAgentRepository(AgentRepository):
                 turn_run_id=value.turn_run_id,
                 idempotency_key=value.idempotency_key,
                 created_at=value.created_at,
+                claim_set_id=value.claim_set_id,
             )
         )
         return value
@@ -418,6 +419,7 @@ def _message(row: AgentMessageORM) -> AgentMessage:
         row.turn_run_id,
         row.idempotency_key,
         row.created_at,
+        row.claim_set_id,
     )
 
 

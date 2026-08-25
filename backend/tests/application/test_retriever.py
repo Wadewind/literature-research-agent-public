@@ -228,6 +228,24 @@ async def test_retrieve_for_scope_passes_snapshot_to_both_paths() -> None:
     assert all(call["owner_id"] == "user-1" for call in chunk_repo.search_calls)
 
 
+async def test_retrieve_for_scope_passes_exact_chunk_set_snapshot_to_both_paths() -> None:
+    """Agent Context 可把精确 ChunkSet 快照下推到两路 SQL，而非只限制版本。"""
+    chunk_repo = FakeChunkRepository()
+    retriever = _make_retriever(chunk_repo, FakeModelInvocationRepository())
+    scope = [("p1", "v1")]
+    chunk_set_scope = ["cs-frozen"]
+
+    await retriever.retrieve_for_scope(
+        owner_id="user-1",
+        query="q",
+        version_scope=scope,
+        chunk_set_scope=chunk_set_scope,
+        run_id="agent-turn-1",
+    )
+
+    assert all(call["chunk_set_scope"] == chunk_set_scope for call in chunk_repo.search_calls)
+
+
 async def test_retrieve_for_scope_empty_snapshot_skips_model(monkeypatch) -> None:
     """空快照直接返回空结果，不调用模型也不访问数据库。"""
     chunk_repo = FakeChunkRepository()
