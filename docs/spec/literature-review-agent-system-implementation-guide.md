@@ -1438,6 +1438,13 @@ Index 和指定 Review Evidence Matrix 回答第一轮，在第二轮继续同�
 `create_deep_agent`、Fake Chat Model 和确定性 Tool 验证同一 Thread 的原生多轮消息与压缩，两者都不
 依赖真实模型、网站、MCP 或 Sandbox。
 
+Phase 5 切片 4 已将首个真实 Adapter 精确固定到 `deepagents==0.7.8`。该 Spike 使用 StateBackend 与
+PostgreSQL Checkpointer 验证成功 Execution 的新连接/新 Adapter 结果恢复、同 Thread 增量消息、原生摘要与
+`/conversation_history/*.md` 卸载；它没有把 Worker 生产装配切离 Fake Runtime，也没有提前决定 Runtime
+部署拓扑或接入 Sandbox、MCP、Browser、长期 Memory、Skill 和真实 Project Tool。新 Adapter 测试没有
+启动第二 OS 进程，也不证明 orphan `RUNNING` checkpoint 自动 resume 或 Tool 执行后、checkpoint 提交前
+崩溃窗口的 Effectively Once；正式 Project Tool 需要稳定 call/effect ID 与持久调用记录。
+
 #### 需要学习和验证
 
 - Deep Agents 的运行模型、许可、精确版本和部署边界；
@@ -1647,7 +1654,7 @@ Agent Extension 另需覆盖：
 以下实现决策明确推迟到 Phase 5/6，而不是在 Demo-ready Core v1 中预先固定：
 
 - 是否在 Phase 5 Spike 通过后进入正式 Agent 产品；
-- Deep Agents 的精确版本、升级策略和兼容范围；
+- Deep Agents 的升级策略和兼容范围（首个 Adapter 版本已固定为 `0.7.8`）；
 - Runtime 部署在 Worker 内、独立 Agent Server 还是托管服务；
 - SDK Checkpoint、Store、Workspace、Sandbox Lease 和压缩策略的精确生命周期；
 - Browser、MCP、Tool、网络和下载策略；

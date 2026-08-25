@@ -5,7 +5,8 @@
 进行中。Spec 初版日期：2026-08-20；按 ADR-0005 重构日期：2026-08-25；切片 1
 “契约与 Fake Runtime”于 2026-08-25 完成；切片 2“两轮离线业务闭环”于 2026-08-25
 完成实现、主智能体审查与独立验证；切片 3“取消、恢复与对账”于 2026-08-25 完成实现、
-主智能体审查与独立验证。2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
+主智能体审查与独立验证；切片 4“Deep Agents Adapter”已于 2026-08-25 完成实现、主智能体审查与
+独立验证。2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
 上下文压缩、文件 Backend 与平台业务事实的所有权；该对齐不推翻切片 1/2 的实现。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
@@ -386,7 +387,7 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    Fake Runtime → Message/空 Evidence join/staged 候选 Artifact；
 3. **取消、恢复与对账（已完成）**：覆盖重复 Job、Worker 崩溃、响应丢失、取消竞争
    和 Effectively Once；
-4. **Deep Agents Adapter**：说明新增依赖及锁文件影响后固定版本；真实调用 `create_deep_agent`，用 Fake
+4. **Deep Agents Adapter（已完成）**：说明新增依赖及锁文件影响后固定版本；真实调用 `create_deep_agent`，用 Fake
    Chat Model、确定性 Tool、StateBackend 与 PostgreSQL Checkpointer 验证同一 Thread 只追加新消息、
    Execution/Checkpoint、原生上下文压缩和文件卸载；不接真实模型、Sandbox、MCP、长期 Memory 或子 Agent；
 5. **Project Research Context**：正式接入 Project Retriever、Review Evidence Matrix Reader 与 Citation Validator；
@@ -461,6 +462,37 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   装配回归为 `27 passed in 48.87s`；独立执行 `ruff check src tests` 通过，`pyright` 为
   `0 errors, 0 warnings, 0 informations`。
 
+切片 4 待主审实现证据（2026-08-25）：
+
+- 依赖已单独固定为 `deepagents==0.7.8`；真实 Adapter 只在 infrastructure 内调用
+  `create_deep_agent`，未修改五方法 Port、业务表、公开 API 或 Worker 生产装配；
+- `AgentSession` 确定性映射一个 SDK Thread/StateBackend Workspace，Turn 确定性映射 Execution；最终
+  `RuntimeTurnBinding.runtime_checkpoint_id` 来自真实 Checkpointer 最终 checkpoint，而不是预测 ID；
+- Adapter 通过 Checkpoint metadata 的稳定 `turn_run_id`、request hash 与 session ID 反查执行；真实
+  PostgreSQL 上关闭连接并创建新 Adapter 后可 `reconcile/collect/replay` 两轮成功结果，新 Adapter 的
+  Fake Chat Model 与 Tool 均未再次调用。该测试模拟重启并消除 Adapter 内存依赖，但没有启动第二 OS
+  进程，也不覆盖 Tool 执行后、checkpoint 提交前的崩溃窗口；
+- 第二 Turn 只传本轮 `HumanMessage`。低阈值强制触发 Deep Agents 原生
+  `SummarizationMiddleware`，StateBackend 中出现 `/conversation_history/*.md`，checkpoint 保存
+  `_summarization_event`；最终 raw Graph State 中 `message-turn-1/message-turn-2` 各恰好一次，而第二轮
+  模型有效上下文只看到摘要与保留尾部，证明没有重新提交第一轮 HumanMessage；
+- 使用精确 `provider:model` 的公开 `HarnessProfile` 关闭当前模型的默认 general-purpose subagent，且不
+  污染同 Provider 其他模型；公开 `FilesystemMiddleware` 只注入六个文件能力并移除 `execute`，额外策略
+  中间件再取 Adapter 注册集合与本轮 Policy allowlist 的交集，同时在模型 schema 与 Tool 实际执行边界
+  强制执行；空策略时文件/自定义 Tool 均不可见，模型伪造隐藏 Tool 名称也不会执行；
+- Runtime 只输出 `bound/started/assistant_delta/completed` 白名单，不转存 Tool 原始输出、完整 Prompt、
+  Graph State 或思考过程；`STARTED` 前已形成真实 checkpoint，随后取消不再发起 Fake Model/Tool 调用；
+- 首轮红灯为缺少真实 Adapter 的 `ModuleNotFoundError`；主审补强的权限、Profile 作用域和
+  Checkpoint 异常归一化测试先得到 `9 failed, 6 passed`，修复后定向 Adapter 单测 `16 passed`，真实
+  PostgreSQL 新连接/新 Adapter 恢复 `1 passed`；最终纵深拒绝同名自定义 `execute` 后，Adapter 单测为
+  `17 passed`、扩大相关回归 `44 passed`、完整非集成测试 `739 passed, 4
+  skipped`，完整 Ruff 通过，完整 Pyright 为 `0 errors, 0 warnings, 0 informations`。受控工具沙箱内曾
+  出现 selector 假性等待，同一完全离线测试在沙箱外正常给出失败/通过结果；这不是产品 Sandbox 验证
+  结论。
+- 主智能体独立复验 Adapter 与真实 PostgreSQL 组合为 `18 passed in 4.59s`，既有
+  Port/Executor/Fake/两轮/崩溃恢复组合为 `28 passed in 61.85s`，完整非集成回归为
+  `739 passed, 4 skipped in 58.95s`；独立 Ruff 与 Pyright 同样通过。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -496,9 +528,16 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - Session 级并发首版采用单活动 Turn，不提供分支、排队或多人协作；
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
-- Fake Runtime 仍只有进程内状态；切片 3 的 commit/响应丢失重放证明同一 Runtime 实例下的平台协议，
-  不能冒充跨进程 Runtime 持久化。跨 Worker/进程 Thread 与 Checkpoint 恢复必须由切片 4 的 PostgreSQL
-  Checkpointer + Deep Agents Fake Model 验证；
+- Worker 生产装配仍使用 Fake Runtime；切片 4 的 Deep Agents Adapter 仅由分层/真实 PostgreSQL 测试
+  实例化，因此尚未决定 Worker 内运行还是独立 Runtime Deployment；
+- 切片 4 已证明成功 Execution 可跨连接/Adapter 通过 PostgreSQL Checkpoint 恢复并重复收集；取消与
+  失败终态目前仍由在途 Adapter 的协作状态对账，不宣称其 Runtime 终态标记可跨进程恢复；该测试没有
+  启动第二 OS 进程，新 Adapter 对 orphan `RUNNING` checkpoint 也不会自动 resume，执行途中 Worker
+  崩溃恢复须等待部署拓扑与 Runtime lease 所有权决策；
+- 切片 4 只证明最终成功 checkpoint 后的 replay 不重复模型/Tool 调用；正式 Project Tool 的
+  Effectively Once 仍须在切片 5 用稳定 call/effect ID、唯一约束或调用记录验证；
+- 切片 4 已执行 Tool 名称 allowlist，但尚未由 Adapter 执行层强制
+  `max_model_calls/max_tool_calls` 动态预算；
 - 切片 3 的取消证明平台协调层停止消费 Fake 流、调用 Runtime cancel 并拒绝业务结果；尚未证明真实模型、
   Tool、Deep Agents 或远端 Provider 能立即中止已在途的外部调用；
 - Demo-ready Core v1 即使不进入 Phase 6 仍保持完整可交付。

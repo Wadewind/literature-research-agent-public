@@ -88,6 +88,10 @@ Run 已经提交；该事务闭环属于后续切片。
 Fake 不调用模型、网络、MCP、Browser 或 Sandbox，不读取环境密钥，也不依赖 `deepagents`。它证明的是
 平台 Port 语义，不是 Deep Agents、数据库事务、崩溃恢复或外部副作用安全已经通过验证。
 
+切片 4 已在不修改该 Port 的前提下新增真实 `DeepAgentsResearchAgentRuntime`；其 SDK 行为与测试证据见
+`deep-agents-runtime-adapter.md`。成功 Turn 不再依赖进程内记录：Adapter 通过 PostgreSQL Checkpoint
+metadata 反查稳定 Turn/Session/请求哈希，并从真实 checkpoint 重建结果与 opaque Binding。
+
 ## 关键决定与替代方案
 
 - 采用 `AgentSession : Runtime Thread = 1:1`、`AgentTurnRun : Runtime Execution = 1:1`；没有复用 RAG
@@ -172,6 +176,7 @@ Secret 和大型 Tool 输出。
 - `backend/src/literature_agent/application/agent_turn_executor.py`
 - `backend/src/literature_agent/application/agent_turn_lifecycle_service.py`
 - `backend/src/literature_agent/infrastructure/agent/fake_research_agent_runtime.py`
+- `backend/src/literature_agent/infrastructure/agent/deep_agents_research_agent_runtime.py`
 - `backend/tests/domain/test_research_agent.py`
 - `backend/tests/application/test_research_agent_runtime_contract.py`
 - `backend/tests/infrastructure/test_fake_research_agent_runtime.py`
@@ -196,12 +201,15 @@ Secret 和大型 Tool 输出。
 ## 已知限制
 
 - 已有同进程 Fake 的 PostgreSQL commit/响应丢失、重复 Job、取消和 Worker lease 故障注入；Fake 状态不
-  跨进程，不能据此宣称跨 Worker Runtime 恢复，切片 4 必须用持久 Checkpoint 另行验证；
+  跨进程，不能据此宣称跨 Worker Runtime 恢复。切片 4 用持久 Checkpoint 和新连接/新 Adapter 消除了
+  成功结果恢复对 Adapter 内存状态的依赖，但没有启动第二 OS 进程或验证执行途中 Worker 崩溃；
 - 没有读取 Project Chunk、Evidence Matrix 或正式 Artifact，只有已授权稳定引用；
 - 只有 Artifact candidate staged，没有文件 Storage、正式 Artifact commit 或下载；
 - Fake 不返回 Evidence，当前 Agent Evidence join 为空；
-- 没有接入 Deep Agents、LangGraph Checkpoint、MCP、Browser、Sandbox、WorkspaceSnapshot 或 Skill；
-- Fake 状态位于进程内，不能作为跨进程恢复证据；
+- Worker 生产装配尚未接入 Deep Agents；真实 Adapter 已以 PostgreSQL Checkpoint 完成跨连接恢复 Spike，
+  但 MCP、Browser、Sandbox、WorkspaceSnapshot、Skill 与真实 Project Tool 仍未接入；
+- Fake 状态仍位于进程内；切片 4 的新连接/新 Adapter 成功恢复证据不反向改变 Fake 语义，也不能扩张为
+  跨 OS 进程或 orphan `RUNNING` Execution 自动恢复结论；
 - 已验证平台能停止消费 Fake 流、事务外传播取消并拒绝结果；尚未验证真实 Deep Agents、模型/Tool 或
   远端 Provider 对已在途调用的立即中止能力。
 
