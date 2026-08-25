@@ -35,6 +35,10 @@ AgentTurnRun（一条用户消息）
 Workspace 或 Deep Agents 配置操作。Runtime 成功和结果可收集不代表业务 Message、Evidence、Artifact 或
 Run 已经提交；该事务闭环属于后续切片。
 
+该 Port 传入的 `RuntimeTurnRequest` 只包含本轮新用户消息和不可变 Context/Policy Snapshot，不携带完整
+产品历史。真实 Deep Agents Adapter 应在同一 Session Binding 上复用同一 SDK Thread，只追加新消息，
+并让 `create_deep_agent` 原生 Message、Checkpoint、上下文压缩和文件卸载维护模型工作上下文。
+
 ## 状态、数据模型和不变量
 
 - `AgentSession` 创建后 owner/Project 不可变；冻结 dataclass 防止原地修改；
@@ -53,6 +57,8 @@ Run 已经提交；该事务闭环属于后续切片。
   `run_type=agent_turn`，未修改状态机；
 - `ContextSnapshot` 固化 owner/Project/Session/Turn、用户消息、历史边界、Paper/PaperVersion/ChunkSet、
   可选 `review_output_id`、Artifact ID/内容哈希；不保存论文正文、Chunk、Matrix payload 或 SDK State；
+- 其中 `history_through_sequence` 是产品消息历史的审计、对账与受控重建水位，不是每轮 Prompt 重放
+  指令；PostgreSQL `AgentMessage` 是产品事实，Deep Agents Message/摘要/Checkpoint 是 Runtime 工作状态；
 - Evidence Matrix 绑定具体 `ReviewOutput.output_id`。后续 Context Builder 必须校验
   `output_type=evidence_matrix`、`output_key=evidence-matrix` 和 owner/Project/Review Run 所有权闭包；
 - `PolicySnapshot` 固化 allowlist、网络/Sandbox 开关、审批要求和模型/工具调用预算；默认能力关闭；
@@ -87,6 +93,8 @@ Fake 不调用模型、网络、MCP、Browser 或 Sandbox，不读取环境密�
 - 采用 `AgentSession : Runtime Thread = 1:1`、`AgentTurnRun : Runtime Execution = 1:1`；没有复用 RAG
   Conversation 生命周期；
 - Port 使用项目 DTO 和异步迭代器，避免为 SDK 的 Thread/Checkpoint/Event 类型建立领域镜像；
+- 保留 PostgreSQL 产品消息并不意味着平台管理模型上下文；真实 Adapter 不得每轮重放完整历史，也不得
+  用 `create_agent` 加自研中间件复制 Deep Agents Harness；
 - `review_output_id` 是 Matrix 的主要绑定，不把 `review_run_id` 当作 Snapshot 输入；Review Run 由平台
   沿 ReviewOutput 所有权闭包反查校验；
 - 没有为切片 2 预建 Repository、数据库模型或事务接口，也没有为后续 MCP/Browser/Sandbox/Skill 增加
@@ -161,6 +169,7 @@ Secret 和大型 Tool 输出。
 `ResearchAgentRuntime` Port。持续 Session 和逐消息 Turn Run 是 PostgreSQL 将拥有的业务事实，SDK
 Thread、Execution、Checkpoint 和 Workspace 只通过 opaque Binding 出现在内部契约里。每个 Turn 固化
 Context/Policy Snapshot，Context 只存 Project Index、具体 ReviewOutput 和 Artifact 的版本引用，不复制
-正文。一个完全离线 Fake 用稳定哈希证明 Session/Turn 映射、重复执行、恢复、取消、对账与结果重复收集
-语义。这样后续替换成 Deep Agents Adapter 时，SDK 版本变化只影响 Adapter；但数据库事务、权限和崩溃
-恢复必须在后续切片单独验证，不能由 Fake 测试冒充。
+正文或 Runtime 对话。一个完全离线 Fake 用稳定哈希证明 Session/Turn 映射、重复执行、恢复、取消、对账
+与结果重复收集语义。后续真实 Adapter 复用同一 SDK Thread，只追加新消息，并把模型工作上下文交给
+`create_deep_agent` 原生 Message、Checkpoint 和压缩；SDK 版本变化只影响 Adapter，但数据库事务、权限
+和崩溃恢复仍必须单独验证，不能由 Fake 测试冒充。

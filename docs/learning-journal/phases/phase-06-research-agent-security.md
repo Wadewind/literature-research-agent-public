@@ -50,6 +50,7 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 ### 不包含
 
 - 自行重写 Deep Agents 的 Agent Loop、Planner、上下文压缩或 Checkpoint 引擎；
+- 每轮从 PostgreSQL 重放完整产品消息历史，或把 `ContextSnapshot` 当作第二套 Runtime 对话状态；
 - 任意用户提供的 MCP Server、Tool 代码、Sandbox 镜像或系统 Prompt；
 - 用户上传、安装或修改任意 Skill；
 - 默认开放任意 Shell、宿主 Python、包管理器、Docker Socket 或宿主文件系统；
@@ -105,6 +106,9 @@ Artifact           通过平台校验并持久化的文件
 - PostgreSQL 保存 Session、Message、Turn Run、Context/Policy/Workspace Snapshot、Attempt、Event、
   ToolExecution、Approval、Usage、Manifest 和 Artifact 元数据；
 - Deep Agents/LangGraph 保存 Runtime 内部消息、计划、Checkpoint 和 Interrupt；
+- PostgreSQL Message 是产品事实，Deep Agents Message/摘要/Checkpoint 是模型工作上下文；正常后续 Turn
+  复用同一 Thread 并只追加新消息，完整产品历史只在 Runtime 损坏或 generation 迁移时受控重建；
+- ContextSnapshot 的消息 sequence 只是审计、对账与重建水位，不进入日常 Prompt 重放；
 - Sandbox Provider 保存临时 Workspace；其文件只有被平台显式取回、校验和提交后才成为 Artifact；
 - Valkey/ARQ 只负责投递和实时通知；SDK Trace 只用于调试和诊断；
 - Run Step 复用 Phase 3 的通用业务投影，不逐条复制 SDK 内部节点或完整推理；

@@ -184,6 +184,12 @@ RAG Conversation 保存轻量问答历史，并继续作为独立产品模式。
 Evidence 和 Artifact。RAG 与 Agent 可复用 Retriever、Evidence 和 Citation 能力，但不共用同一会话
 模型或生命周期。
 
+PostgreSQL `AgentMessage` 保存 UI、权限、稳定消息 ID、审计和灾难恢复所需的产品对话事实；Deep Agents
+Message、摘要和 Checkpoint 保存模型工作上下文。正常后续 Turn 复用同一 SDK Thread，只追加本轮新用户
+消息，不在每轮从业务表重放完整历史。`ContextSnapshot` 是当前 Turn 的授权与版本 Manifest，其中产品
+消息 sequence 仅作为审计、对账和 Runtime 损坏后的受控重建水位，不保存 Runtime Message、摘要或
+Graph State。
+
 ### 4.4 Run、Attempt、Step 与 Job
 
 ```text
@@ -537,7 +543,8 @@ tokens；每篇先使用一次 `review-evidence-extraction.v1` 正常模型调�
 
 外部 Agent Runtime 负责：
 
-- 通用 Agent Loop、规划和上下文管理；
+- 通过 `create_deep_agent` 原生 Harness 提供通用 Agent Loop、规划、Runtime Message、Checkpoint、
+  上下文压缩和大型结果文件卸载；平台不以 `create_agent` 加自研中间件复制这些能力；
 - Tool 选择和运行时内部 Observation；
 - Browser、文件、命令和 Sandbox Workspace 内部操作；
 - SDK 自身的流式事件与执行上下文。
@@ -545,6 +552,8 @@ tokens；每篇先使用一次 `review-evidence-extraction.v1` 正常模型调�
 SDK Thread、Checkpoint、Store、Workspace 和 Event 不能替代 PostgreSQL 中的 Session、Message、Run、
 权限、Event、Evidence 和 Artifact。同一 Session 同时最多允许一个活动 Turn；ARQ、本系统 Run Control
 与 SDK Runtime 之间必须明确重试、取消和恢复所有权，避免并发轮次破坏上下文或多层自动重试相乘。
+正常后续 Turn 只把新增用户消息交给同一 SDK Thread；完整产品历史只在 Runtime binding generation
+损坏或迁移时作为受控重建来源。
 
 ### 7.13 Agent Tool 与 Execution Policy（后续扩展）
 
@@ -1425,13 +1434,18 @@ Skills。该阶段不重新选型、不开发通用 Agent Harness，也不以完
 
 用户创建一个绑定 Project 的 Agent Session，连续发送两条研究消息。Agent 基于 Project Paper Chunk
 Index 和指定 Review Evidence Matrix 回答第一轮，在第二轮继续同一上下文并生成一个带 Evidence 来源的
-小型候选 Artifact。首个验收切片完全使用 Fake Runtime，不依赖真实模型、网站、MCP 或 Sandbox。
+小型候选 Artifact。首个业务验收切片完全使用 Fake Runtime；Deep Agents Adapter 切片随后使用
+`create_deep_agent`、Fake Chat Model 和确定性 Tool 验证同一 Thread 的原生多轮消息与压缩，两者都不
+依赖真实模型、网站、MCP 或 Sandbox。
 
 #### 需要学习和验证
 
 - Deep Agents 的运行模型、许可、精确版本和部署边界；
 - `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1` 的契约；
 - ContextSnapshot、PolicySnapshot、Checkpoint、Store 和 Workspace 的生命周期；
+- PostgreSQL 产品消息与 Deep Agents Runtime Message/摘要/Checkpoint 的双层所有权，以及正常 Turn
+  只追加新消息、Runtime 损坏时才受控重建的边界；
+- `create_deep_agent` 原生 summarization 和大型结果文件卸载；
 - Runtime 事件、Usage、错误、审批和 Artifact 的归一化；
 - ARQ、本系统 Run Control 与 SDK 内部重试/恢复的所有权；
 - Deep Agents Fake Model/Fake Runtime 的可测试集成；
@@ -1448,7 +1462,7 @@ Index 和指定 Review Evidence Matrix 回答第一轮，在第二轮继续同�
   → Runtime 读取受限 Paper Chunk 与 Review Evidence Matrix
   → 平台归一化 Event、Message、Evidence 引用和候选 Artifact
   → 第二条消息在同一 Session 创建新的 AgentTurnRun
-  → 复用同一 SDK Thread 语义并验证恢复
+  → 复用同一 SDK Thread，只追加新增消息并验证原生 Checkpoint/压缩恢复
 ```
 
 #### 阶段出口
@@ -1456,6 +1470,8 @@ Index 和指定 Review Evidence Matrix 回答第一轮，在第二轮继续同�
 - ADR-0001 与 ADR-0005 分别记录 Runtime 选型和交互式会话模型；本阶段集成 ADR 记录实验证据、版本、Provider、部署方式和失败项；
 - `ResearchAgentRuntime` 契约不泄漏具体 SDK 类型到 Domain 和公开 API；
 - AgentSession、AgentTurnRun 与 SDK Thread/Execution 有稳定映射，同一 Session 同时最多一个活动 Turn；
+- 真实 Adapter 使用 `create_deep_agent`，正常后续 Turn 不重放完整 PostgreSQL 历史，并通过强制触发
+  summarization 的离线测试证明原生上下文管理仍能完成第二轮；
 - 每轮 ContextSnapshot 和 PolicySnapshot 可审计，Project 索引与 Evidence Matrix 不被复制成 SDK 事实来源；
 - 临时文件、内部 WorkspaceSnapshot 与正式 Artifact 的生命周期分离，Sandbox 丢失后可重建允许跨 Turn 的工作文件；
 - SDK 事件被筛选并映射为版本化业务 Event，不保存完整思考过程和敏感输出；
@@ -1637,7 +1653,9 @@ Agent Extension 另需覆盖：
 
 Agent 产品形态和核心映射不再属于推迟项：ADR-0005 已固定 Project-scoped 持续研究对话、
 `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1`，以及每轮 ContextSnapshot 和
-PolicySnapshot。其余决定应基于 Phase 5 的真实实验和测试，而不是在尚未实现基础链路时猜测。
+PolicySnapshot。正常 Turn 只向同一 Thread 追加新消息、由 `create_deep_agent` 原生维护模型工作上下文也
+已固定；精确压缩阈值、Backend 路由和损坏重建协议仍由 Spike 决定。其余决定应基于 Phase 5 的真实实验
+和测试，而不是在尚未实现基础链路时猜测。
 
 ## 22. 完成定义
 
@@ -1668,6 +1686,8 @@ Demo-ready Core v1 完成需要同时满足：
 
 - 至少一个绑定 Project、可连续多轮交互并生成可追溯 Artifact 的研究用户故事端到端可运行；
 - Agent SDK 通过 `ResearchAgentRuntime` Adapter 接入，不污染 Domain 和公开 API；
+- Adapter 原生使用 `create_deep_agent` 的消息、Checkpoint、上下文压缩和文件卸载能力，正常多轮不从
+  PostgreSQL 重放完整产品历史；
 - AgentSession、Message、AgentTurnRun、SDK Thread/Execution、Workspace、Event 和 Artifact 的所有权清晰；
 - Agent 能以最小授权方式使用 Project Chunk Index 与 Review Evidence Matrix；
 - Browser、Tool、下载和代码执行受 Schema、权限、审批、预算、网络与资源策略限制；
@@ -1703,8 +1723,9 @@ Research Agent Extension 完成后，可以追加：
 > 在核心后端稳定后，我没有重新实现通用 Agent Harness，而是通过 `ResearchAgentRuntime` Adapter
 > 接入 Deep Agents。产品把持续研究对话建模为 Project-scoped AgentSession，并把每条用户消息建模为
 > 独立 AgentTurnRun；SDK Thread 与 Session 对应、一次 SDK Execution 与 Turn 对应。SDK 负责通用规划、
-> 工具编排和隔离 Workspace，本系统继续拥有 Message、Run、权限、Context Snapshot、Event、Evidence
-> 和 Artifact，因此开放式 Agent 可以安全复用项目索引、Evidence Matrix 与既有可靠执行能力。
+> 原生消息压缩、工具编排和隔离 Workspace，本系统继续拥有产品 Message、Run、权限、Context Snapshot、
+> Event、Evidence 和 Artifact。正常后续轮只向同一 Thread 追加新消息，因此既不重复实现 Agent Harness，
+> 又能让开放式 Agent 安全复用项目索引、Evidence Matrix 与既有可靠执行能力。
 
 后续追问应能够展开：
 

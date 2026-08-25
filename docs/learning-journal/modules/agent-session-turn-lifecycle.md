@@ -25,6 +25,11 @@ RunExecutionService
 Runtime 成功和 PostgreSQL 成功是两个阶段。最终事务发现 Run 已取消、已终态或闭包不一致时，不提交
 Assistant Message 或 candidate。
 
+切片 2 的 PostgreSQL Message 负责产品 UI、权限、幂等、审计和受控重建，并未承担模型 Prompt 管理。
+当前 `RuntimeTurnRequest` 每轮只传新用户消息和授权/策略快照；切片 4 的真实 Adapter 将复用同一 SDK
+Thread，让 `create_deep_agent` 原生 Message、Checkpoint、上下文压缩和文件卸载维护工作上下文，而不是
+每轮从产品消息表重放完整历史。
+
 ## 数据与不变量
 
 - `agent_sessions.next_message_sequence` 只作为数据库并发分配游标，不进入公开 Domain/API；Repository
@@ -62,6 +67,9 @@ import smoke 冒充分层覆盖；迁移在临时 PostgreSQL 18 上完成 upgrad
 切片 3。正式 Project Retriever/Matrix Reader/Citation Validator 属于切片 5。Deep Agents、MCP、
 Browser、Sandbox、WorkspaceSnapshot 和 Skills 均未接入。
 
+因此本切片证明的是业务事实和事务闭环可以保留，并不证明平台已经实现或取代 Deep Agents 的消息管理；
+原生两轮 Thread、Checkpoint 和 summarization 必须在切片 4 使用 Fake Chat Model 独立验证。
+
 ## 代码入口
 
 - `application/agent_session_service.py`
@@ -77,4 +85,5 @@ Browser、Sandbox、WorkspaceSnapshot 和 Skills 均未接入。
 和幂等事实，再由 Worker 事务外调用 Runtime。Runtime 成功后开启第二个短事务，重新锁定并校验 Run 和
 owner/Project/Session/Turn 闭包，才保存稳定 Binding、助手消息和 staged candidate。这样同一 Session 的
 两轮可以复用 Thread 语义，同时 PostgreSQL 仍掌握状态、权限和可恢复的对话历史；Runtime 成功不会被
-错误当成业务提交成功。
+错误当成业务提交成功。这里的产品消息历史不用于每轮重建 Prompt；真实 Adapter 将只追加新消息，并由
+`create_deep_agent` 原生维护 Runtime 上下文。

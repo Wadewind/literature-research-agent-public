@@ -56,6 +56,9 @@ Sandbox Lease      一个 Turn 或短 TTL 内的物理隔离环境，可重建�
   `WAITING_INPUT` 时只能提交与当前 Approval/Interrupt 对应的决定；
 - AgentSession 长期绑定 Project，但每个 Turn 固定自己的授权快照。Project 后续新增、移出或换版论文
   不改变历史 Turn；新 Turn 可以读取新的 Project 状态；
+- 正常后续 Turn 复用同一 SDK Thread，并只向 Deep Agents 追加本轮新用户消息。Deep Agents 原生负责
+  Runtime Message、Checkpoint、上下文压缩和大型结果卸载；平台不得在每轮从 PostgreSQL 重放完整历史，
+  也不以 `create_agent` 加自研中间件复制 `create_deep_agent` Harness；
 - Runtime 初始上下文只包含稳定 ID、计数和小型摘要。Paper Chunk、Evidence 和 Matrix 按需通过平台
   Tool 读取；owner、Project、Session、Run 和 ContextSnapshot 由服务端注入，不能由模型参数指定；
 - RAG Conversation 与 AgentSession 使用独立业务模型。Agent 复用 Phase 2 Retriever、Evidence 和
@@ -63,6 +66,8 @@ Sandbox Lease      一个 Turn 或短 TTL 内的物理隔离环境，可重建�
   Deep Agents 直接访问 Repository 或数据库；
 - PostgreSQL AgentMessage 是用户可恢复的产品对话事实。SDK Message 和 Checkpoint 负责 Runtime
   连续执行，但不能成为权限、消息历史、Usage、Approval、Event 或 Artifact 的唯一来源；
+- `ContextSnapshot.history_through_sequence` 是产品消息历史的审计与受控重建水位，不是每轮 Prompt
+  重放指令；Snapshot 不保存 Runtime Message、压缩摘要、Tool Observation 或 Graph State；
 - 高频 Assistant token、Browser 进度和 Sandbox 输出使用可丢失的临时流；Turn、Tool、Approval、
   Assistant Message、Artifact 和终态使用 PostgreSQL 中的版本化业务 Event。原始思考过程不进入任一
   用户可见流；
@@ -72,6 +77,8 @@ Sandbox Lease      一个 Turn 或短 TTL 内的物理隔离环境，可重建�
   产物经过平台校验后才提交为 Artifact；
 - Sandbox 文件系统是物理 Workspace，而不是宿主目录挂载。平台通过受控文件传输为其注入输入、取回
   Snapshot 或候选 Artifact；首版模型只看到受限文件工具，不看到 `execute`、Shell、包管理器或任意网络；
+- Deep Agents 的内置文件权限和文件工具 allowlist 只约束其文件工具表面；自定义 Tool、MCP Tool、
+  Sandbox `execute`、owner/Project、预算和副作用仍由平台 Policy、Tool Adapter 与应用服务校验；
 - Skills 只能来自平台版本化 Catalog，Session 绑定 `skill_id + version + content_hash + required
   capabilities`。用户不能上传任意 Skill、MCP Server、Tool 代码、Sandbox 镜像或系统 Prompt；包含
   脚本的 Skill 只能在满足其声明策略的隔离 Sandbox 中执行；

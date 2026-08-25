@@ -4,7 +4,8 @@
 
 进行中。Spec 初版日期：2026-08-20；按 ADR-0005 重构日期：2026-08-25；切片 1
 “契约与 Fake Runtime”于 2026-08-25 完成；切片 2“两轮离线业务闭环”于 2026-08-25
-完成实现、主智能体审查与独立验证。
+完成实现、主智能体审查与独立验证。2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
+上下文压缩、文件 Backend 与平台业务事实的所有权；该对齐不推翻切片 1/2 的实现。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -27,11 +28,11 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 创建绑定 Project 的 AgentSession
   → 用户发送第一条研究消息
   → 创建 AgentTurnRun + ContextSnapshot + PolicySnapshot
-  → Fake Runtime 读取授权的 Project Chunk 与 Review Evidence Matrix
+  → Fake Runtime 先验证业务引用和两轮闭环；后续 Deep Agents Adapter 通过平台 Tool 按需读取授权内容
   → 持久化筛选后的 Event、Assistant Message、Evidence 引用和候选 Artifact
   → 用户发送第二条消息
-  → 在同一 Session / SDK Thread 语义下创建新的 AgentTurnRun
-  → 基于前一轮业务历史继续分析并完成
+  → 在同一 Session 创建新的 AgentTurnRun，并复用同一 SDK Thread
+  → 只追加本轮新消息，由 Deep Agents 原生 Message/Checkpoint/压缩上下文继续分析并完成
 ```
 
 切片 2 已通过独立 API、PostgreSQL、Run/Event/Outbox、Worker 与 Fake Runtime 完成两轮离线闭环，
@@ -80,6 +81,10 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 ### AgentMessage
 
 - `sequence` 在 Session 内严格递增，用户与助手消息都显式关联产生该交互的 Turn Run。
+- PostgreSQL `AgentMessage` 是产品消息事实，服务于 UI、权限、稳定消息 ID、审计和 Runtime 损坏后的
+  受控重建；它不是每轮交给模型的 Prompt 缓冲区。
+- Deep Agents Message、摘要、Tool Observation 和 Checkpoint 是 Runtime 工作上下文。正常后续 Turn
+  复用同一 SDK Thread 并只追加本轮新用户消息，不从 PostgreSQL 重放完整产品历史。
 
 ### AgentTurnRun
 
@@ -94,10 +99,10 @@ Attempt、Event、Usage 和状态继续由通用 Run 聚合拥有，不在扩展
 
 ### ContextSnapshot 与 PolicySnapshot
 
-每轮开始时固化：
+每轮开始时固化授权与版本 Manifest：
 
 - owner、project_id、session_id、turn_run_id；
-- 用户消息和允许读取的历史消息范围；
+- 用户消息引用和产品消息历史审计/重建水位；
 - Project Index/ChunkSet 版本引用；
 - 明确选择的 Review Evidence Matrix `ReviewOutput.output_id`；
 - 允许读取的 Artifact 引用；
@@ -105,6 +110,9 @@ Attempt、Event、Usage 和状态继续由通用 Run 聚合拥有，不在扩展
 
 快照保存稳定 ID、版本和小型摘要，不复制论文全文、全部 Chunk、Evidence Matrix 大对象或 SDK State。
 运行时按快照引用通过受权应用 Port 读取内容，恢复不得静默扩大权限或切换到新版本上下文。
+`ContextSnapshot` 不保存 Runtime Message、压缩摘要、Tool Observation 或 Graph State，也不负责正常多轮
+Prompt 重建。`history_through_sequence` 只表示产品历史已提交到哪个 sequence，供审计、对账和 Runtime
+binding generation 损坏后的受控重建使用；它不是“每轮加载到模型”的指令。
 
 切片 1 已定稿 `ContextSnapshot` 的最小字段：
 `snapshot_id`、`schema_version`、`owner_id`、`project_id`、`session_id`、`turn_run_id`、
@@ -162,6 +170,11 @@ Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以�
 - 用户可见或可下载的正式产物才经过平台校验并提交为业务 Artifact；
 - SDK Store/Workspace 不能成为唯一持久化位置。
 
+Deep Agents 默认文件空间中的对话历史卸载、大型 Tool 结果和临时研究文件属于 Runtime 工作状态，不自动
+成为业务 Message、Evidence、WorkspaceSnapshot 或 Artifact。平台只持久化筛选后的产品事实；确需跨
+Turn 且不能仅依赖 Runtime Checkpoint 的内部文件才进入 WorkspaceSnapshot，正式用户产物仍需 staged、
+校验后提交为 Artifact。
+
 ## 与 Phase 2/3 的复用方式
 
 Agent 不直接复用 RAG Conversation 表，也不读取 Review LangGraph 内部 State，而是复用已验证的领域能力：
@@ -194,6 +207,10 @@ Artifact                     平台校验后持久化的业务文件
 
 - API 和 Worker 只能通过 `ResearchAgentRuntime` Port 操作 Deep Agents；
 - Domain、公开 API、业务 Event 和业务数据库类型不得暴露 Deep Agents SDK 类型；
+- 真实 Adapter 必须使用 `create_deep_agent` 原生 Harness 管理 Runtime Message、上下文压缩、文件卸载
+  和 Checkpoint；不得退化为 `create_agent` 加平台自研等价机制；
+- 同一 Session 的正常后续 Turn 只向同一 SDK Thread 追加本轮新用户消息；PostgreSQL 完整产品历史只在
+  Runtime 损坏或 binding generation 迁移时作为受控重建来源；
 - ARQ Job 只携带稳定 `turn_run_id`，不携带 Prompt、全文、SDK Thread 或 Workspace 内容；
 - 模型、MCP、Browser、下载和 Sandbox 调用不得发生在数据库事务中；
 - SDK 成功、Checkpoint 成功和 Workspace 文件存在均不等于业务 Turn 已提交成功；
@@ -333,6 +350,9 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 - 第一版只向模型暴露受限 `ls/read_file/write_file/edit_file/glob/grep` 等文件工具，不开放
   `execute`、Shell、宿主 Python、自动装包或任意网络；若所选 Sandbox Backend 会自动暴露 `execute`，
   必须由 `ResearchAgentRuntime` 内部的受限 Backend Adapter 隐藏或拒绝；
+- Deep Agents 文件权限和文件工具 allowlist 只约束内置文件工具，不能授权或保护自定义 Tool、MCP、
+  Sandbox `execute`、owner/Project、预算或副作用；这些边界继续由平台 Snapshot、Tool Adapter、应用服务
+  和审计事实执行；
 - Skill 只能由平台维护、版本化和 allowlist 启用；Skill 是提示与能力组合，不是权限边界；
 - 子 Agent 与长期 Memory 默认关闭，除非 Phase 6 通过新 ADR 明确开放。
 
@@ -360,7 +380,9 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 2. **两轮离线业务闭环（已完成）**：API → DB/Event/Outbox → Worker →
    Fake Runtime → Message/空 Evidence join/staged 候选 Artifact；
 3. **取消、恢复与对账**：覆盖重复 Job、Worker 崩溃、响应丢失、取消竞争和 Effectively Once；
-4. **Deep Agents Adapter**：固定依赖版本，用 Fake Chat Model 和确定性 Tool 验证 Thread/Execution/Checkpoint；
+4. **Deep Agents Adapter**：说明新增依赖及锁文件影响后固定版本；真实调用 `create_deep_agent`，用 Fake
+   Chat Model、确定性 Tool、StateBackend 与 PostgreSQL Checkpointer 验证同一 Thread 只追加新消息、
+   Execution/Checkpoint、原生上下文压缩和文件卸载；不接真实模型、Sandbox、MCP、长期 Memory 或子 Agent；
 5. **Project Research Context**：正式接入 Project Retriever、Review Evidence Matrix Reader 与 Citation Validator；
 6. **能力 Spike**：按 MCP → Browser/下载 → Sandbox 文件工具与 WorkspaceSnapshot → 平台 Skill 的顺序分别验证，不捆绑验收；
 7. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
@@ -371,7 +393,8 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 - **Domain/Application**：所有权、消息顺序、单活动 Turn、幂等、状态转换、快照不可变、取消和预算；
 - **Repository/Transaction**：Session/Message/Run/Event/Outbox 原子提交、唯一约束和并发条件更新；
 - **Runtime Contract**：同一行为套件覆盖 Fake Runtime 与 Deep Agents Adapter；
-- **Deep Agents**：Fake Chat Model + Fake Tool，默认不调用真实模型；
+- **Deep Agents**：Fake Chat Model + Fake Tool；同一 Thread 连续两轮只传新增消息，并通过可控低阈值至少
+  强制触发一次原生 summarization 后仍能完成第二轮；默认不调用真实模型；
 - **Context**：跨用户/Project 隔离、ChunkSet/Evidence Matrix 版本固定、token 限制和 Citation 校验；
 - **Workspace/Sandbox**：文件传入/取回、Snapshot 重建、跨 Turn 隔离、模型不可见 `execute`、超时和销毁；
 - **故障注入**：重复 Job、Worker 崩溃、Runtime 断连、成功响应丢失、提交前后崩溃和取消竞争；
@@ -405,6 +428,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
 - `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1` 有契约与恢复测试；
+- 正常后续 Turn 只追加新消息，Deep Agents 原生 Message/Checkpoint/压缩负责工作上下文，平台没有每轮
+  重放完整产品历史或复制 Agent Harness；
 - Deep Agents 只存在于 Adapter 内，Domain、API、Event 和业务表不泄漏 SDK 类型；
 - 每轮 ContextSnapshot/PolicySnapshot 可审计，Agent 可受限使用 Project Index 与指定 Evidence Matrix；
 - Session 单活动 Turn、消息顺序、取消、断连、Worker 崩溃和响应丢失均有实际验证；
@@ -444,6 +469,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Customization](https://docs.langchain.com/oss/python/deepagents/customization)
 - [Deep Agents Backends](https://docs.langchain.com/oss/python/deepagents/backends)
+- [Deep Agents Context Engineering](https://docs.langchain.com/oss/python/deepagents/context-engineering)
+- [Deep Agents Permissions](https://docs.langchain.com/oss/python/deepagents/permissions)
 - [Deep Agents Sandboxes](https://docs.langchain.com/oss/python/deepagents/sandboxes)
 - [Deep Agents Human-in-the-loop](https://docs.langchain.com/oss/python/deepagents/human-in-the-loop)
 - [LangChain MCP Adapter](https://docs.langchain.com/oss/python/langchain/mcp)

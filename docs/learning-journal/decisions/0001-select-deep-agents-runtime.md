@@ -16,7 +16,9 @@ Core Research Backend 先交付确定性的文献导入、RAG、引用校验和�
 
 ## 决策
 
-选择基于 LangGraph 的 Deep Agents 作为 Phase 5/6 的 Research Agent SDK，并通过项目自有的 `ResearchAgentRuntime` Port 接入。
+选择基于 LangGraph 的 Deep Agents 作为 Phase 5/6 的 Research Agent SDK，并通过项目自有的
+`ResearchAgentRuntime` Port 接入。真实 Adapter 使用 `create_deep_agent` 的原生 Harness，不以
+`create_agent` 加自研中间件复制其消息管理、上下文压缩、文件卸载和 Checkpoint 能力。
 
 选择它的主要原因是其能力方向与目标吻合：
 
@@ -28,10 +30,17 @@ Core Research Backend 先交付确定性的文献导入、RAG、引用校验和�
 ## 不变量与安全边界
 
 - PostgreSQL 中的业务 Run、Event、Evidence、Usage、Approval 和 Artifact 始终是产品事实来源；Deep Agents Thread、Checkpoint、Store 和 Workspace 只是 Runtime 内部状态。
+- PostgreSQL `AgentMessage` 保存用户可见、可授权和可恢复的产品对话事实；Deep Agents Message、摘要与
+  Checkpoint 保存模型工作上下文。正常后续 Turn 复用同一 Thread 并只追加本轮新消息，不从业务表重放
+  完整历史；只有 Runtime 损坏或 binding generation 迁移时才允许受控重建。
+- `ContextSnapshot` 是当前 Turn 的授权与版本 Manifest，只保存 Project/PaperVersion/ChunkSet、指定
+  ReviewOutput、Artifact 和产品消息历史水位等小型引用，不保存 Runtime Message、摘要或 Graph State。
 - Domain、公开 API 和业务数据库枚举不暴露 Deep Agents 类型；API 与 Worker 只依赖 `ResearchAgentRuntime`。
 - MCP Server、Tool、网络目标和 Sandbox 配置由平台白名单提供，用户不能提交任意配置。
 - `FilesystemBackend`、`LocalShellBackend` 或等价宿主执行能力不得用于生产 Agent。
 - 权限、预算、审批、超时、网络策略、输出限制和 Artifact 校验由平台执行；Prompt、MCP 或 SDK 本身不是安全边界。
+- Deep Agents 的文件权限只用于收窄内置文件工具，不能替代平台对自定义 Tool、MCP、Sandbox
+  `execute`、owner/Project、预算和副作用的校验。
 - Phase 5 默认关闭任意 Shell、子 Agent、长期 Memory 和开放网络，只验证一个固定研究故事。
 
 ## 后果
