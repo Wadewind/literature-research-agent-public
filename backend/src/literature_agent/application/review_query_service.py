@@ -66,13 +66,17 @@ class ReviewQueryService[TSession: Session]:
                 run_id, project_id, actor.owner_id
             )
 
-    async def output(self, actor, project_id, run_id, output_type):
+    async def output(self, actor, project_id, run_id, output_type, output_key):
         await self.detail(actor, project_id, run_id)
         async with self._session_factory() as session:
             outputs = await self._review_repo_factory(session).list_outputs_scoped(
                 run_id, project_id, actor.owner_id
             )
-            matches = [item for item in outputs if item.output_type is output_type]
+            matches = [
+                item
+                for item in outputs
+                if item.output_type is output_type and item.output_key == output_key
+            ]
             return max(matches, key=lambda item: item.version) if matches else None
 
     async def sections(self, actor, project_id, run_id):

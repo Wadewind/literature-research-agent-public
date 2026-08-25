@@ -42,6 +42,58 @@ async def test_list_reviews_returns_only_scoped_review_runs_in_stable_order() ->
     assert await service.list_reviews(ActorContext("user-2"), "project-1") == []
 
 
+async def test_output_selects_canonical_key_before_version() -> None:
+    """单篇中间 Output 的高版本不能覆盖 Review 的聚合 Matrix。"""
+    reviews = FakeReviewRepository()
+    run = create_run("project-1", "user-1", RunType.REVIEW)
+    reviews.review_runs[run.run_id] = create_review_run(
+        run_id=run.run_id,
+        research_question="研究问题",
+        workflow_version="review.v1",
+        model_profile_version="review-default.v1",
+        prompt_versions={"evidence_extract": "review-evidence-extraction.v1"},
+        config_snapshot={"source_limit": 10},
+    )
+    reviews.authorize_run(run.run_id, "project-1", "user-1")
+    runs = FakeRunRepository()
+    await runs.add(run)
+    aggregate = create_review_output(
+        review_run_id=run.run_id,
+        output_type=ReviewOutputType.EVIDENCE_MATRIX,
+        output_key="evidence-matrix",
+        version=1,
+        schema_version="evidence-matrix.v1",
+        payload={"rows": [], "summary": {"valid_papers": 1}},
+        idempotency_key="matrix:aggregate:1",
+    )
+    per_paper = create_review_output(
+        review_run_id=run.run_id,
+        output_type=ReviewOutputType.EVIDENCE_MATRIX,
+        output_key="paper:source-1",
+        version=2,
+        schema_version="evidence-matrix.v1",
+        payload={"rows": [], "summary": {"valid_papers": 999}},
+        idempotency_key="matrix:paper:2",
+    )
+    reviews.outputs.extend([aggregate, per_paper])
+    service = ReviewQueryService(
+        session_factory=fake_session,
+        run_repo_factory=lambda _session: runs,
+        review_repo_factory=lambda _session: reviews,
+        storage=FakeStorage(),
+    )
+
+    selected = await service.output(
+        ActorContext("user-1"),
+        "project-1",
+        run.run_id,
+        ReviewOutputType.EVIDENCE_MATRIX,
+        "evidence-matrix",
+    )
+
+    assert selected == aggregate
+
+
 async def test_sections_returns_latest_version_per_key_in_stable_order() -> None:
     reviews = FakeReviewRepository()
     run = create_run("project-1", "user-1", RunType.REVIEW)

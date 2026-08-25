@@ -42,6 +42,7 @@ class _Workflow:
 
 class _Query:
     def __init__(self) -> None:
+        self.output_calls = []
         self.output_value = create_review_output(
             review_run_id="review-1",
             output_type=ReviewOutputType.EVIDENCE_MATRIX,
@@ -52,10 +53,15 @@ class _Query:
             idempotency_key="matrix",
         )
 
-    async def output(self, actor, project_id, run_id, output_type):
+    async def output(self, actor, project_id, run_id, output_type, output_key):
+        self.output_calls.append((output_type, output_key))
         if actor.owner_id != "user-1" or project_id != "project-1" or run_id != "review-1":
             raise RunNotFoundError(run_id)
-        return self.output_value if output_type is ReviewOutputType.EVIDENCE_MATRIX else None
+        return (
+            self.output_value
+            if output_type is ReviewOutputType.EVIDENCE_MATRIX and output_key == "evidence-matrix"
+            else None
+        )
 
     @staticmethod
     def _scope(actor, project_id, run_id):
@@ -221,15 +227,20 @@ def test_list_reviews_is_project_scoped(client) -> None:
 
 
 def test_matrix_is_project_scoped_and_missing_outline_is_404(client) -> None:
-    test_client, *_ = client
+    test_client, query, *_ = client
     response = test_client.get("/api/v1/projects/project-1/reviews/review-1/evidence-matrix")
     assert response.status_code == 200
     assert response.json()["payload"] == {"rows": []}
+    assert query.output_calls[-1] == (
+        ReviewOutputType.EVIDENCE_MATRIX,
+        "evidence-matrix",
+    )
 
     hidden = test_client.get("/api/v1/projects/other/reviews/review-1/evidence-matrix")
     assert hidden.status_code == 404
     outline = test_client.get("/api/v1/projects/project-1/reviews/review-1/outline")
     assert outline.status_code == 404
+    assert query.output_calls[-1] == (ReviewOutputType.OUTLINE, "outline")
 
 
 def test_outline_input_passes_request_and_output_versions(client) -> None:

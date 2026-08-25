@@ -191,9 +191,9 @@ async def list_sources(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Review 不存在") from None
 
 
-async def _output(project_id, run_id, actor, query, kind):
+async def _output(project_id, run_id, actor, query, kind, output_key):
     try:
-        output = await query.output(actor, project_id, run_id, kind)
+        output = await query.output(actor, project_id, run_id, kind, output_key)
     except RunNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Review 不存在") from None
     if output is None:
@@ -205,12 +205,19 @@ async def _output(project_id, run_id, actor, query, kind):
 async def evidence_matrix(
     project_id: str, run_id: str, actor: ActorDep, query: ReviewQueryDep
 ) -> dict:
-    return await _output(project_id, run_id, actor, query, ReviewOutputType.EVIDENCE_MATRIX)
+    return await _output(
+        project_id,
+        run_id,
+        actor,
+        query,
+        ReviewOutputType.EVIDENCE_MATRIX,
+        "evidence-matrix",
+    )
 
 
 @router.get("/{run_id}/outline")
 async def outline(project_id: str, run_id: str, actor: ActorDep, query: ReviewQueryDep) -> dict:
-    return await _output(project_id, run_id, actor, query, ReviewOutputType.OUTLINE)
+    return await _output(project_id, run_id, actor, query, ReviewOutputType.OUTLINE, "outline")
 
 
 @router.get("/{run_id}/sections")
