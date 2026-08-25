@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from arq.connections import RedisSettings
 from arq.worker import func, run_worker
 
+from literature_agent.application.agent_turn_executor import AgentTurnExecutor
 from literature_agent.application.arxiv_import_service import ArxivProjectImportService
 from literature_agent.application.evidence_service import EvidenceService
 from literature_agent.application.indexing_executor import IndexingExecutor
@@ -54,6 +55,9 @@ from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
+from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
+    FakeResearchAgentRuntime,
+)
 from literature_agent.infrastructure.arxiv import HttpxArxivGateway
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.fake_arxiv import FixtureArxivGateway
@@ -71,6 +75,9 @@ from literature_agent.infrastructure.parsing.fake_parser import (
 )
 from literature_agent.infrastructure.parsing.fallback_parser import FallbackDocumentParser
 from literature_agent.infrastructure.parsing.pypdf_parser import PypdfDocumentParser
+from literature_agent.infrastructure.persistence.agent_repository import (
+    SqlalchemyAgentRepository,
+)
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
 )
@@ -552,6 +559,15 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         export_service=export_service,
         checkpoint_store=PostgresCheckpointStore(settings.database_url),
     )
+    # Phase 5 切片 2：仅验证离线业务包装，尚未接入 Deep Agents Adapter。
+    agent_turn_executor = AgentTurnExecutor(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        runtime=FakeResearchAgentRuntime(),
+        event_notifier=event_notifier,
+    )
     dispatcher = RunDispatcher(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -561,6 +577,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
             RunType.INDEXING: indexing_executor.execute,
             RunType.RAG_ANSWER: rag_answer_executor.execute,
             RunType.REVIEW: review_executor.execute,
+            RunType.AGENT_TURN: agent_turn_executor.execute,
         },
         event_notifier=event_notifier,
     )

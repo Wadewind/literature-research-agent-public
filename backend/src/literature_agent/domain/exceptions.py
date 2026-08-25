@@ -182,6 +182,38 @@ class ConversationBusyError(Exception):
         super().__init__(f"Conversation {conversation_id} 已有进行中的回答")
 
 
+class AgentSessionNotFoundError(Exception):
+    """AgentSession 不存在或当前 actor 无权访问。"""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(f"AgentSession {session_id} 不存在")
+
+
+class AgentSessionBusyError(Exception):
+    """AgentSession 已有未完成 Turn。"""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(f"AgentSession {session_id} 已有进行中的 Turn")
+
+
+class AgentReviewOutputNotFoundError(Exception):
+    """指定 Evidence Matrix 不属于当前 owner/Project。"""
+
+    def __init__(self, output_id: str) -> None:
+        self.output_id = output_id
+        super().__init__(f"ReviewOutput {output_id} 不存在")
+
+
+class AgentTurnNotFoundError(Exception):
+    """AgentTurnRun 不存在或当前 actor 无权访问。"""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"AgentTurnRun {run_id} 不存在")
+
+
 class ProjectNotIndexedError(Exception):
     """提问范围内没有任何 ready ChunkSet，快速失败。"""
 

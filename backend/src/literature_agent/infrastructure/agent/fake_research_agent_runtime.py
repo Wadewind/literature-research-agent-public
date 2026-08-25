@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntimeError,
+    RuntimeArtifactCandidate,
     RuntimeErrorKind,
     RuntimeEvent,
     RuntimeEventKind,
@@ -206,9 +207,20 @@ class FakeResearchAgentRuntime:
             runtime_execution_id=_opaque_id("execution", request.turn_run_id),
             runtime_checkpoint_id=_opaque_id("checkpoint", request.turn_run_id),
         )
+        content_hash = hashlib.sha256(f"fake-candidate:{request.turn_run_id}".encode()).hexdigest()
         result = RuntimeTurnResult(
             turn_run_id=request.turn_run_id,
             assistant_content=self._response_for(request),
+            artifact_candidates=(
+                RuntimeArtifactCandidate(
+                    candidate_id=_opaque_id("candidate", request.turn_run_id),
+                    name="research-note.md",
+                    media_type="text/markdown",
+                    content_ref=f"fake-staged://{request.turn_run_id}/research-note.md",
+                    content_hash=content_hash,
+                    size_bytes=128,
+                ),
+            ),
         )
         final_kind = (
             RuntimeEventKind.INTERRUPTED

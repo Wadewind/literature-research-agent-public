@@ -46,9 +46,9 @@ Run 已经提交；该事务闭环属于后续切片。
   `policy_snapshot_id`；
 - `claim_active_turn` 只允许一个活动 Turn，同一 `turn_run_id` 重复认领幂等；
 - `create_agent_message` 根据调用方从持久化 Session 锁定后取得的 `last_sequence` 唯一生成下一序号；
-  数据库条件更新和唯一约束尚未实现；
+  切片 2 已使用 Session 行锁分配 sequence，并以数据库唯一约束兜底；
 - `AgentMessage.idempotency_key` 是消息提交的稳定幂等事实；相同提交不能生成第二条消息或第二个 Turn；
-  `sequence` 的数据库并发保证仍留在切片 2 的事务、条件更新和唯一约束中；
+  切片 2 已实现对应事务、条件更新和唯一约束；
 - `AgentTurnRun` 只保存通用 Run 与 Session、用户 Message、两个 Snapshot 的稳定关联；通用 Run 新增
   `run_type=agent_turn`，未修改状态机；
 - `ContextSnapshot` 固化 owner/Project/Session/Turn、用户消息、历史边界、Paper/PaperVersion/ChunkSet、
@@ -63,7 +63,7 @@ Run 已经提交；该事务闭环属于后续切片。
 - Runtime 重置/升级可创建新 `binding_id` 并递增 generation，旧映射留作审计；Fake 当前只验证固定
   generation 1；
 - Binding 只使用项目字符串 DTO 保存 opaque ID，不导入或公开 Deep Agents/LangGraph 类型；
-- 上述均为领域/Port 字段，表名、数据库映射、索引与约束在切片 2 随迁移定稿。
+- 上述均为领域/Port 字段；切片 2 已完成专用表、数据库映射、索引与约束。
 
 ## Fake Runtime 语义
 
@@ -98,8 +98,9 @@ Fake 不调用模型、网络、MCP、Browser 或 Sandbox，不读取环境密�
 `CANCELLED` 表示取消条件已成立。是否创建新 Attempt、何时从 `retry_wait` 恢复以及如何提交业务终态仍由
 平台 Run/Application Service 决定，Runtime 不能自行修改 PostgreSQL 事实。
 
-Fake 的重复执行只验证内存中的逻辑去重和稳定 ID。跨进程响应丢失、Worker 崩溃、数据库提交前后故障、
-Tool/Artifact 副作用去重将在切片 2/3 通过 Repository、Outbox 和故障注入测试验证。
+Fake 的重复执行只验证内存中的逻辑去重和稳定 ID。切片 2 已验证正常成功路径中独立 Runtime 调用与
+业务结果事务、稳定 Binding 和 staged candidate；跨进程响应丢失、Worker 崩溃、数据库提交前后故障、
+Tool/Artifact 副作用去重仍留给切片 3 的故障注入测试。
 
 ## 安全和可观测性
 
@@ -129,11 +130,27 @@ Secret 和大型 Tool 输出。
 - `backend/tests/application/test_research_agent_runtime_contract.py`
 - `backend/tests/infrastructure/test_fake_research_agent_runtime.py`
 
+## 切片 2 落地补充
+
+- Port 仍保持五方法且未泄漏 SDK 类型；Worker 生产装配暂时注册完全离线的
+  `FakeResearchAgentRuntime`，明确不是 Deep Agents 生产 Adapter；
+- Fake 成功结果确定性包含一个 Markdown candidate descriptor；相同 Turn 重复结果保持相同 ID、哈希、
+  大小、MIME 与 `content_ref`；
+- `agent_artifact_candidates` 只保存 staged 元数据，与 Review `artifacts` 完全分离；
+- Runtime candidate 先经领域边界校验；相同 Turn/hash 只有稳定 scope/元数据完全一致才可收敛，跨
+  Turn/owner 的 candidate ID 碰撞按并发修改拒绝，不能借 Runtime ID 绕过平台作用域；
+- Session Binding 重放按请求的 `(session_id, generation)` 精确收敛，不读取“当前最新”代替历史事实；
+- Runtime execute/reconcile/collect 全部在数据库事务外，成功结果通过新的短事务提交；提交前重新锁定并
+  检查业务 Run 仍为 RUNNING，Runtime 成功不直接等同业务成功；
+- 每个普通 Turn 显式绑定且校验具体 Evidence Matrix `ReviewOutput.output_id`，并固化当前 READY
+  ChunkSet 引用；Fake 尚不读取其正文。
+
 ## 已知限制
 
-- 没有数据库表、迁移、Repository、API、Worker、Event/Outbox 或真实事务；
-- 没有读取 Project Chunk、Evidence Matrix 或 Artifact，只有稳定授权引用；
-- 没有 Artifact staged/commit、Citation 校验或业务结果提交；
+- 已有数据库、API、Worker 和正常两轮事务闭环，但没有跨进程 Fake 状态或故障注入对账；
+- 没有读取 Project Chunk、Evidence Matrix 或正式 Artifact，只有已授权稳定引用；
+- 只有 Artifact candidate staged，没有文件 Storage、正式 Artifact commit 或下载；
+- Fake 不返回 Evidence，当前 Agent Evidence join 为空；
 - 没有接入 Deep Agents、LangGraph Checkpoint、MCP、Browser、Sandbox、WorkspaceSnapshot 或 Skill；
 - Fake 状态位于进程内，不能作为跨进程恢复证据；
 - 尚未验证取消与真实在途模型/Tool 调用的竞争。

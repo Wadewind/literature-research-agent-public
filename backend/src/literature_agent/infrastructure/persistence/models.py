@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -22,6 +23,211 @@ from sqlalchemy.schema import Computed
 
 class Base(DeclarativeBase):
     """ORM 基类。"""
+
+
+class AgentSessionORM(Base):
+    """绑定 owner/Project 的持续 Agent 会话。"""
+
+    __tablename__ = "agent_sessions"
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    active_turn_run_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "agent_turn_runs.turn_run_id",
+            use_alter=True,
+            name="fk_agent_sessions_active_turn",
+        ),
+        nullable=True,
+    )
+    next_message_sequence: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("status IN ('active','closed')", name="ck_agent_sessions_status"),
+    )
+
+
+class AgentMessageORM(Base):
+    """Session 内有序的用户/助手业务消息。"""
+
+    __tablename__ = "agent_messages"
+    message_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), index=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("sequence >= 1", name="ck_agent_messages_sequence"),
+        CheckConstraint("role IN ('user','assistant')", name="ck_agent_messages_role"),
+        UniqueConstraint("session_id", "sequence", name="uq_agent_messages_session_sequence"),
+        UniqueConstraint(
+            "session_id", "idempotency_key", name="uq_agent_messages_session_idempotency"
+        ),
+    )
+
+
+class AgentTurnRunORM(Base):
+    """通用 Run 的 Agent Turn 一对一扩展。"""
+
+    __tablename__ = "agent_turn_runs"
+    turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    user_message_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "agent_messages.message_id",
+            use_alter=True,
+            name="fk_agent_turn_runs_user_message",
+        ),
+        unique=True,
+        nullable=False,
+    )
+    context_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "agent_context_snapshots.snapshot_id",
+            use_alter=True,
+            name="fk_agent_turn_runs_context_snapshot",
+        ),
+        unique=True,
+        nullable=False,
+    )
+    policy_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "agent_policy_snapshots.snapshot_id",
+            use_alter=True,
+            name="fk_agent_turn_runs_policy_snapshot",
+        ),
+        unique=True,
+        nullable=False,
+    )
+
+
+class AgentContextSnapshotORM(Base):
+    """不可变的 Turn 授权上下文引用。"""
+
+    __tablename__ = "agent_context_snapshots"
+    snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), unique=True, nullable=False)
+    user_message_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "agent_messages.message_id",
+            use_alter=True,
+            name="fk_agent_context_snapshots_user_message",
+        ),
+        nullable=False,
+    )
+    history_through_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_index_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
+    review_output_id: Mapped[str] = mapped_column(
+        ForeignKey("review_outputs.output_id"), nullable=False
+    )
+    artifact_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AgentPolicySnapshotORM(Base):
+    """不可变的 Turn 能力策略。"""
+
+    __tablename__ = "agent_policy_snapshots"
+    snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    policy_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), unique=True, nullable=False)
+    allowed_tool_names: Mapped[list] = mapped_column(JSONB, nullable=False)
+    allowed_skill_names: Mapped[list] = mapped_column(JSONB, nullable=False)
+    network_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    sandbox_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    max_model_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AgentRuntimeSessionBindingORM(Base):
+    """业务 Session 到 opaque Runtime Thread/Workspace 的映射。"""
+
+    __tablename__ = "agent_runtime_session_bindings"
+    binding_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    runtime_thread_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    runtime_workspace_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    __table_args__ = (
+        CheckConstraint("generation >= 1", name="ck_agent_runtime_session_generation"),
+        UniqueConstraint("session_id", "generation", name="uq_agent_runtime_session_generation"),
+    )
+
+
+class AgentRuntimeTurnBindingORM(Base):
+    """业务 Turn 到 opaque Runtime Execution/Checkpoint 的映射。"""
+
+    __tablename__ = "agent_runtime_turn_bindings"
+    turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), primary_key=True
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    session_binding_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runtime_session_bindings.binding_id"), nullable=False
+    )
+    runtime_execution_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    runtime_checkpoint_id: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class AgentArtifactCandidateORM(Base):
+    """Runtime 候选产物；不是正式 Artifact。"""
+
+    __tablename__ = "agent_artifact_candidates"
+    candidate_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_ref: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("size_bytes BETWEEN 0 AND 1000000", name="ck_agent_candidate_size"),
+        CheckConstraint("status = 'staged'", name="ck_agent_candidate_status"),
+        UniqueConstraint("turn_run_id", "content_hash", name="uq_agent_candidate_turn_hash"),
+    )
 
 
 class ProjectORM(Base):

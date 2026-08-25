@@ -141,6 +141,12 @@ class ReviewRepository(Protocol):
         """列出有权访问的 ReviewOutput。"""
         ...
 
+    async def get_output_scoped(
+        self, output_id: str, project_id: str, owner_id: str
+    ) -> ReviewOutput | None:
+        """按 output_id 读取当前 owner/Project 的 ReviewOutput。"""
+        ...
+
     async def list_latest_section_outputs_scoped(
         self, run_id: str, project_id: str, owner_id: str
     ) -> list[ReviewOutput]:

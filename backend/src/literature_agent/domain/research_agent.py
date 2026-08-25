@@ -11,6 +11,11 @@ from uuid import uuid4
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _AGENT_TITLE_MAX_LENGTH = 200
 _AGENT_MESSAGE_MAX_LENGTH = 16_000
+_AGENT_CANDIDATE_ID_MAX_LENGTH = 255
+_AGENT_CANDIDATE_NAME_MAX_LENGTH = 255
+_AGENT_CANDIDATE_MEDIA_TYPE_MAX_LENGTH = 255
+_AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
+_AGENT_CANDIDATE_MAX_SIZE_BYTES = 1_000_000
 
 
 class AgentSessionStatus(StrEnum):
@@ -25,6 +30,12 @@ class AgentMessageRole(StrEnum):
 
     USER = "user"
     ASSISTANT = "assistant"
+
+
+class AgentArtifactCandidateStatus(StrEnum):
+    """Runtime 候选产物状态；切片 2 只允许 staged。"""
+
+    STAGED = "staged"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +75,46 @@ class AgentTurnRun:
     user_message_id: str
     context_snapshot_id: str
     policy_snapshot_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AgentArtifactCandidate:
+    """尚未成为正式 Artifact 的小型候选元数据。"""
+
+    candidate_id: str
+    owner_id: str
+    project_id: str
+    session_id: str
+    turn_run_id: str
+    name: str
+    media_type: str
+    content_ref: str
+    content_hash: str
+    size_bytes: int
+    status: AgentArtifactCandidateStatus
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_non_empty(
+            candidate_id=self.candidate_id,
+            owner_id=self.owner_id,
+            project_id=self.project_id,
+            session_id=self.session_id,
+            turn_run_id=self.turn_run_id,
+            name=self.name,
+            media_type=self.media_type,
+            content_ref=self.content_ref,
+        )
+        _require_max_length(
+            candidate_id=(self.candidate_id, _AGENT_CANDIDATE_ID_MAX_LENGTH),
+            name=(self.name, _AGENT_CANDIDATE_NAME_MAX_LENGTH),
+            media_type=(self.media_type, _AGENT_CANDIDATE_MEDIA_TYPE_MAX_LENGTH),
+            content_ref=(self.content_ref, _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH),
+        )
+        if not _SHA256_PATTERN.fullmatch(self.content_hash):
+            raise ValueError("AgentArtifactCandidate content_hash 必须是小写 SHA-256")
+        if not 0 <= self.size_bytes <= _AGENT_CANDIDATE_MAX_SIZE_BYTES:
+            raise ValueError("AgentArtifactCandidate size_bytes 必须在 0..1_000_000 范围内")
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +334,66 @@ def create_agent_turn_run(
     )
 
 
+def create_agent_artifact_candidate(
+    *,
+    candidate_id: str,
+    owner_id: str,
+    project_id: str,
+    session_id: str,
+    turn_run_id: str,
+    name: str,
+    media_type: str,
+    content_ref: str,
+    content_hash: str,
+    size_bytes: int,
+) -> AgentArtifactCandidate:
+    """校验不可信 Runtime descriptor 并创建 staged 候选业务事实。"""
+    return AgentArtifactCandidate(
+        candidate_id=candidate_id,
+        owner_id=owner_id,
+        project_id=project_id,
+        session_id=session_id,
+        turn_run_id=turn_run_id,
+        name=name,
+        media_type=media_type,
+        content_ref=content_ref,
+        content_hash=content_hash,
+        size_bytes=size_bytes,
+        status=AgentArtifactCandidateStatus.STAGED,
+        created_at=datetime.now(UTC),
+    )
+
+
+def same_agent_artifact_candidate_fact(
+    left: AgentArtifactCandidate,
+    right: AgentArtifactCandidate,
+) -> bool:
+    """比较可幂等收敛的稳定候选事实；忽略 Runtime ID 和创建时间。"""
+    return (
+        left.owner_id,
+        left.project_id,
+        left.session_id,
+        left.turn_run_id,
+        left.name,
+        left.media_type,
+        left.content_ref,
+        left.content_hash,
+        left.size_bytes,
+        left.status,
+    ) == (
+        right.owner_id,
+        right.project_id,
+        right.session_id,
+        right.turn_run_id,
+        right.name,
+        right.media_type,
+        right.content_ref,
+        right.content_hash,
+        right.size_bytes,
+        right.status,
+    )
+
+
 def create_context_snapshot(
     *,
     owner_id: str,
@@ -423,6 +534,12 @@ def _require_non_empty(**values: str) -> None:
     for name, value in values.items():
         if not value.strip():
             raise ValueError(f"{name} 不能为空")
+
+
+def _require_max_length(**values: tuple[str, int]) -> None:
+    for name, (value, maximum) in values.items():
+        if len(value) > maximum:
+            raise ValueError(f"{name} 长度不能超过 {maximum}")
 
 
 def _reject_duplicate_refs(refs: tuple[object, ...], label: str) -> None:

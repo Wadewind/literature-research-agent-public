@@ -1,0 +1,113 @@
+"""AgentSessionService 的真实行为与原子 bundle 测试。"""
+
+import pytest
+
+from literature_agent.domain.exceptions import (
+    AgentReviewOutputNotFoundError,
+    AgentSessionBusyError,
+)
+from literature_agent.infrastructure.persistence.agent_repository import (
+    SqlalchemyAgentRepository,
+)
+from literature_agent.infrastructure.persistence.event_repository import (
+    SqlalchemyEventRepository,
+)
+from literature_agent.infrastructure.persistence.outbox_repository import (
+    SqlalchemyOutboxRepository,
+)
+from literature_agent.infrastructure.persistence.run_repository import SqlalchemyRunRepository
+from tests.fakes.agent_scenario import make_agent_service, seed_agent_scenario
+from tests.integration.conftest import db_engine as db_engine
+
+
+@pytest.mark.asyncio
+async def test_post_message_commits_one_scoped_bundle_and_replays_idempotently(
+    db_engine,
+) -> None:
+    """消息、Run、Snapshot、Event、Outbox 必须同事务出现且同键不重复。"""
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    agent_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title="应用行为"
+    )
+
+    first = await service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="分析第一轮",
+        review_output_id=scenario.matrix.output_id,
+        idempotency_key="application-turn-1",
+        correlation_id="application-1",
+    )
+    replay = await service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="分析第一轮",
+        review_output_id=scenario.matrix.output_id,
+        idempotency_key="application-turn-1",
+        correlation_id="application-replay",
+    )
+
+    assert replay == first
+    with pytest.raises(AgentSessionBusyError):
+        await service.post_message(
+            scenario.actor,
+            agent_session.session_id,
+            content="不能并发第二轮",
+            review_output_id=scenario.matrix.output_id,
+            idempotency_key="application-turn-busy",
+            correlation_id="application-busy",
+        )
+    async with scenario.factory() as session:
+        agent_repo = SqlalchemyAgentRepository(session)
+        messages = await agent_repo.list_messages_scoped(
+            agent_session.session_id, scenario.actor.owner_id
+        )
+        turn = await agent_repo.get_turn_scoped(first.run_id, scenario.actor.owner_id)
+        run = await SqlalchemyRunRepository(session).get_by_id(first.run_id)
+        events = await SqlalchemyEventRepository(session).list_by_run(first.run_id)
+        outbox = await SqlalchemyOutboxRepository(session).get_by_run_id(first.run_id)
+        assert len(messages) == 1
+        assert turn is not None and run is not None and outbox is not None
+        assert [event.event_type for event in events] == [
+            "run_created",
+            "agent_message_accepted",
+        ]
+        context = await agent_repo.get_context_snapshot(turn.context_snapshot_id)
+        assert context is not None
+        assert context.review_output_id == scenario.matrix.output_id
+        assert context.project_index_refs[0].chunk_set_id == scenario.chunk_set_id
+
+
+@pytest.mark.asyncio
+async def test_post_message_rejects_unscoped_review_before_writing_bundle(db_engine) -> None:
+    """不存在或越权 Matrix 不得留下 User Message、Run 或 active Turn。"""
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    agent_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title=None
+    )
+
+    with pytest.raises(ValueError, match="Idempotency-Key"):
+        await service.post_message(
+            scenario.actor,
+            agent_session.session_id,
+            content="不会提交",
+            review_output_id=scenario.matrix.output_id,
+            idempotency_key="   ",
+            correlation_id="application-blank-key",
+        )
+
+    with pytest.raises(AgentReviewOutputNotFoundError):
+        await service.post_message(
+            scenario.actor,
+            agent_session.session_id,
+            content="越权 Matrix",
+            review_output_id="00000000-0000-0000-0000-000000000000",
+            idempotency_key="application-bad-matrix",
+            correlation_id="application-bad-matrix",
+        )
+
+    assert await service.list_messages(scenario.actor, agent_session.session_id) == []
+    loaded = await service.get_session(scenario.actor, agent_session.session_id)
+    assert loaded.active_turn_run_id is None

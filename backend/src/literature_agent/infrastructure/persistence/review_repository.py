@@ -595,6 +595,23 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return [_output_to_domain(x) for x in result.scalars().all()]
 
+    async def get_output_scoped(
+        self, output_id: str, project_id: str, owner_id: str
+    ) -> ReviewOutput | None:
+        """沿 Output → ReviewRun → Run 校验 owner/Project 闭包。"""
+        result = await self._session.execute(
+            select(ReviewOutputORM)
+            .join(ReviewRunORM, ReviewRunORM.run_id == ReviewOutputORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                ReviewOutputORM.output_id == output_id,
+                RunORM.project_id == project_id,
+                RunORM.owner_id == owner_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        return _output_to_domain(row) if row else None
+
     async def list_latest_section_outputs_scoped(
         self, run_id: str, project_id: str, owner_id: str
     ) -> list[ReviewOutput]:

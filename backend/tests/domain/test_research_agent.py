@@ -12,6 +12,7 @@ from literature_agent.domain.research_agent import (
     RuntimeSessionBinding,
     RuntimeTurnBinding,
     claim_active_turn,
+    create_agent_artifact_candidate,
     create_agent_message,
     create_agent_session,
     create_agent_turn_run,
@@ -247,6 +248,67 @@ def test_runtime_binding_rejects_invalid_generation_or_empty_session_binding_ref
             runtime_execution_id="opaque-execution",
             runtime_checkpoint_id="opaque-checkpoint",
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("candidate_id", "", "candidate_id"),
+        ("candidate_id", "c" * 256, "candidate_id"),
+        ("name", " ", "name"),
+        ("name", "n" * 256, "name"),
+        ("media_type", "", "media_type"),
+        ("media_type", "m" * 256, "media_type"),
+        ("content_ref", "", "content_ref"),
+        ("content_ref", "r" * 501, "content_ref"),
+        ("content_hash", "bad", "SHA-256"),
+        ("size_bytes", -1, "size_bytes"),
+        ("size_bytes", 1_000_001, "size_bytes"),
+    ],
+)
+def test_artifact_candidate_rejects_unbounded_or_invalid_runtime_metadata(
+    field: str,
+    value: str | int,
+    message: str,
+) -> None:
+    """不可信 Runtime descriptor 必须先通过领域边界再进入结果事务。"""
+    values: dict[str, str | int] = {
+        "candidate_id": "candidate-1",
+        "name": "notes.md",
+        "media_type": "text/markdown",
+        "content_ref": "runtime://candidate-1",
+        "content_hash": "a" * 64,
+        "size_bytes": 12,
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        create_agent_artifact_candidate(
+            owner_id="owner-1",
+            project_id="project-1",
+            session_id="session-1",
+            turn_run_id="turn-1",
+            **values,  # type: ignore[arg-type]
+        )
+
+
+def test_artifact_candidate_accepts_boundary_sizes() -> None:
+    """候选元数据允许空文件和切片 2 上限内的小型文件描述。"""
+    for size_bytes in (0, 1_000_000):
+        candidate = create_agent_artifact_candidate(
+            candidate_id=f"candidate-{size_bytes}",
+            owner_id="owner-1",
+            project_id="project-1",
+            session_id="session-1",
+            turn_run_id="turn-1",
+            name="notes.md",
+            media_type="text/markdown",
+            content_ref="runtime://notes",
+            content_hash="a" * 64,
+            size_bytes=size_bytes,
+        )
+
+        assert candidate.size_bytes == size_bytes
 
 
 def test_agent_turn_is_a_supported_run_type_without_changing_state_machine() -> None:

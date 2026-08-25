@@ -219,6 +219,17 @@ class FakeReviewRepository(ReviewRepository):
             return []
         return [x for x in self.outputs if x.review_run_id == run_id]
 
+    async def get_output_scoped(
+        self, output_id: str, project_id: str, owner_id: str
+    ) -> ReviewOutput | None:
+        """按 output_id 与授权闭包读取 Output。"""
+        output = next((x for x in self.outputs if x.output_id == output_id), None)
+        if output is None or not self._visible(
+            output.review_run_id, project_id, owner_id
+        ):
+            return None
+        return output
+
     async def list_latest_section_outputs_scoped(
         self, run_id: str, project_id: str, owner_id: str
     ) -> list[ReviewOutput]:
