@@ -44,3 +44,9 @@ Playwright 又从浏览器验证同一核心旅程、取消、归档和刷新恢
 证据边界和候选修复持续记录在 [Phase 4 Real 模式体验缺陷台账](reports/phase-04-real-mode-defect-log.md)。
 该阶段明确面向本地演示开发环境，
 不包含公网认证、备份恢复、永久删除/GC、OpenTelemetry 或 SLA。
+
+[Phase 5：Deep Agents 集成验证](phases/phase-05-deep-agents-integration.md)正在进行。契约与 Fake
+Runtime、两轮离线业务闭环、取消恢复对账及受限 Deep Agents Adapter 已完成；Project Research Context
+之后新增一个 Runtime 部署与崩溃恢复门槛，在进入 MCP、Browser、Sandbox、平台 Skill 和 Agent Chat UI
+前，必须闭合真实跨进程接管、持久终态及恢复 owner。当前证据和待决项见
+[Phase 5 Runtime 部署与崩溃恢复缺口台账](reports/phase-05-runtime-recovery-gap-log.md)。

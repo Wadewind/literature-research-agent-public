@@ -8,6 +8,9 @@
 主智能体审查与独立验证；切片 4“Deep Agents Adapter”已于 2026-08-25 完成实现、主智能体审查与
 独立验证。2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
 上下文压缩、文件 Backend 与平台业务事实的所有权；该对齐不推翻切片 1/2 的实现。
+切片 4 主审同时暴露了跨进程恢复所有权尚未闭合的三项耦合缺口；本 Spec 已在 Project Research
+Context 之后增加一个独立的 Runtime 部署与崩溃恢复门槛，详见
+[`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -38,11 +41,10 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 ```
 
 切片 2 已通过独立 API、PostgreSQL、Run/Event/Outbox、Worker 与 Fake Runtime 完成两轮离线闭环，
-证明 Session/Turn、消息顺序、授权快照、Runtime Binding 和 staged candidate 的业务所有权。取消、
-恢复、响应丢失与崩溃对账仍按顺序属于切片 3，不能用本切片的正常成功路径代替。
-
-后续切片再依次验证 Deep Agents Fake Model、MCP、Browser、Sandbox 和平台 Skills。框架自带这些能力
-不代表平台已经完成权限、恢复、审计和安全集成。
+证明 Session/Turn、消息顺序、授权快照、Runtime Binding 和 staged candidate 的业务所有权。切片 3
+随后完成取消、响应丢失、重复 Job 与业务崩溃对账；切片 4 使用 Deep Agents Fake Model 和确定性 Tool
+验证真实 Adapter、原生上下文及成功 checkpoint 对账。能力存在于框架中不代表平台已经完成权限、
+跨进程恢复、审计和安全集成；MCP、Browser、Sandbox 和平台 Skills 仍须在恢复门槛后逐项验证。
 
 ## 范围
 
@@ -53,6 +55,7 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 - Project Chunk Index、Review Evidence Matrix 和既有 Artifact 的最小授权 Context Builder；
 - 两轮会话、单活动 Turn、消息顺序、Run/Event/Outbox、取消、恢复和结果对账；
 - Deep Agents Adapter 的最小闭环：Fake Chat Model、Thread、Checkpoint、流式事件和错误转换；
+- Runtime 部署与崩溃恢复门槛：恢复所有权、持久终态、orphan `RUNNING` 识别和真实跨进程恢复；
 - 后续独立 Spike：固定 MCP、受控 Browser/下载、隔离 Sandbox、平台维护的 Research Skill；
 - 候选 Artifact 的 staged、校验、内容哈希和幂等提交；
 - 最小 Agent Chat/API 集成与完全离线的默认测试；
@@ -391,9 +394,15 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    Chat Model、确定性 Tool、StateBackend 与 PostgreSQL Checkpointer 验证同一 Thread 只追加新消息、
    Execution/Checkpoint、原生上下文压缩和文件卸载；不接真实模型、Sandbox、MCP、长期 Memory 或子 Agent；
 5. **Project Research Context**：正式接入 Project Retriever、Review Evidence Matrix Reader 与 Citation Validator；
-6. **能力 Spike**：按 MCP → Browser/下载 → Sandbox 文件工具与 WorkspaceSnapshot → 平台 Skill 的顺序分别验证，不捆绑验收；
-7. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
-8. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
+6. **Runtime 部署与崩溃恢复门槛**：先基于切片 5 的 Project Tool 证据决定 ARQ Worker 内运行或独立
+   Runtime Deployment，明确 Runtime Execution lease/recovery owner；持久化可对账的失败/取消终态，
+   识别并受控认领 orphan `RUNNING` checkpoint，沿同一 Execution/Checkpoint 恢复且不重新追加用户输入；
+   用第二个真实 OS 进程验证恢复后不重复发起模型或 Tool 调用。该切片不顺便建设通用分布式调度器，
+   也不把 Tool 已产生外部副作用但 checkpoint 尚未提交的窗口伪称为已解决；
+7. **能力 Spike**：只有切片 6 门槛通过后，才按 MCP → Browser/下载 → Sandbox 文件工具与
+   WorkspaceSnapshot → 平台 Skill 的顺序分别验证，不捆绑验收；
+8. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
+9. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
 
 ## 测试方式
 
@@ -404,7 +413,8 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
   强制触发一次原生 summarization 后仍能完成第二轮；默认不调用真实模型；
 - **Context**：跨用户/Project 隔离、ChunkSet/Evidence Matrix 版本固定、token 限制和 Citation 校验；
 - **Workspace/Sandbox**：文件传入/取回、Snapshot 重建、跨 Turn 隔离、模型不可见 `execute`、超时和销毁；
-- **故障注入**：重复 Job、Worker 崩溃、Runtime 断连、成功响应丢失、提交前后崩溃和取消竞争；
+- **故障注入**：重复 Job、Worker 崩溃、Runtime 断连、成功响应丢失、提交前后崩溃和取消竞争；切片 6
+  必须启动第二个真实 OS 进程，而不是只用新连接或同进程新 Adapter 模拟重启；
 - **安全**：未授权 Project、伪造 SDK ID、未授权 Tool/Skill/MCP、内网 URL、超限输出和 Secret 泄漏；
 - **E2E**：固定 Project + Index + Review Matrix → 两轮 Agent Chat → 可追溯候选 Artifact。
 
@@ -462,7 +472,7 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   装配回归为 `27 passed in 48.87s`；独立执行 `ruff check src tests` 通过，`pyright` 为
   `0 errors, 0 warnings, 0 informations`。
 
-切片 4 待主审实现证据（2026-08-25）：
+切片 4 实现与主审证据（2026-08-25）：
 
 - 依赖已单独固定为 `deepagents==0.7.8`；真实 Adapter 只在 infrastructure 内调用
   `create_deep_agent`，未修改五方法 Port、业务表、公开 API 或 Worker 生产装配；
@@ -502,6 +512,9 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - Deep Agents 只存在于 Adapter 内，Domain、API、Event 和业务表不泄漏 SDK 类型；
 - 每轮 ContextSnapshot/PolicySnapshot 可审计，Agent 可受限使用 Project Index 与指定 Evidence Matrix；
 - Session 单活动 Turn、消息顺序、取消、断连、Worker 崩溃和响应丢失均有实际验证；
+- Runtime 部署拓扑与 Execution 恢复所有权已明确；第二个 OS 进程可识别并受控认领 orphan
+  `RUNNING` checkpoint，沿同一 Execution/Checkpoint 恢复，不重新追加用户输入或重复已提交调用；
+- Runtime 失败/取消终态可由新进程安全对账，不依赖旧 Adapter 的进程内协作状态；
 - Runtime Event 被筛选，业务 Message/Event 不保存完整思考过程或敏感内容；
 - MCP、Browser、Sandbox 和 Skill 各自有明确的通过、受限或失败结论，不以 SDK 自带能力代替验证；
 - WorkspaceSnapshot 与 Artifact 的用途分离，Sandbox 丢失后可恢复允许跨 Turn 的内部工作文件；
@@ -513,7 +526,9 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. Deep Agents 运行在 ARQ Worker 内还是独立 Runtime Deployment；
+1. 切片 6 在已有 Project Tool 与恢复测试证据上决定 Deep Agents 运行在 ARQ Worker 内还是独立
+   Runtime Deployment，并以 ADR 固化 Runtime Execution lease/recovery owner；在该决定前不得接入高风险
+   外部能力或宣称执行中崩溃可恢复；
 2. Checkpointer/Store 与业务 PostgreSQL 的数据库或 Schema 隔离方式；
 3. 首个 Deep Agents Fake Tool、固定 MCP、Browser 测试目标和平台 Skill；
 4. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；
@@ -533,7 +548,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - 切片 4 已证明成功 Execution 可跨连接/Adapter 通过 PostgreSQL Checkpoint 恢复并重复收集；取消与
   失败终态目前仍由在途 Adapter 的协作状态对账，不宣称其 Runtime 终态标记可跨进程恢复；该测试没有
   启动第二 OS 进程，新 Adapter 对 orphan `RUNNING` checkpoint 也不会自动 resume，执行途中 Worker
-  崩溃恢复须等待部署拓扑与 Runtime lease 所有权决策；
+  崩溃恢复须由切片 6 闭合，当前证据与门槛见
+  [`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)；
 - 切片 4 只证明最终成功 checkpoint 后的 replay 不重复模型/Tool 调用；正式 Project Tool 的
   Effectively Once 仍须在切片 5 用稳定 call/effect ID、唯一约束或调用记录验证；
 - 切片 4 已执行 Tool 名称 allowlist，但尚未由 Adapter 执行层强制
@@ -546,6 +562,7 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 - `../decisions/0001-select-deep-agents-runtime.md`
 - `../decisions/0005-interactive-research-agent-session-model.md`
+- [`Phase 5 Runtime 恢复缺口台账`](../reports/phase-05-runtime-recovery-gap-log.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Customization](https://docs.langchain.com/oss/python/deepagents/customization)
 - [Deep Agents Backends](https://docs.langchain.com/oss/python/deepagents/backends)

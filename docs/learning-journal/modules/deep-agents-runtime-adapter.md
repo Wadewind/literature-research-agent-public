@@ -21,7 +21,10 @@ RuntimeTurnRequest（只含本轮新消息 + Context/Policy Snapshot）
 ```
 
 Adapter 由分层/集成测试显式构造，生产 Worker 仍装配 `FakeResearchAgentRuntime`。因此本切片没有决定
-Runtime 位于 ARQ Worker 进程内还是独立 Deployment，也没有新增真实 Provider 配置。
+Runtime 位于 ARQ Worker 进程内还是独立 Deployment，也没有新增真实 Provider 配置。这三项相互依赖的
+恢复缺口统一记录在
+[`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)，由 Phase 5
+切片 6 在 Project Context 接入后闭合。
 
 ## 状态、数据模型和事务
 
@@ -120,11 +123,16 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   `runtime_turn_not_interrupted`；
 - 成功 Execution 已有新连接/新 Adapter 恢复证据，证明不依赖 Adapter 内存状态，但没有启动第二个 OS
   进程；失败/取消终态没有独立持久 Runtime registry，orphan `RUNNING` checkpoint 不会自动 resume；
+- Runtime 部署拓扑与 Execution lease/recovery owner 尚未决定；这是切片 6 的显式门槛，不由 Adapter
+  默认假设。门槛通过前不能把同进程测试描述为执行中 Worker 崩溃恢复；
 - 没有真实模型、Usage、流式 token、模型/Tool 动态预算、Project Context Tool、MCP、Browser、Sandbox、
   Skill、正式 Artifact 或 WorkspaceSnapshot；`max_model_calls/max_tool_calls` 尚未由本 Adapter 执行层强制；
 - Tool 执行后、checkpoint 提交前的崩溃窗口没有 Effectively Once 证据；
 - StateBackend 对话历史文件仍依赖 Thread checkpoint，不能替代业务 Artifact/WorkspaceSnapshot 的保留、
   权限和清理策略。
+
+恢复证据、待决选项与切片 6 验收条件见
+[`Phase 5 Runtime 部署与崩溃恢复缺口台账`](../reports/phase-05-runtime-recovery-gap-log.md)。
 
 ## 60 秒面试说明
 

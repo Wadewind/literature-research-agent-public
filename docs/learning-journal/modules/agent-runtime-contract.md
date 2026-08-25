@@ -91,6 +91,9 @@ Fake 不调用模型、网络、MCP、Browser 或 Sandbox，不读取环境密�
 切片 4 已在不修改该 Port 的前提下新增真实 `DeepAgentsResearchAgentRuntime`；其 SDK 行为与测试证据见
 `deep-agents-runtime-adapter.md`。成功 Turn 不再依赖进程内记录：Adapter 通过 PostgreSQL Checkpoint
 metadata 反查稳定 Turn/Session/请求哈希，并从真实 checkpoint 重建结果与 opaque Binding。
+但这只覆盖成功结果的新连接/新 Adapter 对账，不覆盖第二 OS 进程接管、失败/取消 Runtime 终态持久化或
+orphan `RUNNING` 自动恢复；三项耦合缺口见
+[`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)。
 
 ## 关键决定与替代方案
 
@@ -212,6 +215,9 @@ Secret 和大型 Tool 输出。
   跨 OS 进程或 orphan `RUNNING` Execution 自动恢复结论；
 - 已验证平台能停止消费 Fake 流、事务外传播取消并拒绝结果；尚未验证真实 Deep Agents、模型/Tool 或
   远端 Provider 对已在途调用的立即中止能力。
+- Deep Agents 生产部署拓扑、Runtime Execution lease/recovery owner、真实第二 OS 进程恢复，以及
+  `FAILED`/`CANCELLED`/orphan `RUNNING` 的持久对账尚未闭合；Phase 5 切片 6 是进入外部能力 Spike 与
+  Agent Chat UI 前的门槛。
 
 ## 60 秒面试说明
 

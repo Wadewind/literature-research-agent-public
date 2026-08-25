@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v4
+> 状态：Proposed v5
 >
 > 日期：2026-08-25
 >
@@ -17,6 +17,10 @@
 > v4 变更：将 Research Agent Extension 从一次性资源发现 Run 调整为绑定 Project 的持续研究对话，
 > 固定 `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1`，并要求 Phase 5 先验证
 > 业务包装与恢复边界，再逐项接入 Deep Agents 的 MCP、Browser、Sandbox 和平台 Skills
+>
+> v5 变更：根据首个真实 Adapter Spike 增加 Runtime 部署与崩溃恢复门槛；Project Research Context
+> 完成后必须先决定恢复 owner，并以真实第二 OS 进程验证 orphan `RUNNING` 接管和持久终态对账，才进入
+> MCP、Browser、Sandbox、平台 Skills 与 Agent Chat UI
 
 ## 1. 文档用途
 
@@ -1445,6 +1449,12 @@ PostgreSQL Checkpointer 验证成功 Execution 的新连接/新 Adapter 结果�
 启动第二 OS 进程，也不证明 orphan `RUNNING` checkpoint 自动 resume 或 Tool 执行后、checkpoint 提交前
 崩溃窗口的 Effectively Once；正式 Project Tool 需要稳定 call/effect ID 与持久调用记录。
 
+切片 4 同时暴露了三项耦合缺口：没有真实第二 OS 进程恢复证据，失败/取消终态与 orphan `RUNNING`
+缺少持久对账事实，生产部署与 Runtime Execution lease/recovery owner 尚未决定。因此 Phase 5 在
+Project Research Context 后增加一个独立恢复门槛；该门槛通过前不得进入高风险外部能力或最小 Agent
+Chat UI。证据、选项和非声明边界见
+[`phase-05-runtime-recovery-gap-log.md`](../learning-journal/reports/phase-05-runtime-recovery-gap-log.md)。
+
 #### 需要学习和验证
 
 - Deep Agents 的运行模型、许可、精确版本和部署边界；
@@ -1462,7 +1472,23 @@ PostgreSQL Checkpointer 验证成功 Execution 的新连接/新 Adapter 结果�
 - Deep Agents Fake Model/Fake Runtime 的可测试集成；
 - Browser、MCP、平台 Tool/Skill 和 Sandbox 能力的独立 Spike；
 - Runtime 取消、超时、断连和结果对账；
+- Runtime 部署拓扑与 Execution 恢复 owner；第二个 OS 进程对 orphan `RUNNING` 的条件认领、同一
+  Checkpoint 恢复，以及失败/取消终态的持久对账；
 - Prompt Injection、网络外泄和下载风险。
+
+#### 实现顺序门槛
+
+```text
+Project Research Context
+  → Runtime 部署与崩溃恢复门槛
+  → MCP / Browser / Sandbox / 平台 Skill 独立 Spike
+  → 最小 Agent Chat UI
+  → 集成 ADR 与阶段复盘
+```
+
+恢复门槛必须先根据 Project Tool 的调用记录和副作用边界，决定 ARQ Worker 内运行或独立 Runtime
+Deployment，并固定 lease/recovery owner。验收测试必须实际启动第二个 OS 进程，沿用同一
+Execution/Checkpoint 恢复且不重新追加用户输入；同进程新 Adapter 只能作为较低层测试，不能替代该证据。
 
 #### 最小垂直切片
 
@@ -1487,6 +1513,8 @@ PostgreSQL Checkpointer 验证成功 Execution 的新连接/新 Adapter 结果�
 - 临时文件、内部 WorkspaceSnapshot 与正式 Artifact 的生命周期分离，Sandbox 丢失后可重建允许跨 Turn 的工作文件；
 - SDK 事件被筛选并映射为版本化业务 Event，不保存完整思考过程和敏感输出；
 - 取消、超时、Runtime 断连和“SDK 成功但本地响应丢失”至少各有一次验证；
+- 部署拓扑、Runtime Execution lease/recovery owner 已由集成 ADR 固定；真实第二 OS 进程可以受控认领
+  orphan `RUNNING`、恢复同一 Checkpoint，并对账持久的失败/取消终态；
 - 两轮 Fake Runtime 用户故事可完全离线运行；后续能力 Spike 的 Artifact 具有来源、内容哈希、大小、类型和 Project 所有权；
 - 明确是否进入 Phase 6；若用例或运行时不成立，Demo-ready Core v1 仍保持完整可交付。
 
