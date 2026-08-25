@@ -1448,6 +1448,10 @@ Index 和指定 Review Evidence Matrix 回答第一轮，在第二轮继续同�
 - `create_deep_agent` 原生 summarization 和大型结果文件卸载；
 - Runtime 事件、Usage、错误、审批和 Artifact 的归一化；
 - ARQ、本系统 Run Control 与 SDK 内部重试/恢复的所有权；
+- Agent Worker 的每个新 Attempt 必须先按稳定 Turn ID reconcile；只有 Runtime 明确未知时才 execute，
+  已有 RUNNING Execution 不重复追加输入，已有成功结果直接 collect 并 Effectively Once 提交；
+- 业务提交前校验 Runtime reconciliation/result 的 Session、Turn 与 Binding 稳定映射；错配安全失败且不
+  持久化错误 Binding/Message/candidate；Runtime consumer 与取消 watcher 在异常或外层取消时统一清理；
 - Deep Agents Fake Model/Fake Runtime 的可测试集成；
 - Browser、MCP、平台 Tool/Skill 和 Sandbox 能力的独立 Spike；
 - Runtime 取消、超时、断连和结果对账；

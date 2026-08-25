@@ -16,14 +16,29 @@ POST Message 短事务
 
 RunExecutionService
   → 短事务认领 Run 并创建 Attempt/run_started
-  → 事务外 AgentTurnExecutor → Fake Runtime execute/reconcile/collect
+  → 事务外 AgentTurnExecutor → Fake Runtime reconcile
+      ├─ not_found：execute → reconcile → collect
+      ├─ succeeded/result_available：直接 collect
+      └─ running：不 execute，按 temporary 进入同一 Turn 的新 Attempt 对账
   → 新短事务锁 Run，复核 scope 与 RUNNING
   → Bindings + Assistant Message + staged candidate + filtered Events + SUCCEEDED
   → 释放 active Turn
+
+协作取消
+  → /runs/{run_id}/cancel 持久化 CANCEL_REQUESTED
+  → AgentTurnExecutor 独立短读轮询观察取消
+  → 事务外 runtime.cancel_turn + 停止消费 Runtime 流
+  → 短事务：CANCELLED + run_cancelled/agent_turn_cancelled + 释放 active Turn
+  → 若 Worker 崩溃：Attempt lease Reconciler 收敛 CANCELLED，再幂等释放 active Turn
 ```
 
 Runtime 成功和 PostgreSQL 成功是两个阶段。最终事务发现 Run 已取消、已终态或闭包不一致时，不提交
 Assistant Message 或 candidate。
+
+切片 3 新增 `AgentTurnLifecycleService` 作为通用 Run 终态提交后的最小回调。它只处理
+`run_type=agent_turn`，重新读取 PostgreSQL 终态和 Turn 作用域后条件释放 Session；旧终态回调晚于下一轮
+认领时不会清除新的 active Turn。SUCCEEDED/FAILED/CANCELLED 最终释放，RETRY_WAIT 保持同一活动 Turn。
+`AgentSessionService.post_message` 原有的终态惰性修复仍作为回调提交后崩溃的第二道兜底。
 
 切片 2 的 PostgreSQL Message 负责产品 UI、权限、幂等、审计和受控重建，并未承担模型 Prompt 管理。
 当前 `RuntimeTurnRequest` 每轮只传新用户消息和授权/策略快照；切片 4 的真实 Adapter 将复用同一 SDK
@@ -63,8 +78,18 @@ Turn Binding、Snapshot 固化、staged candidate、幂等回放、generation �
 descriptor 回滚和 owner 隔离。Application Service、Executor 与 Repository 各有独立行为测试，不以
 import smoke 冒充分层覆盖；迁移在临时 PostgreSQL 18 上完成 upgrade/downgrade/upgrade/check。
 
-当前 Fake 状态仍在单 Worker 进程内；响应丢失、重复 Job、崩溃、取消竞争与 reconcile 故障注入属于
-切片 3。正式 Project Retriever/Matrix Reader/Citation Validator 属于切片 5。Deep Agents、MCP、
+切片 3 已用真实 PostgreSQL 覆盖 Runtime 成功响应丢失、结果 commit 失败回滚、新 Attempt
+reconcile/collect、终态 ACK 重放、已有 RUNNING Execution 不重复 execute、QUEUED/RUNNING 取消、取消时
+无结果事实、取消传播 temporary 失败后停止心跳、Session 终态释放和 Attempt lease 崩溃收敛；同时覆盖
+状态 watcher/Runtime consumer 的统一清理与 Runtime Binding/result 六项闭包校验。扩大定向分层回归
+`66 passed in 60.98s`，Agent Application `14 passed`、PostgreSQL 故障注入 `3 passed`；后端非集成
+全量回归为 `722 passed, 4 skipped in 62.16s`，后端 Ruff 与全量 Pyright 通过。
+主智能体另行复验高风险 Application/PostgreSQL/Run/Fake 组合 `62 passed in 53.97s`、API/Worker 装配
+回归 `27 passed in 48.87s`，独立 Ruff 与 Pyright 通过。
+
+当前 Fake 状态仍在单 Worker 进程内，故障注入不能证明跨进程 Runtime 持久化，也不能证明真实模型/Tool
+立即中止；这些必须由切片 4 的 Deep Agents Adapter、PostgreSQL Checkpointer 与 Fake Chat Model 验证。
+正式 Project Retriever/Matrix Reader/Citation Validator 属于切片 5。Deep Agents、MCP、
 Browser、Sandbox、WorkspaceSnapshot 和 Skills 均未接入。
 
 因此本切片证明的是业务事实和事务闭环可以保留，并不证明平台已经实现或取代 Deep Agents 的消息管理；
@@ -74,10 +99,12 @@ Browser、Sandbox、WorkspaceSnapshot 和 Skills 均未接入。
 
 - `application/agent_session_service.py`
 - `application/agent_turn_executor.py`
+- `application/agent_turn_lifecycle_service.py`
 - `application/ports/agent_repository.py`
 - `infrastructure/persistence/agent_repository.py`
 - `api/agent_sessions.py`
 - `worker.py`
+- `tests/integration/test_agent_turn_reliability.py`
 
 ## 60 秒面试说明
 

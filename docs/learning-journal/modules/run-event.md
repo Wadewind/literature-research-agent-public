@@ -73,6 +73,11 @@ SSE (GET /runs/{run_id}/events/stream)
 - `cancel_run`：QUEUED/RETRY_WAIT/WAITING_INPUT/WAITING_DEPENDENCY 直接 CANCELLED 并写
   `run_cancelled`；RUNNING 先进入 CANCEL_REQUESTED 并写非终态 `run_cancel_requested`；
   Worker 协作完成取消后再写 `run_cancelled`。
+- Phase 5 AgentTurn 的 Worker 在事务外把 `CANCEL_REQUESTED` 传播给 Runtime，随后以 Run 行锁原子写
+  `run_cancelled`、小型 `agent_turn_cancelled` Event 并释放 Session 活动 Turn；QUEUED 取消和终态失败
+  由提交后的幂等回调释放。Event 不保存用户消息、Runtime delta、Prompt 或 Tool 输出。
+- Runtime reconciliation/result 作用域错配只进入安全 `runtime_scope_mismatch` 错误 code/描述，不把错误
+  Binding、Runtime 原始输出或候选正文写入 Event；取消传播 temporary 失败不写 FAILED/RETRY_WAIT Event。
 - 等待恢复若原因与状态不匹配或已被其他调用恢复，条件状态拒绝第二次效果；Outbox 不存在或
   不是 `DISPATCHED` 时抛 `RunSchedulingError` 并回滚 Run/Event。
 - 当前 Run 已由 Queue Outbox + ARQ Worker 驱动；重复投递和崩溃恢复见 `queue-outbox.md`。

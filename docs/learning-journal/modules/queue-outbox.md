@@ -108,6 +108,11 @@ Worker 进程（python -m literature_agent.worker）│
 - 执行期间并发取消：完成时条件更新失败，返回 SKIPPED，不产生第二个终态。
 - 正常恢复重复调用：第一次将 Run 改为 QUEUED 后，后续调用被条件状态拒绝，不重复写 Event；
   Outbox 缺失或状态异常时整个事务回滚，不留下已排队却无法投递的 Run。
+- Phase 5 切片 3 的 AgentTurn 继续复用该重试预算：Runtime temporary 错误进入 RETRY_WAIT，permanent
+  错误直接 FAILED；新 Attempt 在执行任何输入前先按稳定 `turn_run_id` reconcile。FAILED/CANCELLED 后
+  通过幂等终态回调释放 AgentSession 活动 Turn，RETRY_WAIT 保持占用。Runtime 取消传播失败时保留停止
+  心跳的 RUNNING Attempt，交由 lease 对账收敛 CANCELLED，不把取消误作失败重试；Runtime consumer 与
+  状态 watcher 在异常和外层任务取消时统一 cancel+await，不能跨 Attempt 遗留语义操作。
 
 ## 安全和可观测性
 

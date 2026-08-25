@@ -10,7 +10,7 @@ Attempt 仍是最新且 lease 过期），条件更新保证多实例对账不�
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
 
@@ -43,6 +43,7 @@ class RunReconcileService[TSession: Session]:
         lease_seconds: float,
         max_run_attempts: int,
         batch_size: int = 20,
+        terminal_callback: Callable[[str, RunStatus], Awaitable[None]] | None = None,
     ) -> None:
         """初始化 RunReconcileService。
 
@@ -64,6 +65,7 @@ class RunReconcileService[TSession: Session]:
         self._lease_seconds = lease_seconds
         self._max_run_attempts = max_run_attempts
         self._batch_size = batch_size
+        self._terminal_callback = terminal_callback
 
     async def reconcile_expired(self, now: datetime | None = None) -> int:
         """收回一批 lease 过期的 Run，返回实际收回数量。"""
@@ -77,6 +79,7 @@ class RunReconcileService[TSession: Session]:
         for candidate in candidates:
             if await self._recover(candidate.run_id, candidate.attempt_id, cutoff, now):
                 recovered += 1
+                await self._notify_terminal(candidate.run_id)
         return recovered
 
     async def reconcile_orphaned_attempts(self, now: datetime | None = None) -> int:
@@ -256,3 +259,24 @@ class RunReconcileService[TSession: Session]:
             await session.commit()
             logger.info("收回 lease 过期的 Run: run_id=%s attempt_id=%s", run_id, attempt_id)
             return True
+
+    async def _notify_terminal(self, run_id: str) -> None:
+        """业务收敛提交后 best-effort 释放扩展聚合的终态引用。"""
+        if self._terminal_callback is None:
+            return
+        async with self._session_factory() as session:
+            run = await self._run_repo_factory(session).get_by_id(run_id)
+        if run is None or run.status not in {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }:
+            return
+        try:
+            await self._terminal_callback(run_id, run.status)
+        except Exception as exc:
+            logger.warning(
+                "终态回调失败: run_id=%s error_type=%s",
+                run_id,
+                type(exc).__name__,
+            )

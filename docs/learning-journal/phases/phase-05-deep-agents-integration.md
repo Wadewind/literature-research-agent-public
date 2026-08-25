@@ -4,7 +4,8 @@
 
 进行中。Spec 初版日期：2026-08-20；按 ADR-0005 重构日期：2026-08-25；切片 1
 “契约与 Fake Runtime”于 2026-08-25 完成；切片 2“两轮离线业务闭环”于 2026-08-25
-完成实现、主智能体审查与独立验证。2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
+完成实现、主智能体审查与独立验证；切片 3“取消、恢复与对账”于 2026-08-25 完成实现、
+主智能体审查与独立验证。2026-08-25 进一步对齐 Deep Agents 原生 Thread、消息管理、
 上下文压缩、文件 Backend 与平台业务事实的所有权；该对齐不推翻切片 1/2 的实现。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
@@ -268,7 +269,11 @@ flush，避免循环引用影响插入。
 `agent_message_accepted`、Outbox 和 Idempotency → 条件认领 active Turn。Run 输入只保存稳定 ID，不保存
 完整 Prompt 或 Matrix/Chunk 正文。
 
-Worker 先在只读事务中取得已授权业务事实，退出事务后调用 Fake Runtime 的 execute/reconcile/collect；
+Worker 先在只读事务中取得已授权业务事实，退出事务后先按稳定 `turn_run_id` reconcile；只有 Runtime
+明确返回 `runtime_turn_not_found` 时才调用 execute，已有 RUNNING Execution 只进入业务重试等待，不
+再次追加输入；已有 SUCCEEDED 且结果可用时直接 collect。Runtime execute/reconcile/collect/cancel 全部
+位于数据库事务外。协调层在提交业务结果前验证 reconciliation 的 Turn、Session Binding、Turn Binding
+闭包和 result `turn_run_id`；错配按安全 permanent Runtime 错误失败，不写入 Binding、Message 或 candidate；
 Runtime 成功后再开启独立短事务，锁定并复核 Run 仍为 RUNNING，验证 owner/Project/Session/Turn 闭包，
 幂等保存 Session/Turn Binding、Assistant Message 和 staged candidate，写筛选后的安全 Event，推进
 SUCCEEDED 并释放 active Turn。Fake 本切片不返回授权 Evidence，因此 Evidence join 明确为空。
@@ -379,7 +384,8 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 1. **契约与 Fake Runtime（已完成）**：用失败测试固定 Session、Message、Turn、Snapshot、单活动 Turn、Port 和错误语义；
 2. **两轮离线业务闭环（已完成）**：API → DB/Event/Outbox → Worker →
    Fake Runtime → Message/空 Evidence join/staged 候选 Artifact；
-3. **取消、恢复与对账**：覆盖重复 Job、Worker 崩溃、响应丢失、取消竞争和 Effectively Once；
+3. **取消、恢复与对账（已完成）**：覆盖重复 Job、Worker 崩溃、响应丢失、取消竞争
+   和 Effectively Once；
 4. **Deep Agents Adapter**：说明新增依赖及锁文件影响后固定版本；真实调用 `create_deep_agent`，用 Fake
    Chat Model、确定性 Tool、StateBackend 与 PostgreSQL Checkpointer 验证同一 Thread 只追加新消息、
    Execution/Checkpoint、原生上下文压缩和文件卸载；不接真实模型、Sandbox、MCP、长期 Memory 或子 Agent；
@@ -424,6 +430,37 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - 包含最终分层/边界测试的后端全量回归：`832 passed, 4 skipped in 417.35s`；
 - 普通路径完全离线、零模型/网络/MCP/Browser/Sandbox 费用。
 
+切片 3 实际验证（2026-08-25）：
+
+- TDD 红灯实际证明旧执行器会在 reconcile 前调用 execute，Runtime 成功响应丢失后的新 Attempt 会第二次
+  调用 execute，运行中取消不会传播到 `runtime.cancel_turn`，QUEUED/FAILED 后 Session 活动指针不会
+  主动释放，Runtime permanent 错误会被当作临时错误；
+- 主审补强的失败测试实际得到 `8 failed, 6 passed`：状态 watcher 异常和外层任务取消会遗留 Runtime
+  consumer，六类 reconciliation/result 错配未被一致地在提交前安全拒绝；修正后 Agent Application
+  `14 passed`，Agent PostgreSQL 故障注入 `3 passed`；
+- 对统一清理块做受控 mutation 后两条清理测试精确回到 `2 failed`（stream 未关闭、外层取消超时），恢复
+  实现后 `2 passed`，证明测试不是仅依赖失败策略状态；
+- Agent、RunExecution、RunReconcile、RunService 与 Fake Runtime 扩大定向分层回归
+  `66 passed in 60.98s`；
+- 后端非集成全量回归在沙箱外运行：`722 passed, 4 skipped in 62.16s`；受限沙箱内的 FastAPI
+  `TestClient` 启动会假性卡住，已用同一单测沙箱外 `1 passed in 0.52s` 对照确认，不计作代码失败；
+- 真实 PostgreSQL 注入结果事务 commit 失败后，首次 Attempt 进入 RETRY_WAIT；第二 Attempt 先 reconcile
+  同一进程 Fake 的 SUCCEEDED Execution 并 collect，Runtime 逻辑 Execution 计数保持 1，Assistant
+  Message、candidate 和成功 Event 各只提交一次；终态后的 ACK 重放由 Run 条件认领拒绝；
+- 显式 `asyncio.Event` 控制 RUNNING 取消，证明 Worker 事务外调用 `cancel_turn`，取消后不 collect、不写
+  Assistant Message/candidate；取消传播期间 Worker 崩溃由真实 Attempt lease 对账收敛 CANCELLED 并
+  幂等释放 Session；
+- `cancel_turn` temporary 失败的真实链路保持 Run=CANCEL_REQUESTED、Attempt=RUNNING 且停止心跳，不写
+  FAILED/RETRY_WAIT/Assistant/candidate，随后由 lease Reconciler 收敛 CANCELLED；状态 watcher 异常和
+  外层任务取消均通过统一 `finally` cancel+await Runtime consumer 与 watcher，异常仍传播给既有失败策略；
+- reconciliation/result 的六项稳定映射错配均按 `runtime_scope_mismatch` permanent 失败，Attempt 只保存
+  安全 code/描述，不保存 Runtime 原始输出；
+- 后端 `ruff check src tests` 通过；全量 `pyright` 为
+  `0 errors, 0 warnings, 0 informations`。普通测试继续完全离线且零费用。
+- 主智能体独立复验高风险 Application/PostgreSQL/Run/Fake 组合为 `62 passed in 53.97s`，API/Worker
+  装配回归为 `27 passed in 48.87s`；独立执行 `ruff check src tests` 通过，`pyright` 为
+  `0 errors, 0 warnings, 0 informations`。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -459,7 +496,11 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - Session 级并发首版采用单活动 Turn，不提供分支、排队或多人协作；
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
-- 跨进程 Runtime 恢复、重复 Job、响应丢失、取消竞争与副作用对账仍待切片 3；
+- Fake Runtime 仍只有进程内状态；切片 3 的 commit/响应丢失重放证明同一 Runtime 实例下的平台协议，
+  不能冒充跨进程 Runtime 持久化。跨 Worker/进程 Thread 与 Checkpoint 恢复必须由切片 4 的 PostgreSQL
+  Checkpointer + Deep Agents Fake Model 验证；
+- 切片 3 的取消证明平台协调层停止消费 Fake 流、调用 Runtime cancel 并拒绝业务结果；尚未证明真实模型、
+  Tool、Deep Agents 或远端 Provider 能立即中止已在途的外部调用；
 - Demo-ready Core v1 即使不进入 Phase 6 仍保持完整可交付。
 
 ## 参考资料

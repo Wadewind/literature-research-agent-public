@@ -34,6 +34,9 @@ from literature_agent.application.ports.event_notifier import (
 )
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.outbox_repository import OutboxRepository
+from literature_agent.application.ports.research_agent_runtime import (
+    ResearchAgentRuntimeError,
+)
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
 from literature_agent.domain.event import create_event
@@ -82,6 +85,7 @@ class RunExecutionService:
         heartbeat_interval_seconds: float = 30.0,
         max_run_attempts: int = 3,
         event_notifier: EventNotifier | None = None,
+        terminal_callback: Callable[[str, RunStatus], Awaitable[None]] | None = None,
     ) -> None:
         """初始化 RunExecutionService。
 
@@ -107,6 +111,7 @@ class RunExecutionService:
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._max_run_attempts = max_run_attempts
         self._event_notifier = event_notifier or NoopEventNotifier()
+        self._terminal_callback = terminal_callback
 
     async def execute(self, run_id: str, correlation_id: str) -> ExecutionOutcome:
         """执行一个 Run：认领 QUEUED → RUNNING，然后交给执行器。
@@ -152,6 +157,7 @@ class RunExecutionService:
                     await self._executor(run, correlation_id)
                 except Exception as exc:
                     outcome = await self._fail(run_id, attempt, exc, correlation_id)
+                    await self._notify_terminal(run_id, await self._get_status(run_id))
                     metrics.record_run_completed(
                         run.run_type,
                         self._metrics_status(outcome),
@@ -172,6 +178,7 @@ class RunExecutionService:
 
                 final_status = await self._get_status(run_id)
                 await self._close_attempt(attempt.attempt_id, final_status)
+                await self._notify_terminal(run_id, final_status)
                 if final_status == RunStatus.SUCCEEDED:
                     outcome = ExecutionOutcome.COMPLETED
                 elif final_status == RunStatus.FAILED:
@@ -375,11 +382,18 @@ class RunExecutionService:
 
         条件更新失败（例如执行器已自行收尾或被并发取消）时不产生第二个终态。
         """
-        error = {
-            "type": type(exc).__name__,
-            "message": str(exc)[:_ERROR_MESSAGE_MAX_LENGTH],
-        }
+        if isinstance(exc, ResearchAgentRuntimeError):
+            error = {
+                "type": exc.code,
+                "message": exc.safe_message[:_ERROR_MESSAGE_MAX_LENGTH],
+            }
+        else:
+            error = {
+                "type": type(exc).__name__,
+                "message": str(exc)[:_ERROR_MESSAGE_MAX_LENGTH],
+            }
         outcome = RunFailureOutcome.SKIPPED
+        cancellation_pending = False
         async with self._session_factory() as session:
             run_repo = self._run_repo_factory(session)
             owner = await run_repo.get_by_id(run_id)
@@ -401,9 +415,15 @@ class RunExecutionService:
                     correlation_id=correlation_id,
                     max_run_attempts=self._max_run_attempts,
                 )
+            elif run is not None and run.status is RunStatus.CANCEL_REQUESTED:
+                cancellation_pending = True
             await session.commit()
         if outcome != RunFailureOutcome.SKIPPED:
             await notify_run_event(self._event_notifier, run_id)
+        if cancellation_pending:
+            # Runtime 取消传播失败时保留 RUNNING Attempt；心跳已经停止，lease
+            # Reconciler 会把 Run/Attempt 收敛为 CANCELLED，而不是错误重试。
+            return ExecutionOutcome.SKIPPED
         attempt_status = (
             AttemptStatus.FAILED
             if outcome != RunFailureOutcome.SKIPPED
@@ -436,3 +456,22 @@ class RunExecutionService:
         async with self._session_factory() as session:
             run = await self._run_repo_factory(session).get_by_id(run_id)
             return run.status if run else None
+
+    async def _notify_terminal(
+        self, run_id: str, status: RunStatus | None
+    ) -> None:
+        """在业务事务结束后 best-effort 收敛扩展聚合的终态指针。"""
+        if status is None or self._terminal_callback is None:
+            return
+        if status not in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}:
+            return
+        try:
+            await self._terminal_callback(run_id, status)
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "run_terminal_callback_failed",
+                exc=exc,
+                error_code=type(exc).__name__,
+            )

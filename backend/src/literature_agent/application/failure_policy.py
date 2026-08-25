@@ -16,6 +16,10 @@ from enum import StrEnum
 from literature_agent.application.ports.attempt_repository import AttemptRepository
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.outbox_repository import OutboxRepository
+from literature_agent.application.ports.research_agent_runtime import (
+    ResearchAgentRuntimeError,
+    RuntimeErrorKind,
+)
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
 from literature_agent.domain.event import create_event
@@ -74,7 +78,13 @@ async def apply_run_failure[TSession: Session](
 
     now = now or datetime.now(UTC)
     attempts_used = await attempt_repo.count_by_run(run.run_id)
-    permanent = exc is not None and is_permanent_error(exc)
+    permanent = exc is not None and (
+        is_permanent_error(exc)
+        or (
+            isinstance(exc, ResearchAgentRuntimeError)
+            and exc.kind in {RuntimeErrorKind.PERMANENT, RuntimeErrorKind.CANCELLED}
+        )
+    )
 
     retryable = not permanent and attempts_used < max_run_attempts
     next_at = now + timedelta(seconds=compute_retry_backoff(attempts_used))

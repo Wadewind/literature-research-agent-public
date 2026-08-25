@@ -15,6 +15,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
+from literature_agent.application.agent_turn_lifecycle_service import (
+    AgentTurnLifecycleService,
+)
 from literature_agent.application.ports.event_notifier import EventNotifier
 from literature_agent.application.run_service import RunService
 from literature_agent.domain.actor import ActorContext
@@ -24,6 +27,9 @@ from literature_agent.domain.exceptions import (
     RunNotFoundError,
 )
 from literature_agent.domain.run import Run, RunStatus
+from literature_agent.infrastructure.persistence.agent_repository import (
+    SqlalchemyAgentRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
 )
@@ -80,11 +86,17 @@ class EventResponse(BaseModel):
 async def get_run_service(request: Request) -> RunService:
     """从应用状态构建 RunService。"""
     app_state = request.app.state.app_state
+    lifecycle = AgentTurnLifecycleService(
+        app_state.session_factory,
+        SqlalchemyRunRepository,
+        SqlalchemyAgentRepository,
+    )
     return RunService(
         session_factory=app_state.session_factory,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
         event_notifier=app_state.event_notifier,
+        terminal_callback=lifecycle.release_if_terminal,
     )
 
 

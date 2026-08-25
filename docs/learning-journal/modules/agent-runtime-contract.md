@@ -107,8 +107,28 @@ Fake 不调用模型、网络、MCP、Browser 或 Sandbox，不读取环境密�
 平台 Run/Application Service 决定，Runtime 不能自行修改 PostgreSQL 事实。
 
 Fake 的重复执行只验证内存中的逻辑去重和稳定 ID。切片 2 已验证正常成功路径中独立 Runtime 调用与
-业务结果事务、稳定 Binding 和 staged candidate；跨进程响应丢失、Worker 崩溃、数据库提交前后故障、
-Tool/Artifact 副作用去重仍留给切片 3 的故障注入测试。
+业务结果事务、稳定 Binding 和 staged candidate。切片 3 将协调顺序固定为 reconcile-first：只有稳定
+`turn_run_id` 在 Runtime 中明确不存在时才 execute；已有 RUNNING Execution 不再次追加输入，已有
+SUCCEEDED/result_available 直接 collect。`temporary` 进入既有 Attempt/Outbox 重试预算，`permanent`
+直接失败；错误 Event/Attempt 只保存稳定 code 与安全描述。
+
+业务提交前还必须验证 Runtime 返回闭包：reconciliation `turn_run_id`、Session Binding `session_id`、
+Turn Binding 的 `session_id`/`turn_run_id`/`session_binding_id` 必须匹配本轮 request，result
+`turn_run_id` 必须匹配业务 Run。任一错配统一为安全 permanent `runtime_scope_mismatch`，不保存 Runtime
+原始输出、错误 Binding、Assistant Message 或 candidate。
+
+Runtime 成功后、业务结果 commit 前失败会回滚 Message/candidate/Event，并由新 Attempt 对账同一
+Execution；业务提交后 ACK 丢失则由 PostgreSQL 终态认领拒绝重复 Job。这里承诺的是业务事实的
+Effectively Once，不是 Runtime/Provider Exactly Once。
+
+RUNNING 取消由 `AgentTurnExecutor` 并行观察 PostgreSQL `CANCEL_REQUESTED`，在事务外调用
+`cancel_turn`、停止消费 Runtime 流，再以 Run 行锁原子提交 `run_cancelled`、`agent_turn_cancelled` 与
+Session 活动指针释放。Runtime 取消传播失败时保留停止心跳的 RUNNING Attempt，由 lease Reconciler
+收敛，不能把取消误作临时失败重试。QUEUED 取消和 FAILED/CANCELLED 终态通过幂等终态回调释放 Session；
+RETRY_WAIT 继续持有同一活动 Turn。
+Runtime stream consumer 与取消状态 watcher 由统一 `finally` 管理；状态观察异常、`cancel_turn` 异常或
+外层 Worker task 取消都会 cancel+await 两个子任务，原始异常继续交给既有失败/lease 策略，不允许后台
+consumer 在业务已重试或取消后继续模型/Tool 语义操作。
 
 ## 安全和可观测性
 
@@ -129,14 +149,34 @@ Secret 和大型 Tool 输出。
 - 定向 `ruff check`：通过；
 - 定向 `pyright`（新增生产代码）：0 errors、0 warnings、0 informations。
 
+切片 3 实际运行（2026-08-25）：
+
+- 主审补强红灯：`8 failed, 6 passed`；修正后 Agent Application `14 passed`、Agent PostgreSQL 故障
+  注入 `3 passed`；
+- 临时移除统一清理块的受控 mutation：两条清理测试 `2 failed`；恢复后 `2 passed`；
+- Agent/Run/Fake 扩大定向分层回归：`66 passed in 60.98s`；
+- 后端非集成全量回归：`722 passed, 4 skipped in 62.16s`；
+- 覆盖 reconcile-first、既有 RUNNING 不 execute、成功响应丢失、真实结果 commit 失败、ACK 重放、
+  temporary/permanent 分类、QUEUED/RUNNING 取消、取消时无 Message/candidate、Attempt lease 崩溃收敛、
+  取消传播 temporary 失败、子任务无泄漏、Runtime 作用域错配、SUCCEEDED/FAILED/CANCELLED 释放及
+  RETRY_WAIT 保持活动 Turn；
+- 后端 `ruff check src tests` 通过，全量 `pyright` 为
+  `0 errors, 0 warnings, 0 informations`。
+- 主智能体独立复验高风险 Application/PostgreSQL/Run/Fake 组合 `62 passed in 53.97s`、API/Worker 装配
+  回归 `27 passed in 48.87s`；独立 Ruff 与 Pyright 同样通过。
+
 ## 代码入口
 
 - `backend/src/literature_agent/domain/research_agent.py`
 - `backend/src/literature_agent/application/ports/research_agent_runtime.py`
+- `backend/src/literature_agent/application/agent_turn_executor.py`
+- `backend/src/literature_agent/application/agent_turn_lifecycle_service.py`
 - `backend/src/literature_agent/infrastructure/agent/fake_research_agent_runtime.py`
 - `backend/tests/domain/test_research_agent.py`
 - `backend/tests/application/test_research_agent_runtime_contract.py`
 - `backend/tests/infrastructure/test_fake_research_agent_runtime.py`
+- `backend/tests/application/test_agent_turn_executor.py`
+- `backend/tests/integration/test_agent_turn_reliability.py`
 
 ## 切片 2 落地补充
 
@@ -155,13 +195,15 @@ Secret 和大型 Tool 输出。
 
 ## 已知限制
 
-- 已有数据库、API、Worker 和正常两轮事务闭环，但没有跨进程 Fake 状态或故障注入对账；
+- 已有同进程 Fake 的 PostgreSQL commit/响应丢失、重复 Job、取消和 Worker lease 故障注入；Fake 状态不
+  跨进程，不能据此宣称跨 Worker Runtime 恢复，切片 4 必须用持久 Checkpoint 另行验证；
 - 没有读取 Project Chunk、Evidence Matrix 或正式 Artifact，只有已授权稳定引用；
 - 只有 Artifact candidate staged，没有文件 Storage、正式 Artifact commit 或下载；
 - Fake 不返回 Evidence，当前 Agent Evidence join 为空；
 - 没有接入 Deep Agents、LangGraph Checkpoint、MCP、Browser、Sandbox、WorkspaceSnapshot 或 Skill；
 - Fake 状态位于进程内，不能作为跨进程恢复证据；
-- 尚未验证取消与真实在途模型/Tool 调用的竞争。
+- 已验证平台能停止消费 Fake 流、事务外传播取消并拒绝结果；尚未验证真实 Deep Agents、模型/Tool 或
+  远端 Provider 对已在途调用的立即中止能力。
 
 ## 60 秒面试说明
 

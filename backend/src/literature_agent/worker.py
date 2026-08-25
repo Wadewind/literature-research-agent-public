@@ -22,6 +22,9 @@ from arq.connections import RedisSettings
 from arq.worker import func, run_worker
 
 from literature_agent.application.agent_turn_executor import AgentTurnExecutor
+from literature_agent.application.agent_turn_lifecycle_service import (
+    AgentTurnLifecycleService,
+)
 from literature_agent.application.arxiv_import_service import ArxivProjectImportService
 from literature_agent.application.evidence_service import EvidenceService
 from literature_agent.application.indexing_executor import IndexingExecutor
@@ -568,6 +571,11 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         runtime=FakeResearchAgentRuntime(),
         event_notifier=event_notifier,
     )
+    agent_turn_lifecycle = AgentTurnLifecycleService(
+        session_factory,
+        SqlalchemyRunRepository,
+        SqlalchemyAgentRepository,
+    )
     dispatcher = RunDispatcher(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -592,6 +600,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         heartbeat_interval_seconds=settings.worker_heartbeat_interval_seconds,
         max_run_attempts=settings.max_run_attempts,
         event_notifier=event_notifier,
+        terminal_callback=agent_turn_lifecycle.release_if_terminal,
     )
     ctx["run_reconcile_service"] = RunReconcileService(
         session_factory=session_factory,
@@ -602,6 +611,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         lease_seconds=settings.worker_lease_seconds,
         max_run_attempts=settings.max_run_attempts,
         batch_size=settings.outbox_dispatch_batch_size,
+        terminal_callback=agent_turn_lifecycle.release_if_terminal,
     )
     waiting_resume_service = WaitingRunResumeService(
         session_factory=session_factory,

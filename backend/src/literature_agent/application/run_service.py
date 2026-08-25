@@ -1,6 +1,7 @@
 """Run 应用服务。"""
 
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import TypeVar
 
@@ -22,6 +23,8 @@ from literature_agent.domain.run import Run, RunStatus, create_run
 
 TSession = TypeVar("TSession", bound=Session)
 
+logger = logging.getLogger(__name__)
+
 
 class RunService:
     """Run 用例层，负责状态转换、事件写入与事务编排。"""
@@ -32,6 +35,7 @@ class RunService:
         run_repo_factory: Callable[[TSession], RunRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
         event_notifier: EventNotifier | None = None,
+        terminal_callback: Callable[[str, RunStatus], Awaitable[None]] | None = None,
     ) -> None:
         """初始化 RunService。
 
@@ -45,6 +49,7 @@ class RunService:
         self._run_repo_factory = run_repo_factory
         self._event_repo_factory = event_repo_factory
         self._event_notifier = event_notifier or NoopEventNotifier()
+        self._terminal_callback = terminal_callback
 
     async def create_run(
         self,
@@ -238,6 +243,7 @@ class RunService:
             )
             await session.commit()
         await notify_run_event(self._event_notifier, run_id)
+        await self._notify_terminal(run_id, target_status)
         return result
 
     async def _transition(
@@ -279,7 +285,24 @@ class RunService:
             )
             await session.commit()
         await notify_run_event(self._event_notifier, run_id)
+        await self._notify_terminal(run_id, target_status)
         return result
+
+    async def _notify_terminal(self, run_id: str, status: RunStatus) -> None:
+        """业务提交后 best-effort 通知扩展聚合收敛终态引用。"""
+        if (
+            status not in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
+            or self._terminal_callback is None
+        ):
+            return
+        try:
+            await self._terminal_callback(run_id, status)
+        except Exception as exc:
+            logger.warning(
+                "Run 终态回调失败: run_id=%s error_type=%s",
+                run_id,
+                type(exc).__name__,
+            )
 
     async def _execute_transition(
         self,

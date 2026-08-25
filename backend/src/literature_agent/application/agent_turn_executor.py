@@ -1,7 +1,8 @@
 """AgentTurn Worker 执行器：Runtime 事务外调用、结果短事务提交。"""
 
+import asyncio
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, suppress
 from typing import TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
@@ -10,7 +11,10 @@ from literature_agent.application.ports.event_notifier import EventNotifier, Noo
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntime,
+    ResearchAgentRuntimeError,
+    RuntimeErrorKind,
     RuntimeExecutionState,
+    RuntimeTurnReconciliation,
     RuntimeTurnRequest,
 )
 from literature_agent.application.ports.run_repository import RunRepository
@@ -41,6 +45,7 @@ class AgentTurnExecutor[TSession: Session]:
         event_repo_factory: Callable[[TSession], EventRepository],
         runtime: ResearchAgentRuntime,
         event_notifier: EventNotifier | None = None,
+        cancellation_poll_interval_seconds: float = 0.5,
     ) -> None:
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -48,6 +53,7 @@ class AgentTurnExecutor[TSession: Session]:
         self._event_repo_factory = event_repo_factory
         self._runtime = runtime
         self._event_notifier = event_notifier or NoopEventNotifier()
+        self._cancellation_poll_interval_seconds = cancellation_poll_interval_seconds
 
     async def execute(self, run: Run, correlation_id: str) -> None:
         """所有 Runtime I/O 均发生在读取事务结束以后。"""
@@ -77,12 +83,21 @@ class AgentTurnExecutor[TSession: Session]:
                 turn.session_id, run.run_id, message.message_id, message.content, context, policy
             )
 
-        async for _event in self._runtime.execute_turn(request):
-            pass
-        reconciliation = await self._runtime.reconcile_turn(run.run_id)
-        if reconciliation.state is not RuntimeExecutionState.SUCCEEDED:
-            raise RuntimeError(f"Runtime 未成功完成: {reconciliation.state.value}")
+        current_status = await self._get_run_status(run.run_id, run.owner_id)
+        if current_status is RunStatus.CANCEL_REQUESTED:
+            await self._commit_cancellation(run, turn.session_id, correlation_id)
+            return
+        if current_status is not RunStatus.RUNNING:
+            return
+
+        reconciliation = await self._reconcile_or_execute(
+            request, run, turn.session_id, correlation_id
+        )
+        if reconciliation is None:
+            return
         result = await self._runtime.collect_turn_result(run.run_id)
+        if result.turn_run_id != run.run_id:
+            self._raise_runtime_scope_mismatch()
         requested_candidates: list[AgentArtifactCandidate] = []
         for candidate in result.artifact_candidates:
             requested = create_agent_artifact_candidate(
@@ -107,6 +122,16 @@ class AgentTurnExecutor[TSession: Session]:
         async with self._session_factory() as session:
             run_repo = self._run_repo_factory(session)
             locked = await run_repo.get_by_id_for_update(run.run_id, run.owner_id)
+            if locked is not None and locked.status is RunStatus.CANCEL_REQUESTED:
+                await self._commit_cancellation_in_session(
+                    session,
+                    locked,
+                    turn.session_id,
+                    correlation_id,
+                )
+                await session.commit()
+                await notify_run_event(self._event_notifier, run.run_id)
+                return
             if locked is None or locked.status is not RunStatus.RUNNING:
                 await session.commit()
                 return
@@ -203,3 +228,221 @@ class AgentTurnExecutor[TSession: Session]:
                 raise RunConcurrentModificationError(run.run_id)
             await session.commit()
         await notify_run_event(self._event_notifier, run.run_id)
+
+    async def _reconcile_or_execute(
+        self,
+        request: RuntimeTurnRequest,
+        run: Run,
+        session_id: str,
+        correlation_id: str,
+    ) -> RuntimeTurnReconciliation | None:
+        """先对账稳定 Turn；只有 Runtime 明确未知时才追加首次输入。"""
+        try:
+            reconciliation = await self._runtime.reconcile_turn(request.turn_run_id)
+        except ResearchAgentRuntimeError as exc:
+            if exc.code != "runtime_turn_not_found":
+                raise
+            current_status = await self._get_run_status(run.run_id, run.owner_id)
+            if current_status is RunStatus.CANCEL_REQUESTED:
+                await self._commit_cancellation(run, session_id, correlation_id)
+                return None
+            if current_status is not RunStatus.RUNNING:
+                return None
+            cancelled = await self._execute_with_cancellation_watch(
+                request, run, session_id, correlation_id
+            )
+            if cancelled:
+                return None
+            reconciliation = await self._runtime.reconcile_turn(request.turn_run_id)
+
+        self._validate_reconciliation_scope(request, reconciliation)
+        if (
+            reconciliation.state is RuntimeExecutionState.SUCCEEDED
+            and reconciliation.result_available
+        ):
+            return reconciliation
+        if reconciliation.state is RuntimeExecutionState.RUNNING:
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.TEMPORARY,
+                code="runtime_turn_still_running",
+                safe_message="Runtime Turn 仍在执行，稍后继续对账",
+            )
+        if reconciliation.state is RuntimeExecutionState.INTERRUPTED:
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.TEMPORARY,
+                code="runtime_turn_interrupted",
+                safe_message="Runtime Turn 等待受控恢复输入",
+            )
+        if reconciliation.state is RuntimeExecutionState.CANCELLED:
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.CANCELLED,
+                code="runtime_turn_cancelled",
+                safe_message="Runtime Turn 已取消",
+            )
+        if reconciliation.state is RuntimeExecutionState.FAILED:
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.PERMANENT,
+                code="runtime_turn_failed",
+                safe_message="Runtime Turn 已永久失败",
+            )
+        raise ResearchAgentRuntimeError(
+            kind=RuntimeErrorKind.TEMPORARY,
+            code="runtime_result_not_ready",
+            safe_message="Runtime 成功结果尚不可收集",
+        )
+
+    async def _execute_with_cancellation_watch(
+        self,
+        request: RuntimeTurnRequest,
+        run: Run,
+        session_id: str,
+        correlation_id: str,
+    ) -> bool:
+        """并行观察业务取消意图，并在事务外传播到 Runtime。"""
+
+        async def consume() -> None:
+            async for _event in self._runtime.execute_turn(request):
+                pass
+
+        stream_task = asyncio.create_task(consume())
+        status_task = asyncio.create_task(
+            self._wait_until_run_leaves_running(run.run_id, run.owner_id)
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                {stream_task, status_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if status_task in done:
+                status = status_task.result()
+                if status is not RunStatus.CANCEL_REQUESTED:
+                    stream_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await stream_task
+                    return True
+                await self._runtime.cancel_turn(run.run_id)
+                stream_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stream_task
+                await self._commit_cancellation(run, session_id, correlation_id)
+                return True
+
+            status_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await status_task
+            await stream_task
+            return False
+        finally:
+            for task in (stream_task, status_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(stream_task, status_task, return_exceptions=True)
+
+    @staticmethod
+    def _validate_reconciliation_scope(
+        request: RuntimeTurnRequest,
+        reconciliation: RuntimeTurnReconciliation,
+    ) -> None:
+        """拒绝 Runtime 返回的跨 Session/Turn Binding。"""
+        session_binding = reconciliation.session_binding
+        turn_binding = reconciliation.turn_binding
+        if (
+            reconciliation.turn_run_id != request.turn_run_id
+            or session_binding.session_id != request.session_id
+            or turn_binding.session_id != request.session_id
+            or turn_binding.turn_run_id != request.turn_run_id
+            or turn_binding.session_binding_id != session_binding.binding_id
+        ):
+            AgentTurnExecutor._raise_runtime_scope_mismatch()
+
+    @staticmethod
+    def _raise_runtime_scope_mismatch() -> None:
+        """抛出不携带 Runtime 原始输出的永久作用域错误。"""
+        raise ResearchAgentRuntimeError(
+            kind=RuntimeErrorKind.PERMANENT,
+            code="runtime_scope_mismatch",
+            safe_message="Runtime Turn 作用域校验失败",
+        )
+
+    async def _wait_until_run_leaves_running(
+        self, run_id: str, owner_id: str
+    ) -> RunStatus | None:
+        """用独立短读事务轮询协作取消；不在事务中调用 Runtime。"""
+        while True:
+            status = await self._get_run_status(run_id, owner_id)
+            if status is not RunStatus.RUNNING:
+                return status
+            await asyncio.sleep(self._cancellation_poll_interval_seconds)
+
+    async def _get_run_status(self, run_id: str, owner_id: str) -> RunStatus | None:
+        async with self._session_factory() as session:
+            value = await self._run_repo_factory(session).get_by_id(run_id)
+            if value is None or value.owner_id != owner_id:
+                return None
+            return value.status
+
+    async def _commit_cancellation(
+        self, run: Run, session_id: str, correlation_id: str
+    ) -> None:
+        """幂等提交业务取消与 Session 释放，不提交 Runtime 结果。"""
+        changed = False
+        async with self._session_factory() as session:
+            run_repo = self._run_repo_factory(session)
+            locked = await run_repo.get_by_id_for_update(run.run_id, run.owner_id)
+            if locked is not None and locked.status is RunStatus.CANCEL_REQUESTED:
+                await self._commit_cancellation_in_session(
+                    session, locked, session_id, correlation_id
+                )
+                changed = True
+            elif locked is not None and locked.status is RunStatus.CANCELLED:
+                await self._agent_repo_factory(session).release_active_turn(
+                    session_id, run.run_id
+                )
+            await session.commit()
+        if changed:
+            await notify_run_event(self._event_notifier, run.run_id)
+
+    async def _commit_cancellation_in_session(
+        self,
+        session: TSession,
+        locked: Run,
+        session_id: str,
+        correlation_id: str,
+    ) -> None:
+        """在已持 Run 行锁的事务中原子收敛取消、Event 与活动 Turn。"""
+        locked.transition_to(RunStatus.CANCELLED)
+        event_repo = self._event_repo_factory(session)
+        await event_repo.add(
+            create_event(
+                locked.run_id,
+                locked.event_sequence,
+                "run_cancelled",
+                "system",
+                correlation_id,
+                {},
+            )
+        )
+        await event_repo.add(
+            create_event(
+                locked.run_id,
+                locked.event_sequence + 1,
+                "agent_turn_cancelled",
+                "system",
+                correlation_id,
+                {"session_id": session_id},
+            )
+        )
+        if not await self._run_repo_factory(session).update_status(
+            locked.run_id,
+            RunStatus.CANCEL_REQUESTED,
+            RunStatus.CANCELLED,
+            locked.event_sequence + 2,
+        ):
+            raise RunConcurrentModificationError(locked.run_id)
+        if not await self._agent_repo_factory(session).release_active_turn(
+            session_id, locked.run_id
+        ):
+            current = await self._agent_repo_factory(session).get_session_scoped_for_update(
+                session_id, locked.owner_id
+            )
+            if current is None or current.active_turn_run_id is not None:
+                raise RunConcurrentModificationError(locked.run_id)
