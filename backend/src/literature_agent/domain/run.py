@@ -19,6 +19,7 @@ class RunType(StrEnum):
     INDEXING = "indexing"
     RAG_ANSWER = "rag_answer"
     REVIEW = "review"
+    AGENT_TURN = "agent_turn"
 
 
 class RunStatus(StrEnum):

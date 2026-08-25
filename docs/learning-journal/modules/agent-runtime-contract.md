@@ -1,0 +1,149 @@
+# Agent Runtime 业务契约与 Fake Runtime
+
+## 模块解决的问题
+
+Phase 5 先建立 Research Agent 的平台业务边界，再接 Deep Agents。该模块定义绑定 Project 的持续
+`AgentSession`、一条用户消息触发的 `AgentTurnRun`、不可变上下文/策略快照、opaque Runtime Binding，
+以及一个不泄漏 SDK 类型的最小 `ResearchAgentRuntime` Port。
+
+切片 1 同时提供完全离线的 `FakeResearchAgentRuntime`，用于在数据库、API 和 Worker 接入前验证稳定
+Session/Turn 映射、重复执行、取消、恢复、对账和结果重复收集语义。
+
+## 边界和执行流程
+
+```text
+AgentSession（owner + Project）
+  ├─ 有序 AgentMessage
+  ├─ 同时最多一个 active_turn_run_id
+  └─ RuntimeSessionBinding（binding_id + generation + opaque Thread/Workspace ID）
+
+AgentTurnRun（一条用户消息）
+  ├─ ContextSnapshot（授权数据版本引用）
+  ├─ PolicySnapshot（能力、审批与预算）
+  └─ RuntimeTurnBinding（session_binding_id + opaque Execution/Checkpoint ID）
+```
+
+`ResearchAgentRuntime` 只有五个操作：
+
+1. `execute_turn`：返回项目 `RuntimeEvent` 异步迭代器；
+2. `resume_turn`：沿用同一 Execution/Checkpoint 恢复；
+3. `cancel_turn`：阻止后续 Runtime 操作；
+4. `reconcile_turn`：返回 Runtime 自身状态与 Binding；
+5. `collect_turn_result`：成功后重复读取相同结果。
+
+没有单独的 `stream_turn`：执行和恢复本身就是异步增量流。也没有提前加入通用 `close`、Thread、Store、
+Workspace 或 Deep Agents 配置操作。Runtime 成功和结果可收集不代表业务 Message、Evidence、Artifact 或
+Run 已经提交；该事务闭环属于后续切片。
+
+## 状态、数据模型和不变量
+
+- `AgentSession` 创建后 owner/Project 不可变；冻结 dataclass 防止原地修改；
+- `AgentSession` 字段为 `session_id`、`owner_id`、`project_id`、`title`、`status`、
+  `active_turn_run_id`、`created_at`、`last_activity_at`；
+- `AgentMessage` 字段为 `message_id`、`session_id`、`sequence`、`role`、`content`、`turn_run_id`、
+  `idempotency_key`、`created_at`；
+- `AgentTurnRun` 字段为 `turn_run_id`、`session_id`、`user_message_id`、`context_snapshot_id`、
+  `policy_snapshot_id`；
+- `claim_active_turn` 只允许一个活动 Turn，同一 `turn_run_id` 重复认领幂等；
+- `create_agent_message` 根据调用方从持久化 Session 锁定后取得的 `last_sequence` 唯一生成下一序号；
+  数据库条件更新和唯一约束尚未实现；
+- `AgentMessage.idempotency_key` 是消息提交的稳定幂等事实；相同提交不能生成第二条消息或第二个 Turn；
+  `sequence` 的数据库并发保证仍留在切片 2 的事务、条件更新和唯一约束中；
+- `AgentTurnRun` 只保存通用 Run 与 Session、用户 Message、两个 Snapshot 的稳定关联；通用 Run 新增
+  `run_type=agent_turn`，未修改状态机；
+- `ContextSnapshot` 固化 owner/Project/Session/Turn、用户消息、历史边界、Paper/PaperVersion/ChunkSet、
+  可选 `review_output_id`、Artifact ID/内容哈希；不保存论文正文、Chunk、Matrix payload 或 SDK State；
+- Evidence Matrix 绑定具体 `ReviewOutput.output_id`。后续 Context Builder 必须校验
+  `output_type=evidence_matrix`、`output_key=evidence-matrix` 和 owner/Project/Review Run 所有权闭包；
+- `PolicySnapshot` 固化 allowlist、网络/Sandbox 开关、审批要求和模型/工具调用预算；默认能力关闭；
+- Snapshot 内容使用规范 JSON 计算 SHA-256，Snapshot ID 和创建时间不参与哈希；所有集合使用 tuple，
+  避免冻结对象中嵌入可变容器；
+- `RuntimeSessionBinding` 保存稳定 `binding_id`、正整数 `generation` 及 opaque Thread/Workspace ID；
+  `RuntimeTurnBinding.session_binding_id` 让每个 Turn 明确引用具体一代 Session Binding；
+- Runtime 重置/升级可创建新 `binding_id` 并递增 generation，旧映射留作审计；Fake 当前只验证固定
+  generation 1；
+- Binding 只使用项目字符串 DTO 保存 opaque ID，不导入或公开 Deep Agents/LangGraph 类型；
+- 上述均为领域/Port 字段，表名、数据库映射、索引与约束在切片 2 随迁移定稿。
+
+## Fake Runtime 语义
+
+- Session ID 通过本地 SHA-256 确定性映射一个 Thread ID 和 Workspace ID；
+- Session ID 同时确定性映射一个 `binding_id`，Fake 固定 `generation=1`；
+- Turn Run ID 确定性映射一个 Execution ID 和 Checkpoint ID；
+- 同 Session 的多个 Turn 复用同一 Binding，且各自通过 `session_binding_id` 显式引用它；
+- 同一请求重复 `execute_turn` 重放相同事件和结果，不增加 Binding 或逻辑 Execution；
+- 同一 `turn_run_id` 携带不同输入会得到 permanent `runtime_turn_conflict`；
+- 可由测试构造参数让固定 Turn 在 `interrupted` 停止；`resume_turn` 沿用原 Binding，重复相同恢复输入
+  幂等，不同恢复输入冲突；
+- 取消后正在消费的流不再产生新事件，也不能收集结果；已经成功的终态取消是幂等 no-op；
+- `reconcile_turn` 只报告 Fake 的 Runtime 状态、已实际发出的最后事件序号和结果可用性，不改变业务 Run；
+- 错误只携带 `temporary/permanent/cancelled`、稳定 code 和安全消息。
+
+Fake 不调用模型、网络、MCP、Browser 或 Sandbox，不读取环境密钥，也不依赖 `deepagents`。它证明的是
+平台 Port 语义，不是 Deep Agents、数据库事务、崩溃恢复或外部副作用安全已经通过验证。
+
+## 关键决定与替代方案
+
+- 采用 `AgentSession : Runtime Thread = 1:1`、`AgentTurnRun : Runtime Execution = 1:1`；没有复用 RAG
+  Conversation 生命周期；
+- Port 使用项目 DTO 和异步迭代器，避免为 SDK 的 Thread/Checkpoint/Event 类型建立领域镜像；
+- `review_output_id` 是 Matrix 的主要绑定，不把 `review_run_id` 当作 Snapshot 输入；Review Run 由平台
+  沿 ReviewOutput 所有权闭包反查校验；
+- 没有为切片 2 预建 Repository、数据库模型或事务接口，也没有为后续 MCP/Browser/Sandbox/Skill 增加
+  专用 Port 方法。
+
+## 失败、重试、重复和取消
+
+`RuntimeErrorKind.TEMPORARY` 表示外层可按业务 Attempt 预算重试；`PERMANENT` 表示相同输入重复无效；
+`CANCELLED` 表示取消条件已成立。是否创建新 Attempt、何时从 `retry_wait` 恢复以及如何提交业务终态仍由
+平台 Run/Application Service 决定，Runtime 不能自行修改 PostgreSQL 事实。
+
+Fake 的重复执行只验证内存中的逻辑去重和稳定 ID。跨进程响应丢失、Worker 崩溃、数据库提交前后故障、
+Tool/Artifact 副作用去重将在切片 2/3 通过 Repository、Outbox 和故障注入测试验证。
+
+## 安全和可观测性
+
+`RuntimeEvent` 是待筛选的短暂增量，不是持久 `RunEvent`。当前 DTO 只允许稳定 ID、顺序、白名单 kind、
+文本增量或安全摘要；后续 Adapter/Application 仍必须禁止持久化思考过程、完整 Prompt、网页/论文正文、
+Secret 和大型 Tool 输出。
+
+所有 owner/Project/Evidence/Artifact 授权必须在平台 Context Builder 中完成。Fake 接收已构造 Snapshot，
+不伪造其数据库所有权检查已经实现。
+
+## 重要测试和运行结果
+
+2026-08-25 实际运行：
+
+- 定向 `pytest`：18 passed；覆盖 Session/Message/Turn、单活动 Turn、消息 sequence、Snapshot 不可变与
+  内容哈希、`review_output_id`、Port 方法集合与 SDK 类型隔离、Fake 稳定映射、重复执行、取消、恢复、
+  Binding generation/Turn 引用、对账、结果收集和错误分类；
+- 定向 `ruff check`：通过；
+- 定向 `pyright`（新增生产代码）：0 errors、0 warnings、0 informations。
+
+## 代码入口
+
+- `backend/src/literature_agent/domain/research_agent.py`
+- `backend/src/literature_agent/application/ports/research_agent_runtime.py`
+- `backend/src/literature_agent/infrastructure/agent/fake_research_agent_runtime.py`
+- `backend/tests/domain/test_research_agent.py`
+- `backend/tests/application/test_research_agent_runtime_contract.py`
+- `backend/tests/infrastructure/test_fake_research_agent_runtime.py`
+
+## 已知限制
+
+- 没有数据库表、迁移、Repository、API、Worker、Event/Outbox 或真实事务；
+- 没有读取 Project Chunk、Evidence Matrix 或 Artifact，只有稳定授权引用；
+- 没有 Artifact staged/commit、Citation 校验或业务结果提交；
+- 没有接入 Deep Agents、LangGraph Checkpoint、MCP、Browser、Sandbox、WorkspaceSnapshot 或 Skill；
+- Fake 状态位于进程内，不能作为跨进程恢复证据；
+- 尚未验证取消与真实在途模型/Tool 调用的竞争。
+
+## 60 秒面试说明
+
+我先没有直接把 Deep Agents SDK 放进 API 或领域层，而是定义了一个五方法的
+`ResearchAgentRuntime` Port。持续 Session 和逐消息 Turn Run 是 PostgreSQL 将拥有的业务事实，SDK
+Thread、Execution、Checkpoint 和 Workspace 只通过 opaque Binding 出现在内部契约里。每个 Turn 固化
+Context/Policy Snapshot，Context 只存 Project Index、具体 ReviewOutput 和 Artifact 的版本引用，不复制
+正文。一个完全离线 Fake 用稳定哈希证明 Session/Turn 映射、重复执行、恢复、取消、对账与结果重复收集
+语义。这样后续替换成 Deep Agents Adapter 时，SDK 版本变化只影响 Adapter；但数据库事务、权限和崩溃
+恢复必须在后续切片单独验证，不能由 Fake 测试冒充。

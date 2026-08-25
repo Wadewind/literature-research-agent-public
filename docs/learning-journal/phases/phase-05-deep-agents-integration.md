@@ -2,7 +2,8 @@
 
 ## 状态
 
-计划中，尚未开始实现。Spec 初版日期：2026-08-20；按 ADR-0005 重构日期：2026-08-25。
+进行中。Spec 初版日期：2026-08-20；按 ADR-0005 重构日期：2026-08-25；切片 1
+“契约与 Fake Runtime”于 2026-08-25 完成。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -32,8 +33,9 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
   → 基于前一轮业务历史继续分析并完成
 ```
 
-首个切片不要求真实 Deep Agents、MCP、Browser 或 Sandbox。它应让用户看到一个可持续交互的
-Project-scoped Agent Chat，并证明 Session、Turn、消息、上下文、取消和恢复的业务所有权正确。
+切片 1 不要求真实 Deep Agents、MCP、Browser 或 Sandbox，只建立可测试的业务契约。首个端到端业务
+闭环从切片 2 开始，应让用户看到一个可持续交互的 Project-scoped Agent Chat，并证明 Session、Turn、
+消息、上下文、取消和恢复的业务所有权正确。
 
 后续切片再依次验证 Deep Agents Fake Model、MCP、Browser、Sandbox 和平台 Skills。框架自带这些能力
 不代表平台已经完成权限、恢复、审计和安全集成。
@@ -74,14 +76,20 @@ Project-scoped Agent Chat，并证明 Session、Turn、消息、上下文、取�
 - 与一个 SDK Thread 稳定 1:1 映射，但 SDK Thread ID 不进入公开 API；
 - 同时最多存在一个活动 Turn，避免并发写入破坏对话顺序。
 
+### AgentMessage
+
+- `sequence` 在 Session 内严格递增，用户与助手消息都显式关联产生该交互的 Turn Run。
+
 ### AgentTurnRun
 
-- 一条用户消息对应一个业务 Run，建议新增 `run_type=agent_turn`，精确枚举在切片 1 定稿；
+- 一条用户消息对应一个业务 Run，切片 1 已新增 `run_type=agent_turn`；
 - 该 Turn 覆盖从用户消息到最终 Assistant Message 的完整产品交互，内部可有多次 LLM/Tool Step、
   Observation 和 Interrupt；内部 Step 不各自创建 Turn Run；
 - 拥有 Attempt、Event、Outbox、Usage、取消意图、终态和结果引用；
 - 与一次 SDK Execution 1:1 对应；重试创建新 Attempt，不创建第二个业务 Turn；
 - 只有 Turn Run 可以运行、取消、失败、恢复和计费，Session 本身不是长任务 Run。
+
+Attempt、Event、Usage 和状态继续由通用 Run 聚合拥有，不在扩展记录中复制。
 
 ### ContextSnapshot 与 PolicySnapshot
 
@@ -90,12 +98,57 @@ Project-scoped Agent Chat，并证明 Session、Turn、消息、上下文、取�
 - owner、project_id、session_id、turn_run_id；
 - 用户消息和允许读取的历史消息范围；
 - Project Index/ChunkSet 版本引用；
-- 明确选择的 Review Run 与 Evidence Matrix/Output 引用；
+- 明确选择的 Review Evidence Matrix `ReviewOutput.output_id`；
 - 允许读取的 Artifact 引用；
 - 工具、Skill、网络、Sandbox、预算和审批策略版本。
 
 快照保存稳定 ID、版本和小型摘要，不复制论文全文、全部 Chunk、Evidence Matrix 大对象或 SDK State。
 运行时按快照引用通过受权应用 Port 读取内容，恢复不得静默扩大权限或切换到新版本上下文。
+
+切片 1 已定稿 `ContextSnapshot` 的最小字段：
+`snapshot_id`、`schema_version`、`owner_id`、`project_id`、`session_id`、`turn_run_id`、
+`user_message_id`、`history_through_sequence`、`project_index_refs`、`review_output_id`、`artifact_refs`、
+`snapshot_hash`、`created_at`。其中 `project_index_refs` 固化 Paper、PaperVersion 与 ChunkSet ID，
+`artifact_refs` 固化 Artifact ID 与内容 SHA-256。`review_output_id` 可选且是 Evidence Matrix 的主要绑定，
+不把 `review_run_id` 放进 Snapshot。切片 5 的平台 Context Builder 必须进一步校验该输出属于当前
+owner/Project/Review Run 闭包，并且 `output_type=evidence_matrix`、`output_key=evidence-matrix`；切片 1
+不读取或复制 Matrix payload。
+
+`PolicySnapshot` 最小字段为 `snapshot_id`、`policy_version`、`owner_id`、`project_id`、`session_id`、
+`turn_run_id`、`allowed_tool_names`、`allowed_skill_names`、`network_enabled`、`sandbox_enabled`、
+`approval_required`、`max_model_calls`、`max_tool_calls`、`snapshot_hash`、`created_at`。首版默认
+Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以构造和持久化策略快照。
+
+### 切片 1 领域字段清单
+
+以下字段与当前冻结 dataclass 完全一致：
+
+- `AgentSession`：`session_id`、`owner_id`、`project_id`、`title`、`status`、
+  `active_turn_run_id`、`created_at`、`last_activity_at`；
+- `AgentMessage`：`message_id`、`session_id`、`sequence`、`role`、`content`、`turn_run_id`、
+  `idempotency_key`、`created_at`；
+- `AgentTurnRun`：`turn_run_id`、`session_id`、`user_message_id`、`context_snapshot_id`、
+  `policy_snapshot_id`。
+
+`AgentMessage.idempotency_key` 是消息提交的稳定幂等事实；相同提交不能创建第二条消息或第二个 Turn。
+领域工厂根据已知 `last_sequence` 生成下一序号，但 `sequence` 的数据库并发安全仍必须在切片 2 通过
+事务内条件更新和唯一约束保证，切片 1 的内存检查不是并发证据。
+
+### Runtime Binding
+
+切片 1 的 SDK-neutral Binding 字段为：
+
+- `RuntimeSessionBinding`：`session_id`、稳定 `binding_id`、正整数 `generation`、opaque
+  `runtime_thread_id`、opaque `runtime_workspace_id`；
+- `RuntimeTurnBinding`：`session_id`、`turn_run_id`、`session_binding_id`、opaque
+  `runtime_execution_id`、opaque `runtime_checkpoint_id`。
+
+正常连续 Turn 复用同一代 Session Binding。Runtime 重置或升级允许创建新的 `binding_id` 并递增
+`generation`，旧 Binding 留作审计；Turn 通过 `session_binding_id` 明确属于哪一代映射。Fake Runtime
+当前固定 `generation=1`，不伪造重置/升级验证。
+
+以上 AgentSession、AgentMessage、AgentTurnRun、Snapshot 和 Binding 是切片 1 的领域/Port 字段；表名、
+数据库列映射、索引与约束仍在切片 2 随迁移定稿。
 
 ### Workspace
 
@@ -115,7 +168,7 @@ Agent 不直接复用 RAG Conversation 表，也不读取 Review LangGraph 内�
 |---|---|---|
 | Project Paper Chunk Index | 通过 Project-scoped Retriever/Reader Tool 检索 | 直接访问向量表或绕过 owner/Project 过滤 |
 | Evidence 与 Citation | 返回稳定 Evidence ID，并用 Validator 校验输出 | 只靠 Prompt 约束引用 |
-| Review Evidence Matrix | 通过明确的 Review Run/Output 引用读取 | 读取任意 Review 或 LangGraph Checkpoint |
+| Review Evidence Matrix | 通过明确的 `ReviewOutput.output_id` 读取，并校验聚合类型、稳定 key 与 owner/Project/Review Run 闭包 | 读取任意 Review、Matrix payload 或 LangGraph Checkpoint |
 | Artifact Storage | 读取显式授权 Artifact，提交候选输出 | 把 Workspace 文件直接视为业务 Artifact |
 | RAG Context Builder 模式 | 复用 token、去重、排序和来源约束 | 复用 RAG Conversation 生命周期 |
 | Run/Event/Outbox/Worker | 复用可靠投递、状态和重放机制 | 把 ARQ 或 SDK Event 当事实来源 |
@@ -147,25 +200,32 @@ Artifact                     平台校验后持久化的业务文件
 
 ## ResearchAgentRuntime Port 方向
 
-切片 1 先以行为测试固定语义，再确定精确 Python 签名。Port 至少表达：
+切片 1 已以行为测试固定为五个操作：
 
-- `execute_turn(binding, input_ref, context_snapshot_ref, policy_snapshot_ref)`：启动或恢复一轮；
-- `stream_turn(turn_run_id, cursor)`：输出可归一化的结构化增量；
-- `resume_turn(turn_run_id, input_or_decision)`：从相同 Execution/Checkpoint 恢复；
-- `cancel_turn(turn_run_id)`：请求停止新模型与工具操作；
-- `reconcile_turn(turn_run_id)`：查询 Runtime 状态并与业务事实对账；
-- `collect_turn_result(turn_run_id)`：返回 Assistant Message、Evidence 引用和候选 Artifact 描述；
-- `close_turn(turn_run_id)`：幂等释放本轮资源；
-- `close_session(session_id)`：幂等关闭 Thread/Store 等会话资源。
+- `execute_turn(RuntimeTurnRequest) -> AsyncIterator[RuntimeEvent]`：幂等建立/启动一轮，重复输入重放同一
+  逻辑 Execution 的确定性增量；
+- `resume_turn(RuntimeResumeRequest) -> AsyncIterator[RuntimeEvent]`：从相同 Execution/Checkpoint 恢复；
+- `cancel_turn(turn_run_id) -> RuntimeTurnReconciliation`：停止后续操作并返回 Runtime 状态；
+- `reconcile_turn(turn_run_id) -> RuntimeTurnReconciliation`：查询 Runtime 状态与 opaque Binding；
+- `collect_turn_result(turn_run_id) -> RuntimeTurnResult`：成功后可重复收集 Assistant Message、Evidence ID
+  和候选 Artifact 描述，业务提交仍是后续独立步骤。
+
+执行与恢复直接返回项目自有的异步增量迭代器，因此首版不增加独立 `stream_turn`。`close_turn`、
+`close_session` 以及通用资源管理接口也不在切片 1 预建；后续只有出现已验证的生命周期需求时才扩展 Port。
 
 Port 输入输出只包含项目自有 DTO、稳定 ID、小型结构化数据和错误分类。Adapter 负责 SDK 类型转换、
 Thread/Execution 映射、事件筛选、版本兼容和异常归一化。
+
+归一化状态为 `running`、`interrupted`、`succeeded`、`failed`、`cancelled`；错误最小分为
+`temporary`、`permanent`、`cancelled`，并携带稳定 `code` 与安全描述。Runtime 未知 Turn、重复
+`turn_run_id` 但输入不同、非法恢复属于 permanent；结果暂未就绪属于 temporary；取消后的恢复/结果
+收集属于 cancelled。错误分类只指导后续业务重试策略，不替代 PostgreSQL Run 状态。
 
 ## 数据、API 和 Event 变化方向
 
 ### 数据
 
-切片 1 在失败测试前定稿名称与字段，至少需要表达：
+Phase 5 的数据库方向至少需要表达：
 
 - Agent Session 的 owner、project_id、状态、活动 Turn 和 SDK Thread Binding；
 - 有序 Message 的 role、content 摘要/引用、关联 Turn 和幂等键；
@@ -175,12 +235,16 @@ Thread/Execution 映射、事件筛选、版本兼容和异常归一化。
 - 聚合 Usage、候选 Artifact、来源和提交状态；
 - Session 级单活动 Turn 唯一约束或等价条件更新。
 
+切片 1 只有冻结领域 dataclass、Port/DTO 和内存 Fake，没有数据库表、Repository、迁移、API、Worker、
+Event/Outbox 持久化或事务行为。上述数据库唯一约束与条件更新属于切片 2，不能把内存领域测试当作并发
+事务证据。
+
 现有 Review `Artifact` 模型带有非空 `review_run_id`，不能直接假设支持 Agent Artifact；是否扩展为通用
 owner，或新增 Agent 输出关联，应在对应迁移切片单独决策并测试，不能用可空字段绕过所有权。
 
 ### API
 
-资源方向如下，具体路径与 Schema 在切片 1 确认：
+资源方向如下，具体路径与 Schema 在 API 切片确认：
 
 ```text
 POST /api/v1/projects/{project_id}/agent-sessions
@@ -268,7 +332,7 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 
 ## 实现切片顺序
 
-1. **契约与 Fake Runtime**：用失败测试固定 Session、Message、Turn、Snapshot、单活动 Turn、Port 和错误语义；
+1. **契约与 Fake Runtime（已完成）**：用失败测试固定 Session、Message、Turn、Snapshot、单活动 Turn、Port 和错误语义；
 2. **两轮离线业务闭环**：API → DB/Event/Outbox → Worker → Fake Runtime → Message/Evidence/候选 Artifact；
 3. **取消、恢复与对账**：覆盖重复 Job、Worker 崩溃、响应丢失、取消竞争和 Effectively Once；
 4. **Deep Agents Adapter**：固定依赖版本，用 Fake Chat Model 和确定性 Tool 验证 Thread/Execution/Checkpoint；
@@ -292,6 +356,14 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 普通自动测试必须完全离线，不访问真实模型、实时网站、外部 MCP 或付费 Sandbox。真实 Provider/Runtime
 Smoke 必须显式启用、限制预算，并记录版本、命令、耗时和结果。
 
+切片 1 实际验证（2026-08-25）：
+
+- `pytest` 定向领域/Application/Infrastructure 契约测试：18 passed；
+- `ruff check` 定向新增代码与测试：通过；
+- `pyright` 定向新增生产代码：0 errors、0 warnings、0 informations。
+
+Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，不调用模型、网络、MCP 或 Sandbox。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -310,7 +382,8 @@ Smoke 必须显式启用、限制预算，并记录版本、命令、耗时和�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. Session、Message、Runtime Binding、Snapshot 的精确表名、字段和保留策略；
+1. Session、Message、Runtime Binding、Snapshot 的精确表名、数据库字段映射和保留策略；领域对象与 Port
+   字段已在切片 1 固定；
 2. `AgentTurnRun` 使用通用 Run 扩展表还是专用详情表；
 3. Assistant Message 与候选 Artifact 在 Turn 终态事务中的提交边界；
 4. 现有 Review 专属 Artifact 模型如何演进为不削弱所有权的通用模型；

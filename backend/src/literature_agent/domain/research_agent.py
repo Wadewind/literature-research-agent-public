@@ -1,0 +1,437 @@
+"""Research Agent 持续会话与逐轮执行的领域契约。"""
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from enum import StrEnum
+from uuid import uuid4
+
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_AGENT_TITLE_MAX_LENGTH = 200
+_AGENT_MESSAGE_MAX_LENGTH = 16_000
+
+
+class AgentSessionStatus(StrEnum):
+    """AgentSession 生命周期；Session 本身不是后台 Run。"""
+
+    ACTIVE = "active"
+    CLOSED = "closed"
+
+
+class AgentMessageRole(StrEnum):
+    """用户可见 Agent 消息角色。"""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSession:
+    """绑定 owner/Project 的持续研究会话。"""
+
+    session_id: str
+    owner_id: str
+    project_id: str
+    title: str | None
+    status: AgentSessionStatus
+    active_turn_run_id: str | None
+    created_at: datetime
+    last_activity_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AgentMessage:
+    """AgentSession 内按 sequence 排序的一条用户可见消息。"""
+
+    message_id: str
+    session_id: str
+    sequence: int
+    role: AgentMessageRole
+    content: str
+    turn_run_id: str
+    idempotency_key: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTurnRun:
+    """通用 ``agent_turn`` Run 的最小关联记录。"""
+
+    turn_run_id: str
+    session_id: str
+    user_message_id: str
+    context_snapshot_id: str
+    policy_snapshot_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSessionBinding:
+    """Session 某一代稳定 Binding 到 Runtime Thread/Workspace 的映射。"""
+
+    session_id: str
+    binding_id: str
+    generation: int
+    runtime_thread_id: str
+    runtime_workspace_id: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty(
+            session_id=self.session_id,
+            binding_id=self.binding_id,
+            runtime_thread_id=self.runtime_thread_id,
+            runtime_workspace_id=self.runtime_workspace_id,
+        )
+        if self.generation < 1:
+            raise ValueError("RuntimeSessionBinding generation 必须是正整数")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeTurnBinding:
+    """Turn Run 到具体 Session Binding 及 Runtime Execution/Checkpoint 的映射。"""
+
+    session_id: str
+    turn_run_id: str
+    session_binding_id: str
+    runtime_execution_id: str
+    runtime_checkpoint_id: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty(
+            session_id=self.session_id,
+            turn_run_id=self.turn_run_id,
+            session_binding_id=self.session_binding_id,
+            runtime_execution_id=self.runtime_execution_id,
+            runtime_checkpoint_id=self.runtime_checkpoint_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectIndexContextRef:
+    """一次 Turn 获准读取的 PaperVersion/ChunkSet 版本引用。"""
+
+    paper_id: str
+    paper_version_id: str
+    chunk_set_id: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty(
+            paper_id=self.paper_id,
+            paper_version_id=self.paper_version_id,
+            chunk_set_id=self.chunk_set_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactContextRef:
+    """一次 Turn 获准读取的 Artifact 及其内容版本。"""
+
+    artifact_id: str
+    content_hash: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty(artifact_id=self.artifact_id)
+        if not _SHA256_PATTERN.fullmatch(self.content_hash):
+            raise ValueError("Artifact content_hash 必须是小写 SHA-256")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextSnapshot:
+    """Turn 创建时固化的小型授权上下文引用。"""
+
+    snapshot_id: str
+    schema_version: str
+    owner_id: str
+    project_id: str
+    session_id: str
+    turn_run_id: str
+    user_message_id: str
+    history_through_sequence: int
+    project_index_refs: tuple[ProjectIndexContextRef, ...]
+    review_output_id: str | None
+    artifact_refs: tuple[ArtifactContextRef, ...]
+    snapshot_hash: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PolicySnapshot:
+    """Turn 创建时固化的能力开关、审批要求和调用预算。"""
+
+    snapshot_id: str
+    policy_version: str
+    owner_id: str
+    project_id: str
+    session_id: str
+    turn_run_id: str
+    allowed_tool_names: tuple[str, ...]
+    allowed_skill_names: tuple[str, ...]
+    network_enabled: bool
+    sandbox_enabled: bool
+    approval_required: bool
+    max_model_calls: int
+    max_tool_calls: int
+    snapshot_hash: str
+    created_at: datetime
+
+
+def create_agent_session(*, owner_id: str, project_id: str, title: str | None) -> AgentSession:
+    """创建绑定后不可换 owner/Project 的 AgentSession。"""
+    _require_non_empty(owner_id=owner_id, project_id=project_id)
+    normalized_title = title.strip() if title is not None else None
+    normalized_title = normalized_title or None
+    if normalized_title is not None and len(normalized_title) > _AGENT_TITLE_MAX_LENGTH:
+        raise ValueError(f"AgentSession 标题长度不能超过 {_AGENT_TITLE_MAX_LENGTH}")
+    now = datetime.now(UTC)
+    return AgentSession(
+        session_id=str(uuid4()),
+        owner_id=owner_id,
+        project_id=project_id,
+        title=normalized_title,
+        status=AgentSessionStatus.ACTIVE,
+        active_turn_run_id=None,
+        created_at=now,
+        last_activity_at=now,
+    )
+
+
+def claim_active_turn(session: AgentSession, turn_run_id: str) -> AgentSession:
+    """幂等认领 Session 的唯一活动 Turn。"""
+    _require_non_empty(turn_run_id=turn_run_id)
+    if session.status is not AgentSessionStatus.ACTIVE:
+        raise ValueError("已关闭的 AgentSession 不能开始 Turn")
+    if session.active_turn_run_id == turn_run_id:
+        return session
+    if session.active_turn_run_id is not None:
+        raise ValueError("AgentSession 已有活动 Turn")
+    return replace(
+        session,
+        active_turn_run_id=turn_run_id,
+        last_activity_at=datetime.now(UTC),
+    )
+
+
+def release_active_turn(session: AgentSession, turn_run_id: str) -> AgentSession:
+    """仅由当前活动 Turn 幂等释放 Session。"""
+    if session.active_turn_run_id is None:
+        return session
+    if session.active_turn_run_id != turn_run_id:
+        raise ValueError("待释放 Turn 与 AgentSession 当前活动 Turn 不匹配")
+    return replace(
+        session,
+        active_turn_run_id=None,
+        last_activity_at=datetime.now(UTC),
+    )
+
+
+def create_agent_message(
+    *,
+    session_id: str,
+    last_sequence: int,
+    role: AgentMessageRole,
+    content: str,
+    turn_run_id: str,
+    idempotency_key: str,
+) -> AgentMessage:
+    """创建严格占用 Session 下一 sequence 的消息。"""
+    _require_non_empty(
+        session_id=session_id,
+        turn_run_id=turn_run_id,
+        idempotency_key=idempotency_key,
+    )
+    if last_sequence < 0:
+        raise ValueError("Session last_sequence 不能小于 0")
+    if not content.strip():
+        raise ValueError("AgentMessage 内容不能为空")
+    if len(content) > _AGENT_MESSAGE_MAX_LENGTH:
+        raise ValueError(f"AgentMessage 内容长度不能超过 {_AGENT_MESSAGE_MAX_LENGTH}")
+    return AgentMessage(
+        message_id=str(uuid4()),
+        session_id=session_id,
+        sequence=last_sequence + 1,
+        role=role,
+        content=content,
+        turn_run_id=turn_run_id,
+        idempotency_key=idempotency_key,
+        created_at=datetime.now(UTC),
+    )
+
+
+def create_agent_turn_run(
+    *,
+    turn_run_id: str,
+    session_id: str,
+    user_message_id: str,
+    context_snapshot_id: str,
+    policy_snapshot_id: str,
+) -> AgentTurnRun:
+    """创建一条通用 Run 到 Agent Turn 所有权记录的关联。"""
+    _require_non_empty(
+        turn_run_id=turn_run_id,
+        session_id=session_id,
+        user_message_id=user_message_id,
+        context_snapshot_id=context_snapshot_id,
+        policy_snapshot_id=policy_snapshot_id,
+    )
+    return AgentTurnRun(
+        turn_run_id=turn_run_id,
+        session_id=session_id,
+        user_message_id=user_message_id,
+        context_snapshot_id=context_snapshot_id,
+        policy_snapshot_id=policy_snapshot_id,
+    )
+
+
+def create_context_snapshot(
+    *,
+    owner_id: str,
+    project_id: str,
+    session_id: str,
+    turn_run_id: str,
+    user_message_id: str,
+    history_through_sequence: int,
+    project_index_refs: tuple[ProjectIndexContextRef, ...] = (),
+    review_output_id: str | None = None,
+    artifact_refs: tuple[ArtifactContextRef, ...] = (),
+) -> ContextSnapshot:
+    """创建只包含稳定引用的不可变 ContextSnapshot。"""
+    _require_non_empty(
+        owner_id=owner_id,
+        project_id=project_id,
+        session_id=session_id,
+        turn_run_id=turn_run_id,
+        user_message_id=user_message_id,
+    )
+    if history_through_sequence < 0:
+        raise ValueError("history_through_sequence 不能小于 0")
+    if review_output_id is not None and not review_output_id.strip():
+        raise ValueError("review_output_id 不能是空字符串")
+    _reject_duplicate_refs(project_index_refs, "Project Index")
+    _reject_duplicate_refs(artifact_refs, "Artifact")
+    schema_version = "agent-context.v1"
+    hash_payload = {
+        "schema_version": schema_version,
+        "owner_id": owner_id,
+        "project_id": project_id,
+        "session_id": session_id,
+        "turn_run_id": turn_run_id,
+        "user_message_id": user_message_id,
+        "history_through_sequence": history_through_sequence,
+        "project_index_refs": [
+            {
+                "paper_id": ref.paper_id,
+                "paper_version_id": ref.paper_version_id,
+                "chunk_set_id": ref.chunk_set_id,
+            }
+            for ref in project_index_refs
+        ],
+        "review_output_id": review_output_id,
+        "artifact_refs": [
+            {"artifact_id": ref.artifact_id, "content_hash": ref.content_hash}
+            for ref in artifact_refs
+        ],
+    }
+    return ContextSnapshot(
+        snapshot_id=str(uuid4()),
+        schema_version=schema_version,
+        owner_id=owner_id,
+        project_id=project_id,
+        session_id=session_id,
+        turn_run_id=turn_run_id,
+        user_message_id=user_message_id,
+        history_through_sequence=history_through_sequence,
+        project_index_refs=tuple(project_index_refs),
+        review_output_id=review_output_id,
+        artifact_refs=tuple(artifact_refs),
+        snapshot_hash=_canonical_hash(hash_payload),
+        created_at=datetime.now(UTC),
+    )
+
+
+def create_policy_snapshot(
+    *,
+    owner_id: str,
+    project_id: str,
+    session_id: str,
+    turn_run_id: str,
+    max_model_calls: int,
+    max_tool_calls: int,
+    policy_version: str = "agent-policy.v1",
+    allowed_tool_names: tuple[str, ...] = (),
+    allowed_skill_names: tuple[str, ...] = (),
+    network_enabled: bool = False,
+    sandbox_enabled: bool = False,
+    approval_required: bool = True,
+) -> PolicySnapshot:
+    """创建不可变 PolicySnapshot；首版能力开关默认关闭。"""
+    _require_non_empty(
+        owner_id=owner_id,
+        project_id=project_id,
+        session_id=session_id,
+        turn_run_id=turn_run_id,
+        policy_version=policy_version,
+    )
+    if max_model_calls < 0 or max_tool_calls < 0:
+        raise ValueError("调用预算不能小于 0")
+    _reject_duplicate_names(allowed_tool_names, "Tool")
+    _reject_duplicate_names(allowed_skill_names, "Skill")
+    hash_payload = {
+        "policy_version": policy_version,
+        "owner_id": owner_id,
+        "project_id": project_id,
+        "session_id": session_id,
+        "turn_run_id": turn_run_id,
+        "allowed_tool_names": list(allowed_tool_names),
+        "allowed_skill_names": list(allowed_skill_names),
+        "network_enabled": network_enabled,
+        "sandbox_enabled": sandbox_enabled,
+        "approval_required": approval_required,
+        "max_model_calls": max_model_calls,
+        "max_tool_calls": max_tool_calls,
+    }
+    return PolicySnapshot(
+        snapshot_id=str(uuid4()),
+        policy_version=policy_version,
+        owner_id=owner_id,
+        project_id=project_id,
+        session_id=session_id,
+        turn_run_id=turn_run_id,
+        allowed_tool_names=tuple(allowed_tool_names),
+        allowed_skill_names=tuple(allowed_skill_names),
+        network_enabled=network_enabled,
+        sandbox_enabled=sandbox_enabled,
+        approval_required=approval_required,
+        max_model_calls=max_model_calls,
+        max_tool_calls=max_tool_calls,
+        snapshot_hash=_canonical_hash(hash_payload),
+        created_at=datetime.now(UTC),
+    )
+
+
+def _canonical_hash(payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _require_non_empty(**values: str) -> None:
+    for name, value in values.items():
+        if not value.strip():
+            raise ValueError(f"{name} 不能为空")
+
+
+def _reject_duplicate_refs(refs: tuple[object, ...], label: str) -> None:
+    if len(refs) != len(set(refs)):
+        raise ValueError(f"{label} 引用不能重复")
+
+
+def _reject_duplicate_names(names: tuple[str, ...], label: str) -> None:
+    if any(not name.strip() for name in names):
+        raise ValueError(f"{label} 名称不能为空")
+    if len(names) != len(set(names)):
+        raise ValueError(f"{label} 名称不能重复")
