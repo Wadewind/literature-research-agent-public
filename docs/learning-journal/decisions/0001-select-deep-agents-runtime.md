@@ -4,6 +4,10 @@
 - 日期：2026-08-20
 - 决策者：项目维护者
 
+后续 ADR-0005 已进一步确定交互式 Research Agent 的产品模型，以及 AgentSession、AgentTurnRun、
+SDK Thread 和 Workspace 的所有权映射。本 ADR 继续负责 Deep Agents 选型与
+`ResearchAgentRuntime` 隔离边界，不被 ADR-0005 取代。
+
 ## 背景
 
 Core Research Backend 先交付确定性的文献导入、RAG、引用校验和固定 Review Workflow。其上的 Research Agent Extension 需要在授权 Evidence 范围内规划研究任务、调用 MCP 工具，并在受限 Sandbox 中处理文件和生成 Artifact。

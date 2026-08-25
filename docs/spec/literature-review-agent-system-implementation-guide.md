@@ -1,8 +1,8 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v3
+> 状态：Proposed v4
 >
-> 日期：2026-08-23
+> 日期：2026-08-25
 >
 > 定位：面向单人、AI 辅助开发的总体实施文档；用于确定产品边界、总体架构、模块职责、阶段顺序和学习目标
 >
@@ -13,6 +13,10 @@
 > v3 变更：将 Phase 4 交付固定为 Demo-ready Core v1，采用本地开发启动、离线 Fake 演示、最低
 > Logs/Metrics 和可复现评测；公网生产、认证、备份恢复、永久删除/GC、OpenTelemetry 和 SLA 不属于
 > 该里程碑
+>
+> v4 变更：将 Research Agent Extension 从一次性资源发现 Run 调整为绑定 Project 的持续研究对话，
+> 固定 `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1`，并要求 Phase 5 先验证
+> 业务包装与恢复边界，再逐项接入 Deep Agents 的 MCP、Browser、Sandbox 和平台 Skills
 
 ## 1. 文档用途
 
@@ -44,7 +48,11 @@
 1. **文献 RAG 问答**：针对项目内已经收录的文献进行有出处、可回跳原文的问答；
 2. **综述 Workflow**：按照可观察、可暂停、可恢复的固定流程收集文献、提取证据、生成大纲并撰写带引用的综述。
 
-在核心能力完成、经过评测并具备可靠运行证据后，再建设 **Research Agent Extension**：通过 `ResearchAgentRuntime` 适配边界接入基于 LangGraph 的 Deep Agents，让 Agent 在受控 Workspace 中发现论文相关的公开项目页、代码仓库、数据集和补充材料，并把结果交回本系统的 Evidence、Artifact、Run 和 Event 体系。选型依据见 `docs/learning-journal/decisions/0001-select-deep-agents-runtime.md`。
+在核心能力完成、经过评测并具备可靠运行证据后，再建设 **Research Agent Extension**：通过
+`ResearchAgentRuntime` 适配边界接入基于 LangGraph 的 Deep Agents，提供绑定 Project 的持续研究
+对话。Project 的论文 Chunk Index、Review Evidence Matrix 和 Artifact 为 Agent 提供精细上下文；Agent
+在授权范围内分析、规划和产出可追溯结果，并逐步接入 MCP、Browser、隔离 Sandbox 与平台维护的
+Research Skills。选型与会话模型分别见 ADR-0001 和 ADR-0005。
 
 本项目不以自行重造通用 Agent Harness、浏览器自动化框架或 Sandbox 平台为目标。Agent SDK 负责通用 Agent Loop、上下文管理和环境操作；本系统负责研究领域状态、可靠执行、权限、证据追溯和用户可见历史。
 
@@ -152,7 +160,7 @@ Research Project 是用户组织一次研究主题的顶层资源，拥有：
 - 文献库；
 - RAG Conversations；
 - Review Workflow Runs；
-- 后续扩展的 Research Agent Runs；
+- 后续扩展的 Agent Sessions、Turn Runs 和 Messages；
 - Evidence、Citation 和 Artifact。
 
 所有用户可见查询必须在 Project 和用户所有权范围内执行。
@@ -165,7 +173,16 @@ Paper Version 表示系统实际处理过的一份全文版本。重新上传、
 
 ### 4.3 Conversation 与 Agent Session
 
-Conversation 保存用户和系统之间的对话历史。后续接入 Agent SDK 时，Agent Session 或 SDK Conversation 是一次 Agent 执行的运行时上下文，可能关联 Conversation，但不等同于后台业务 Run，也不能成为用户权限、业务结果和 Artifact 的唯一事实来源。
+RAG Conversation 保存轻量问答历史，并继续作为独立产品模式。Research Agent 使用单独的
+`AgentSession` 保存 Project 范围内的持续交互；一条用户消息创建一个 `AgentTurnRun`，它是可执行、
+可取消和可恢复的业务 Run。一个 Turn 覆盖从用户消息到最终 Assistant Message 的完整产品交互，内部
+可以包含多次 LLM、Tool、Observation 和 Interrupt Step；这些内部 Step 不各自创建 Turn Run。每轮开始
+时固化 `ContextSnapshot` 与 `PolicySnapshot`。
+
+`AgentSession : SDK Thread = 1:1`，`AgentTurnRun : SDK Execution = 1:1`。SDK Thread、Checkpoint、Store
+和 Workspace 都是 Runtime 内部状态，不能替代 PostgreSQL 中的 Session、Message、Run、权限、Event、
+Evidence 和 Artifact。RAG 与 Agent 可复用 Retriever、Evidence 和 Citation 能力，但不共用同一会话
+模型或生命周期。
 
 ### 4.4 Run、Attempt、Step 与 Job
 
@@ -272,16 +289,18 @@ Demo-ready Core v1；Core 也不要求部署 Agent Server 或 Sandbox。
 Agent Extension 的部署边界为：
 
 ```text
-Business AgentRun / Event / Permission / Artifact (本系统)
+AgentSession / Message / AgentTurnRun / Snapshot (本系统)
+Event / Permission / Evidence / Artifact      (本系统)
                          │
                          ▼
               ResearchAgentRuntime Port
                          │
                          ▼
-       SDK Runtime / Agent Server / Isolated Workspace
+ SDK Thread / Execution / Checkpoint / Isolated Workspace
 ```
 
-无论 Runtime 在 Worker 进程内还是独立部署，PostgreSQL 中的业务 Run、Event、权限和 Artifact 仍是产品事实来源。
+无论 Runtime 在 Worker 进程内还是独立部署，PostgreSQL 中的 Session、Message、业务 Run、Event、权限、
+Evidence 和 Artifact 仍是产品事实来源。
 
 ### 5.2 逻辑分层
 
@@ -506,10 +525,13 @@ tokens；每篇先使用一次 `review-evidence-extraction.v1` 正常模型调�
 
 本系统负责：
 
-- 创建和授权业务 `AgentRun`；
-- 保存 Run、Attempt、用户取消意图、预算、审批、业务 Event 和最终结果；
-- 将 Project、Paper、Evidence 和 Artifact 以最小授权上下文提供给 Runtime；
-- 把 SDK Conversation/Thread、Workspace/Sandbox 和 Event Cursor 映射到稳定业务 ID；
+- 创建和授权绑定 owner 与 Project 的 `AgentSession`，并持久化业务 Message；
+- 为每条用户消息创建一个 `AgentTurnRun`，保存 Attempt、取消意图、预算、审批、Event 和最终结果；
+- 在每轮开始时固化 `ContextSnapshot` 与 `PolicySnapshot`，以最小授权方式提供 Project、Paper、
+  Evidence Matrix、Chunk 和 Artifact；
+- 把 SDK Thread 绑定到稳定 Session ID，把 SDK Execution、Workspace/Sandbox Lease 和 Event Cursor
+  绑定到稳定 Turn Run ID；
+- 管理 Session 逻辑 Workspace、跨 Turn `WorkspaceSnapshot` 与 Turn 范围 Sandbox Lease；
 - 归一化 SDK 事件、错误、Usage 和 Artifact 提交；
 - 在 Runtime 重试、恢复或响应丢失时进行幂等对账。
 
@@ -520,7 +542,9 @@ tokens；每篇先使用一次 `review-evidence-extraction.v1` 正常模型调�
 - Browser、文件、命令和 Sandbox Workspace 内部操作；
 - SDK 自身的流式事件与执行上下文。
 
-SDK Conversation、Thread、Checkpoint、Workspace 和 Event 不能替代 PostgreSQL 中的业务 Run、权限、Event、Evidence 和 Artifact。选型阶段必须明确 ARQ、本系统 Run Control 与 SDK Runtime 之间的重试、取消和恢复所有权，避免多层自动重试相乘。
+SDK Thread、Checkpoint、Store、Workspace 和 Event 不能替代 PostgreSQL 中的 Session、Message、Run、
+权限、Event、Evidence 和 Artifact。同一 Session 同时最多允许一个活动 Turn；ARQ、本系统 Run Control
+与 SDK Runtime 之间必须明确重试、取消和恢复所有权，避免并发轮次破坏上下文或多层自动重试相乘。
 
 ### 7.13 Agent Tool 与 Execution Policy（后续扩展）
 
@@ -533,6 +557,7 @@ Agent 扩展阶段负责：
 - ToolExecution 或等价审计记录；
 - 危险操作和下载前审批；
 - Sandbox 与 Artifact Workspace 边界。
+- 平台 Skills 的 allowlist、版本、能力声明和审计；用户不能上传或安装任意 Skill。
 
 Demo-ready Core v1 不提前建设通用 Tool Registry。RAG 和固定 Workflow 直接通过明确的应用 Port 调用
 领域能力；只有 Agent SDK 集成验证证明需要统一 Tool 契约后，才在阶段 Spec 中确定具体模型。
@@ -561,6 +586,10 @@ Demo-ready Core v1 不提前建设通用 Tool Registry。RAG 和固定 Workflow 
 - 下载和删除；
 - Markdown、图片和后续 DOCX 导出；
 - 临时 Workspace 到持久 Artifact 的提交。
+
+WorkspaceSnapshot 与 Artifact 必须区分：前者保存 Agent 跨 Turn 继续工作所需的内部研究笔记、中间文件
+和 Manifest，不默认对用户展示；后者是经过平台校验、具有业务所有权且可查看或下载的正式产物。
+临时文件可以随 Sandbox Lease 丢弃。
 
 ### 7.16 Observability
 
@@ -619,17 +648,22 @@ Workflow 是最主要的长时间任务，必须支持：
 ### 8.3 Research Agent Extension（后续）
 
 ```text
-用户目标
-  → 创建业务 AgentRun + Event
-  → Worker 通过 ResearchAgentRuntime Adapter 启动或恢复 SDK Runtime
-  → Runtime 在授权的 Project Context 与隔离 Workspace 中执行
-  → SDK Event/Usage/Approval 被归一化为业务 Event
-  → 下载内容先提交为隔离 Artifact，再按需进入现有 Ingestion Run
-  → 最终报告绑定 Paper/Evidence/Resource Manifest
-  → Run 完成并持久化 Artifact
+创建绑定 Project 的 AgentSession
+  → 用户消息创建 AgentTurnRun + ContextSnapshot + PolicySnapshot + Event
+  → Worker 通过 ResearchAgentRuntime Adapter 启动或恢复对应 SDK Execution
+  → Runtime 在 Session Thread、授权 Project Context 与隔离 Workspace 中执行
+  → SDK Event/Usage/Approval 被筛选并归一化为业务 Event
+  → Assistant Message、Evidence 引用和候选 Artifact 持久化
+  → Turn Run 完成，下一条消息继续同一 AgentSession
 ```
 
-首个候选用户故事限定为：基于 Project 已有论文和 Evidence，发现论文官方项目页、代码仓库、开放数据集与补充材料，生成可审计的 Resource Manifest 和研究报告。首版 Agent 不绕过登录、付费墙或 CAPTCHA，不自动提交或发布内容。
+首个用户故事限定为：用户创建绑定 Project 的 Agent Session，连续进行两轮研究对话；Agent 第一轮
+读取 Project Paper Chunk Index 和一个明确选择的 Review Evidence Matrix，形成可追溯分析，第二轮基于
+同一 Session 上下文深化问题并生成一个小型候选 Artifact。该切片先用 Fake Runtime 验证业务包装、
+事件、取消和恢复；MCP、Browser、Sandbox 与平台 Skills 在后续切片逐项启用，而不是首个切片的前置条件。
+
+后续允许的能力包括发现公开项目页、仓库、数据集和补充材料，以及在隔离 Sandbox 中执行受控分析。
+首版 Agent 不绕过登录、付费墙或 CAPTCHA，不自动提交或发布内容。
 
 Agent Runtime 比固定 Workflow 更开放，因此必须更严格限制：
 
@@ -907,8 +941,13 @@ Demo-ready Core v1 不提供任意代码执行。固定图表或导出能力应�
 - CPU、内存、进程、时间和输出上限；
 - 固定依赖；
 - 不挂载宿主 Secret；
-- 只读取显式传入的 Artifact；
+- 只读取显式传入的 WorkspaceSnapshot 或 Artifact；
 - 只持久化显式输出的 Artifact。
+
+在开放代码执行前，Sandbox 可只作为隔离文件 Backend：其文件系统是 Turn 的物理 Workspace，平台通过
+受控文件传输注入输入和取回 Snapshot/候选 Artifact，不挂载 API/Worker 宿主目录。模型只获得受限
+`ls/read_file/write_file/edit_file/glob/grep` 等文件工具；若 Backend 内部使用 `execute` 实现这些操作，
+Runtime Adapter 仍必须隐藏模型可调用的 `execute`、Shell、包管理器和任意网络能力。
 
 ## 13. API 与 Web 边界
 
@@ -925,7 +964,7 @@ ingestion-runs
 conversations
 messages
 review-runs
-agent-runs
+agent-sessions / agent-messages / agent-turn-runs
 runs / attempts / steps / events
 approvals or inputs
 evidence / citations
@@ -934,7 +973,9 @@ models
 health / readiness / metrics
 ```
 
-`agent-runs` 属于 Research Agent Extension，不是 Demo-ready Core v1 API 的完成条件。
+`agent-sessions`、`agent-messages` 和 `agent-turn-runs` 属于 Research Agent Extension，不是
+Demo-ready Core v1 API 的完成条件。公开 API 只使用业务 ID，不接受 SDK Thread、Workspace、Sandbox、
+MCP Server 或网络权限配置。
 
 长任务创建返回 `202 Accepted` 和稳定 `run_id`。查询和事件接口使用业务 ID，不暴露 ARQ 或 LangGraph 内部表。
 
@@ -949,7 +990,9 @@ Demo-ready Core v1 页面：
 - Review List、创建和详情，包含 Stage、Sources、结构化 Outline HITL、Matrix、Sections 和 Citation；
 - Artifact 查看和下载；
 
-Research Agent、Browser、Workspace 和审批详情页面在 Agent SDK 完成选型并验证事件契约后加入，不提前复制 SDK 自带 UI 或内部状态模型。
+Research Agent 页面在业务 Session、Message、Turn 和 Event 契约稳定后加入，提供类似持续 Chat 的交互、
+当前活动 Turn、审批、来源和 Artifact 展示；Browser、Workspace 与工具细节只展示筛选后的业务摘要，
+不复制 SDK 自带 UI 或暴露其内部状态模型。
 
 Run Detail 是核心页面，应展示：
 
@@ -1373,65 +1416,77 @@ Agent Extension 不阻塞该里程碑。
 
 #### 目标
 
-围绕一个明确研究任务，对已选定的 Deep Agents 进行受限 Spike，并通过 `ResearchAgentRuntime` Adapter 打通最小端到端 Agent Run。本阶段验证而不是重新选型：重点确认 MCP、Sandbox Backend、Checkpoint、取消、恢复和事件语义能否遵守平台边界，不自行开发通用 Agent Harness，也不以完整 Agent 产品为目标。
+先建立交互式 Research Agent 的业务包装，再对已选定的 Deep Agents 进行受限 Spike。通过
+`ResearchAgentRuntime` Adapter 打通 `AgentSession`、逐轮 `AgentTurnRun` 与 SDK Thread/Execution 的
+映射，验证多轮上下文、取消、恢复、事件和结果对账；随后再逐项验证 MCP、Browser、Sandbox 和平台
+Skills。该阶段不重新选型、不开发通用 Agent Harness，也不以完整 Agent 产品为目标。
 
 #### 候选用户故事
 
-用户选择一个 Project 和研究目标，Agent 基于已有 Paper/Evidence 发现论文官方项目页、代码仓库、开放数据集和补充材料，生成 Resource Manifest 与带来源报告，并将一个公开资源作为隔离 Artifact 交回现有导入或 Artifact 流程。
+用户创建一个绑定 Project 的 Agent Session，连续发送两条研究消息。Agent 基于 Project Paper Chunk
+Index 和指定 Review Evidence Matrix 回答第一轮，在第二轮继续同一上下文并生成一个带 Evidence 来源的
+小型候选 Artifact。首个验收切片完全使用 Fake Runtime，不依赖真实模型、网站、MCP 或 Sandbox。
 
 #### 需要学习和验证
 
 - Deep Agents 的运行模型、许可、精确版本和部署边界；
-- SDK Conversation/Thread/Checkpoint/Workspace 与业务 Run 的区别；
+- `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1` 的契约；
+- ContextSnapshot、PolicySnapshot、Checkpoint、Store 和 Workspace 的生命周期；
 - Runtime 事件、Usage、错误、审批和 Artifact 的归一化；
 - ARQ、本系统 Run Control 与 SDK 内部重试/恢复的所有权；
-- Browser、MCP、自定义 Tool 和 Sandbox 能力；
+- Deep Agents Fake Model/Fake Runtime 的可测试集成；
+- Browser、MCP、平台 Tool/Skill 和 Sandbox 能力的独立 Spike；
 - Runtime 取消、超时、断连和结果对账；
 - Prompt Injection、网络外泄和下载风险。
 
 #### 最小垂直切片
 
 ```text
-创建 AgentRun
-  → Worker 调用 ResearchAgentRuntime Adapter
-  → Runtime 读取最小授权的 Project/Evidence Context
-  → 浏览一个允许访问的公开资源
-  → 生成 Resource Manifest
-  → 下载一个受策略限制的公开文件
-  → 提交隔离 Artifact 和来源信息
-  → 平台归一化 Event 并完成 Run
+创建 Project-scoped AgentSession
+  → 第一条消息创建 AgentTurnRun 与不可变 Context/Policy Snapshot
+  → Worker 调用 Fake ResearchAgentRuntime
+  → Runtime 读取受限 Paper Chunk 与 Review Evidence Matrix
+  → 平台归一化 Event、Message、Evidence 引用和候选 Artifact
+  → 第二条消息在同一 Session 创建新的 AgentTurnRun
+  → 复用同一 SDK Thread 语义并验证恢复
 ```
 
 #### 阶段出口
 
-- 选型 ADR 已记录选择理由；本阶段集成 ADR 记录实验证据、版本、Provider、部署方式和失败项；
+- ADR-0001 与 ADR-0005 分别记录 Runtime 选型和交互式会话模型；本阶段集成 ADR 记录实验证据、版本、Provider、部署方式和失败项；
 - `ResearchAgentRuntime` 契约不泄漏具体 SDK 类型到 Domain 和公开 API；
-- 业务 `AgentRun` 与 SDK Conversation/Thread/Workspace ID 有稳定映射；
+- AgentSession、AgentTurnRun 与 SDK Thread/Execution 有稳定映射，同一 Session 同时最多一个活动 Turn；
+- 每轮 ContextSnapshot 和 PolicySnapshot 可审计，Project 索引与 Evidence Matrix 不被复制成 SDK 事实来源；
+- 临时文件、内部 WorkspaceSnapshot 与正式 Artifact 的生命周期分离，Sandbox 丢失后可重建允许跨 Turn 的工作文件；
 - SDK 事件被筛选并映射为版本化业务 Event，不保存完整思考过程和敏感输出；
 - 取消、超时、Runtime 断连和“SDK 成功但本地响应丢失”至少各有一次验证；
-- 下载 Artifact 具有来源、内容哈希、大小、类型和 Project 所有权；
+- 两轮 Fake Runtime 用户故事可完全离线运行；后续能力 Spike 的 Artifact 具有来源、内容哈希、大小、类型和 Project 所有权；
 - 明确是否进入 Phase 6；若用例或运行时不成立，Demo-ready Core v1 仍保持完整可交付。
 
 ### Phase 6：Deep Agents 驱动的 Research Agent 与安全强化
 
 #### 目标
 
-基于 Phase 5 验证通过的 Deep Agents 集成，将研究任务扩展为可用、受限、可观察的 Research Agent，并系统验证 Browser、MCP、Tool、Workspace 和 Sandbox 的安全与可靠性。
+基于 Phase 5 验证通过的会话与 Runtime 边界，将 Project-scoped Agent Chat 扩展为可用、受限、可观察的
+Research Workspace Agent，并系统验证 Browser、MCP、Tool、平台 Skills、Workspace 和 Sandbox 的安全与可靠性。
 
 #### 主要内容
 
-- Research Agent 创建、详情、事件、审批、取消和 Artifact UI；
+- Agent Session 多轮 Chat、Turn 详情、事件、审批、取消、来源和 Artifact UI；
+- Project Chunk Index、Review Evidence Matrix 与 Artifact Context 工具；
 - Paper/Evidence、公开项目页、代码仓库、数据集和补充材料工具；
 - Browser/URL Allow Policy、Redirect/SSRF 防护和下载隔离；
 - Runtime Tool Policy、预算、重复或无进展检测；
 - Workspace/Sandbox 生命周期、文件传输和资源限制；
 - Agent Event、Usage、ToolExecution 和 Artifact 审计；
 - Runtime 升级兼容测试、故障注入和 Agent 评测集；
+- 平台维护、版本化和 allowlist 控制的 Research Skills；
 - 如确有用户价值，再通过 ADR 加入受限 `run_python_analysis`。
 
 #### 阶段出口
 
-- Agent 只能访问当前 Run 授权的 Project Context、工具、网络目标和 Workspace；
+- Agent 只能访问当前 Session/Turn 授权的 Project Context、工具、网络目标和 Workspace；
+- 多轮 Message、Turn、ContextSnapshot、Thread 与 Artifact 的所有权和恢复语义有测试证据；
 - 不绕过登录、付费墙或 CAPTCHA，危险下载和不可逆操作必须审批；
 - 网页、论文和仓库内容按不可信输入处理，Prompt Injection 不会获得平台 Secret 或数据库权限；
 - 最大步骤、Token、费用、墙钟时间、Tool Call 和输出大小限制生效；
@@ -1571,15 +1626,18 @@ Agent Extension 另需覆盖：
 
 以下实现决策明确推迟到 Phase 5/6，而不是在 Demo-ready Core v1 中预先固定：
 
-- Agent 的最终用户故事和是否进入正式产品；
+- 是否在 Phase 5 Spike 通过后进入正式 Agent 产品；
 - Deep Agents 的精确版本、升级策略和兼容范围；
 - Runtime 部署在 Worker 内、独立 Agent Server 还是托管服务；
-- SDK Thread、Checkpoint、Conversation 和 Workspace 的生命周期；
+- SDK Checkpoint、Store、Workspace、Sandbox Lease 和压缩策略的精确生命周期；
 - Browser、MCP、Tool、网络和下载策略；
+- 首批平台 Research Skills 及其版本治理；
 - Sandbox Provider、生命周期和最终部署参数；
 - 是否开放受限 `run_python_analysis`。
 
-这些决定应基于当前阶段的真实需求、实验和测试，而不是在尚未实现基础链路时猜测。
+Agent 产品形态和核心映射不再属于推迟项：ADR-0005 已固定 Project-scoped 持续研究对话、
+`AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1`，以及每轮 ContextSnapshot 和
+PolicySnapshot。其余决定应基于 Phase 5 的真实实验和测试，而不是在尚未实现基础链路时猜测。
 
 ## 22. 完成定义
 
@@ -1608,9 +1666,10 @@ Demo-ready Core v1 完成需要同时满足：
 
 若 Phase 5 集成验证通过并继续 Phase 6，Agent 扩展完成还需要：
 
-- 至少一个明确的论文相关资源发现用户故事端到端可运行；
+- 至少一个绑定 Project、可连续多轮交互并生成可追溯 Artifact 的研究用户故事端到端可运行；
 - Agent SDK 通过 `ResearchAgentRuntime` Adapter 接入，不污染 Domain 和公开 API；
-- 业务 Run、SDK Runtime、Workspace、Event 和 Artifact 的所有权清晰；
+- AgentSession、Message、AgentTurnRun、SDK Thread/Execution、Workspace、Event 和 Artifact 的所有权清晰；
+- Agent 能以最小授权方式使用 Project Chunk Index 与 Review Evidence Matrix；
 - Browser、Tool、下载和代码执行受 Schema、权限、审批、预算、网络与资源策略限制；
 - Runtime 重试、取消、断连、恢复和重复副作用有测试证据；
 - Agent 不能接触未授权 Project 数据、平台数据库、宿主文件或 Secret；
@@ -1628,8 +1687,8 @@ Demo-ready Core v1 完成需要同时满足：
 | 4 | Evidence、Citation、SSE | 有引用的 RAG 问答 |
 | 5 | LangGraph、Checkpoint、Interrupt | 可暂停恢复的综述 Workflow |
 | 6 | Logs/Metrics、E2E、评测、故障恢复 | 本地可演示、可复盘的 Demo-ready Core v1 |
-| 7 | Agent SDK、Runtime Adapter、所有权 | 有 ADR 和运行证据的 Agent 集成 Spike |
-| 8 | Browser、Tool、Sandbox、安全 | 受限且可观察的 Research Agent Extension |
+| 7 | Agent Session、Turn Run、Runtime Adapter、所有权 | 可离线验证的多轮 Agent 集成 Spike |
+| 8 | Browser、MCP、Skill、Sandbox、安全 | 受限且可观察的 Research Workspace Agent |
 
 如果某阶段无法用自己的话解释状态所有权和失败行为，应暂停增加功能，先完成实验和笔记。
 
@@ -1641,7 +1700,11 @@ Core Research Backend 完成后，推荐使用下面的主线介绍：
 
 Research Agent Extension 完成后，可以追加：
 
-> 在核心后端稳定后，我没有重新实现通用 Agent Harness，而是通过 `ResearchAgentRuntime` Adapter 接入经过 Spike 和 ADR 选定的 Agent SDK。SDK 负责规划、浏览器和隔离 Workspace，本系统继续拥有业务 Run、权限、Event、Evidence 和 Artifact，从而让开放式 Agent 也能复用相同的可靠执行和审计能力。
+> 在核心后端稳定后，我没有重新实现通用 Agent Harness，而是通过 `ResearchAgentRuntime` Adapter
+> 接入 Deep Agents。产品把持续研究对话建模为 Project-scoped AgentSession，并把每条用户消息建模为
+> 独立 AgentTurnRun；SDK Thread 与 Session 对应、一次 SDK Execution 与 Turn 对应。SDK 负责通用规划、
+> 工具编排和隔离 Workspace，本系统继续拥有 Message、Run、权限、Context Snapshot、Event、Evidence
+> 和 Artifact，因此开放式 Agent 可以安全复用项目索引、Evidence Matrix 与既有可靠执行能力。
 
 后续追问应能够展开：
 
@@ -1656,7 +1719,7 @@ Research Agent Extension 完成后，可以追加：
 - 为什么第一版不用独立向量数据库；
 - 为什么第一版不实现通用 Workflow Builder；
 - 为什么不自行开发通用 Agent Loop；
-- 业务 Run 与 SDK Conversation/Thread/Workspace 如何映射；
+- AgentSession、AgentTurnRun 与 SDK Thread/Execution/Workspace 如何映射；
 - Sandbox 能解决什么、不能解决哪些 Prompt Injection 和网络风险。
 
 ## 25. 技术参考

@@ -2,17 +2,21 @@
 
 ## 状态
 
-计划中，尚未开始实现。Spec 初版日期：2026-08-20。
+计划中，尚未开始实现。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25。
 
 进入条件：Phase 5 已完成并通过 ADR 确认 Deep Agents 的版本策略、部署拓扑、`ResearchAgentRuntime` 契约、MCP 模式、Sandbox Provider、重试所有权和升级方法；Phase 5 的安全、取消、断连和重复副作用验证没有未解决的阻塞项。
 
 ## 目标和用户可见结果
 
-把 Phase 5 的单一集成 Spike 扩展为可用、受限、可观察的 Research Agent Extension。用户可以在一个 Project 内创建研究任务，让 Agent 在授权 Evidence 基础上发现论文相关的公开项目页、代码仓库、开放数据集和补充材料；用户可以查看步骤、来源、Tool 调用、预算、审批、错误和 Artifact，并能取消任务或拒绝危险操作。
+把 Phase 5 的多轮集成 Spike 扩展为可用、受限、可观察的 Research Workspace Agent。用户可以在一个
+Project 内持续对话，让 Agent 使用授权的 Paper Chunk Index、Review Evidence Matrix 和 Artifact 自主
+分析研究问题，并按需发现公开资源或在隔离 Sandbox 中处理数据；用户可以查看每轮状态、来源、Tool
+调用、预算、审批、错误和 Artifact，并能取消当前 Turn 或拒绝危险操作。
 
 ```text
-选择 Project + 研究目标
-  → 固定授权 Context、Tool Policy 和 Budget
+创建/打开 Project-scoped AgentSession
+  → 用户消息创建 AgentTurnRun
+  → 固定 ContextSnapshot、PolicySnapshot 和 Budget
   → Deep Agents 规划并调用受控 Tool/MCP
   → Browser/下载受 URL 与网络策略约束
   → 高风险动作进入人工审批
@@ -29,7 +33,8 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 
 ### 包含
 
-- Research Agent 创建、详情、事件、审批、取消、Manifest 和 Artifact UI/API；
+- Agent Session 多轮 Chat、Turn 详情、事件、审批、取消、来源和 Artifact UI/API；
+- Project Chunk Index、Review Evidence Matrix 和既有 Artifact 的受权 Context Tool；
 - Paper/Evidence 读取、公开资源搜索、Browser、仓库/数据集/补充材料发现和 Artifact 提交工具；
 - 版本化 Tool Registry、MCP Server Registry、Tool Schema、权限、风险等级、超时、输出限制和执行记录；
 - Browser/URL Allow Policy、DNS/IP/Redirect 检查、SSRF 防护和下载隔离；
@@ -39,12 +44,14 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 - Runtime、MCP、Browser、Sandbox 和 Provider 的取消、重试、断连、恢复与对账；
 - Prompt Injection、跨用户隔离、Secret 外泄和恶意下载测试；
 - Deep Agents 升级契约测试、故障注入、Agent 评测集和运维文档；
+- 平台维护、版本化和 allowlist 控制的 Research Skills；
 - 经真实用户价值和 ADR 证明后，可加入结构化、受限的数据分析能力。
 
 ### 不包含
 
 - 自行重写 Deep Agents 的 Agent Loop、Planner、上下文压缩或 Checkpoint 引擎；
 - 任意用户提供的 MCP Server、Tool 代码、Sandbox 镜像或系统 Prompt；
+- 用户上传、安装或修改任意 Skill；
 - 默认开放任意 Shell、宿主 Python、包管理器、Docker Socket 或宿主文件系统；
 - 绕过登录、付费墙、robots/站点限制、CAPTCHA 或下载授权；
 - 自动对外发帖、发邮件、提交表单、修改远程仓库或执行金融/不可逆操作；
@@ -55,7 +62,7 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 
 ## 涉及模块
 
-- Research Agent API/UI 和 `ResearchAgentRuntime` Adapter；
+- Agent Session/Message/Turn API/UI 和 `ResearchAgentRuntime` Adapter；
 - Run、Attempt、Step、Event/SSE、Approval 和 Reconciliation；
 - Project Context、Paper、Evidence、Citation 和 Resource Manifest；
 - Tool Registry、MCP Registry、ToolExecution 和 Policy Engine；
@@ -66,38 +73,42 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 
 ## 产品边界和首版用户故事
 
-首版只支持“论文相关公开资源发现”：
+Phase 6 仍只支持“Project 范围内的受控研究”，不扩大为通用 Coding Agent：
 
-1. 用户从当前 Project 选择研究目标；
-2. 平台固定可见 Paper/Evidence、允许的 Tool、网络目标类别和 Budget；
-3. Agent 搜索论文官方项目页、作者/机构页面、公开代码仓库、开放数据集和补充材料；
-4. Agent 输出 Resource Manifest 和带来源的研究报告；
-5. 对一个公开文件执行受限下载，平台校验后保存为 Artifact；
-6. 用户可以查看来源、审批、Tool 历史、预算、错误和最终产物。
+1. 用户打开 Phase 5 创建的 Agent Session，并继续多轮提出分析、比较或资料补充问题；
+2. 每轮由平台固定可见 Paper/Chunk、Review Evidence Matrix、Artifact、Tool、Skill、网络和 Budget；
+3. Agent 优先使用项目内部证据分析；需要时可搜索官方项目页、仓库、数据集和补充材料；
+4. 需要计算时仅调用已批准的结构化 Tool；受限代码分析必须另有 ADR；
+5. Agent 输出带 Evidence/来源的回答、Resource Manifest 或候选 Artifact；
+6. 用户可以查看每轮来源、审批、Tool 历史、预算、错误和最终产物，并在同一 Session 中追问。
 
 首版不以“自动撰写完整综述”作为 Agent 目标；完整综述仍由 Phase 3 固定 Workflow 生成。Agent 发现的资源只有经过平台校验和用户纳入后才能进入 Paper/Evidence 体系。
 
 ## 核心状态和所有权
 
 ```text
-Business Run       用户可见生命周期、取消、重试和最终状态
-Run Attempt        平台 Worker 的至少一次执行与 lease
-Runtime Session    run_id ↔ Deep Agents thread/checkpoint/deployment
+AgentSession       Project 范围内的持续业务会话和消息历史
+AgentTurnRun       一条用户消息对应的生命周期、取消、重试和最终状态
+Run Attempt        平台 Worker 对一轮 Turn 的至少一次执行与 lease
+Runtime Binding    session_id ↔ SDK thread；turn_run_id ↔ SDK execution
+Context/Policy     每轮不可变的授权、版本、工具和预算快照
 Run Step           用户可理解的计划/阶段投影，不复制内部思考
 Tool Execution     一次版本化 Tool/MCP 调用及副作用幂等记录
 Approval Request   等待用户批准、编辑或拒绝的动作
-Workspace          一个 Run 的隔离临时环境和生命周期
+Workspace          Session 逻辑命名空间与 Turn 范围物理 Sandbox Lease
+WorkspaceSnapshot  跨 Turn 持久化的内部工作文件与 Manifest
 Usage/Budget       已消费与剩余额度的业务事实
 Resource Manifest  发现的外部资源及来源验证结果
 Artifact           通过平台校验并持久化的文件
 ```
 
-- PostgreSQL 保存 Business Run、Attempt、Event、ToolExecution、Approval、Usage、Manifest 和 Artifact 事实；
+- PostgreSQL 保存 Session、Message、Turn Run、Context/Policy/Workspace Snapshot、Attempt、Event、
+  ToolExecution、Approval、Usage、Manifest 和 Artifact 元数据；
 - Deep Agents/LangGraph 保存 Runtime 内部消息、计划、Checkpoint 和 Interrupt；
 - Sandbox Provider 保存临时 Workspace；其文件只有被平台显式取回、校验和提交后才成为 Artifact；
 - Valkey/ARQ 只负责投递和实时通知；SDK Trace 只用于调试和诊断；
 - Run Step 复用 Phase 3 的通用业务投影，不逐条复制 SDK 内部节点或完整推理；
-- 一个 Runtime、MCP 或 Sandbox 标识不能脱离 `run_id`、owner 和 Project 映射被公开查询。
+- 一个 Runtime、MCP 或 Sandbox 标识不能脱离 `session_id`、`turn_run_id`、owner 和 Project 映射被公开查询。
 
 ## 状态机和等待语义
 
@@ -134,12 +145,15 @@ QUEUED → RUNNING → SUCCEEDED
 - 日志/Event 的字段白名单与敏感字段规则；
 - 可用状态和兼容的 Deep Agents/Runtime 版本。
 
-模型看到的 Tool 描述不是授权。每次调用都由平台根据 `run_id` 重新检查 owner、Project、Budget、Approval 和参数策略。
+模型看到的 Tool 描述不是授权。每次调用都由平台根据 `turn_run_id` 的 PolicySnapshot 重新检查 owner、
+Project、Budget、Approval 和参数策略。
 
 ### 首版允许的工具类别
 
 - `list_project_papers`：只列出当前授权 Project 的 Paper/Version ID 和必要元数据；
+- `search_project_chunks`：只在当前 ContextSnapshot 固定的 Project Index/ChunkSet 中检索；
 - `read_evidence`：按 Evidence ID 读取受控长度、带页码的文本；
+- `read_review_evidence_matrix`：只读取快照中明确授权的 Review Output；
 - `search_public_resources`：调用固定搜索 Provider 或固定 MCP Server；
 - `fetch_public_page`：只读访问通过 URL Policy 的公开页面；
 - `download_public_resource`：受大小/MIME/来源限制地下载到当前 Workspace；
@@ -155,6 +169,13 @@ QUEUED → RUNNING → SUCCEEDED
 - MCP Tool 加载结果必须与 Registry 中的名称和 Schema 对比；漂移时 fail closed；
 - 拦截器负责权限、Correlation、预算、超时、输出裁剪和审计；
 - MCP Resources/Prompts 默认不直接注入 Agent Context，使用前需单独审核和限制。
+
+### Research Skills
+
+- Skill 由平台维护、语义版本化并绑定所需 Tool、权限、预算和兼容 Runtime；
+- 用户只能从平台 allowlist 中启用，不可上传 Skill 文件、覆盖系统指令或动态安装依赖；
+- Skill 内容按代码变更审查并受固定评测集保护；旧 Turn 仍按 PolicySnapshot 中的版本恢复；
+- Skill 不能授予 Tool、网络、Sandbox 或 Secret 权限，只能使用策略已经授权的能力。
 
 ### 审批
 
@@ -188,14 +209,20 @@ QUEUED → RUNNING → SUCCEEDED
 
 ## Workspace 和 Sandbox 安全
 
-- 默认每个 Run 一个隔离 Workspace；跨 Run 不复用文件系统、进程、网络命名空间或临时凭据；
+- Session 可拥有逻辑 Workspace；默认每个 Turn 获取隔离的物理 Sandbox Lease，跨 Turn 不复用进程、
+  网络命名空间或临时凭据；临时文件随 Lease 丢弃，需要跨 Turn 的内部工作文件保存到受控
+  WorkspaceSnapshot，正式业务产物才提交为 Artifact；
 - Agent 运行在 Worker/Runtime，Sandbox 作为 Tool；模型和平台 Secret 不进入 Sandbox；
-- Sandbox 使用非 root 用户、只读基础镜像、独立临时目录和显式输入 Artifact；
+- Sandbox 自有文件系统作为物理 Workspace，不直接挂载 API/Worker 宿主目录；平台通过 Provider 原生
+  文件传输或受控 Adapter 注入 Snapshot/Artifact，并取回新 Snapshot 或候选 Artifact；
+- Sandbox 使用非 root 用户、只读基础镜像、独立临时目录和显式输入 Snapshot/Artifact；
 - 默认禁网；需要网络时只通过受控代理/Allowlist，并记录域名、流量和拒绝原因；
 - 限制 CPU、内存、PID、磁盘、文件数、单文件大小、墙钟时间和输出大小；
 - 不挂载宿主源码、用户主目录、Docker Socket、数据库 Socket、云元数据或 Secret；
 - 禁止特权模式、宿主网络、危险 Capability 和不受控嵌套容器；
 - 文件传入/取回走 Provider 原生传输或平台 Adapter，不由模型构造宿主路径；
+- 第一版模型只看到受限文件工具，不看到 `execute`、Shell、包管理器或任意网络；即使 Backend 内部依赖
+  `execute` 实现文件操作，也必须由 Runtime Adapter 隐藏模型可调用的执行 Tool；
 - Workspace 在终态或 TTL 后幂等清理；清理失败进入可观察的补偿队列；
 - Artifact 提交后仍不信任 Workspace，必须由平台重新读取并校验。
 
@@ -212,7 +239,7 @@ QUEUED → RUNNING → SUCCEEDED
 
 ## Budget、无进展和终止策略
 
-每个 Agent Run 在创建时固定版本化 Budget Policy，至少限制：
+每个 Agent Turn 在创建时通过 PolicySnapshot 固定版本化 Budget Policy，至少限制：
 
 - 最大模型步骤和总 Tool Call；
 - 最大输入/输出 Token 和可选费用；
@@ -229,19 +256,23 @@ QUEUED → RUNNING → SUCCEEDED
 ### API
 
 ```text
-POST /api/v1/projects/{project_id}/agent-runs
-GET  /api/v1/agent-runs/{run_id}
-POST /api/v1/agent-runs/{run_id}/cancel
-GET  /api/v1/agent-runs/{run_id}/manifest
-GET  /api/v1/agent-runs/{run_id}/tool-executions
-GET  /api/v1/agent-runs/{run_id}/approvals
-POST /api/v1/agent-runs/{run_id}/approvals/{approval_id}/decisions
+POST /api/v1/projects/{project_id}/agent-sessions
+GET  /api/v1/agent-sessions/{session_id}
+GET  /api/v1/agent-sessions/{session_id}/messages
+POST /api/v1/agent-sessions/{session_id}/messages
+GET  /api/v1/agent-turn-runs/{run_id}
+POST /api/v1/agent-turn-runs/{run_id}/cancel
+GET  /api/v1/agent-turn-runs/{run_id}/manifest
+GET  /api/v1/agent-turn-runs/{run_id}/tool-executions
+GET  /api/v1/agent-turn-runs/{run_id}/approvals
+POST /api/v1/agent-turn-runs/{run_id}/approvals/{approval_id}/decisions
 GET  /api/v1/runs/{run_id}/events
 GET  /api/v1/runs/{run_id}/events/stream
 GET  /api/v1/artifacts/{artifact_id}
 ```
 
-- Agent 创建请求只接受研究目标和公开的策略选项；owner、Tool、MCP、Sandbox 和内部 Context 由服务端确定；
+- Session 创建请求只绑定 URL 中的 Project；Message 请求只接受用户内容和有限公开选项；owner、Tool、
+  Skill、MCP、Sandbox、SDK Thread 和内部 Context/Policy 由服务端确定；
 - ToolExecution 默认只返回脱敏摘要，管理员诊断信息不暴露给普通用户；
 - Approval 决策使用幂等键，重复提交同一决定返回稳定结果，不重复恢复 Runtime；
 - Artifact 下载再次校验 owner、Project、隔离/扫描状态和内容处置策略。
@@ -270,22 +301,26 @@ Event Payload 保持小型、版本化和脱敏。高频 Token/流式片段不�
 具体迁移在对应切片前确定，关系至少覆盖：
 
 ```text
-Run ── RuntimeSession ── Workspace
- ├─ RunStep
- ├─ ToolExecution ── ApprovalRequest
- ├─ UsageLedger
- ├─ ResourceManifest ── ManifestItem
- ├─ Event
- └─ Artifact
+AgentSession ── AgentMessage
+ ├─ RuntimeThreadBinding ── WorkspaceSnapshot
+ └─ AgentTurnRun ── ContextSnapshot / PolicySnapshot
+      ├─ RuntimeExecutionBinding ── WorkspaceLease
+      ├─ RunStep
+      ├─ ToolExecution ── ApprovalRequest
+      ├─ UsageLedger
+      ├─ ResourceManifest ── ManifestItem
+      ├─ Event
+      └─ Artifact
 ```
 
-唯一约束至少保护：Run/Runtime 映射、Runtime Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范化 URL、Artifact 内容提交和 Event Sequence。
+唯一约束至少保护：Session/Thread、Turn/Execution 映射、WorkspaceSnapshot 版本、Session 单活动 Turn、Message 幂等键、Runtime
+Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范化 URL、Artifact 提交和 Event Sequence。
 
 ## 可靠性、取消和恢复
 
-- ARQ Job 仍只携带 `run_id`，Worker 通过业务状态认领执行；
-- Worker 崩溃后由 lease/reconcile 找回 Run，再查询 Runtime、Workspace 和 ToolExecution 状态；
-- Runtime 成功但本地响应丢失：按稳定 Thread/Run 映射重新读取最终输出，不重新运行 Agent；
+- ARQ Job 仍只携带 `turn_run_id`，Worker 通过业务状态认领执行；
+- Worker 崩溃后由 lease/reconcile 找回 Turn，再查询 Runtime Execution、Workspace 和 ToolExecution 状态；
+- Runtime 成功但本地响应丢失：按稳定 Session/Thread 与 Turn/Execution 映射重新读取最终输出，不重新运行 Agent；
 - Tool 超时或断连：先按 ToolExecution ID 对账；只有确定未产生副作用时才重试；
 - MCP/Browser/Sandbox 各自的内部重试不得与平台重试叠加成重试风暴；
 - Artifact 使用 staged → validated → committed 生命周期和内容哈希去重；
@@ -296,7 +331,8 @@ Run ── RuntimeSession ── Workspace
 
 ## 安全和隐私不变量
 
-- Agent 只能访问当前 Run 固定授权的 owner、Project、Paper、Evidence、Tool、网络目标和 Workspace；
+- Agent 只能访问当前 Turn 的 Context/Policy Snapshot 固定授权的 owner、Project、Paper、Chunk、Evidence、
+  Artifact、Tool、Skill、网络目标和 Workspace；
 - 所有外部内容都是不可信数据，不具有修改系统指令、权限和策略的权力；
 - Secret 只存在于最小需要的宿主组件，不进入 Prompt、Event、Trace、Workspace、Artifact 或 MCP 参数；
 - 日志不记录完整 Prompt、论文全文、网页全文、文件内容或敏感 Tool 参数；
@@ -309,7 +345,8 @@ Run ── RuntimeSession ── Workspace
 
 ## 可观测性和审计
 
-- Trace 关联 `request_id`、`trace_id`、`project_id`、`run_id`、`attempt_id`、`thread_id`、`tool_execution_id` 和 `workspace_id`；
+- Trace 关联 `request_id`、`trace_id`、`project_id`、`session_id`、`turn_run_id`、`attempt_id`、
+  `thread_id`、`tool_execution_id` 和 `workspace_id`；
 - 高基数 ID 进入日志和 Trace，不作为 Prometheus Label；
 - Metrics 覆盖 Run 终态、Runtime/Tool/Sandbox 延迟与错误、策略拒绝、审批等待、预算消耗、无进展终止和清理积压；
 - SDK/LangSmith Trace 可辅助调试，但 PostgreSQL Event/ToolExecution 才是产品审计事实；
@@ -320,6 +357,8 @@ Run ── RuntimeSession ── Workspace
 
 建立固定、小型、可人工审核的 Agent Evaluation Dataset，至少覆盖：
 
+- 能否在多轮对话中保持用户目标，同时只读取每轮 Snapshot 授权的项目上下文；
+- 能否正确使用 Project Chunk Index 和指定 Review Evidence Matrix 回答分析问题；
 - 能否找到预期的官方项目页、代码仓库、数据集或补充材料；
 - Manifest URL、资源类型、Paper/Evidence 关联和来源是否正确；
 - 报告中的重要结论能否追溯到 Evidence 或外部来源；
@@ -333,15 +372,15 @@ Run ── RuntimeSession ── Workspace
 
 ## 实现切片顺序
 
-1. **产品契约与威胁模型**：定稿首版用户故事、资产/信任边界、攻击面、Run/Approval/ToolExecution 状态和安全验收；
+1. **产品契约与威胁模型**：复核 Session/Turn/Snapshot 边界、资产/信任边界、攻击面和安全验收；
 2. **Tool Registry 与执行记录**：版本化 Schema、权限、风险、预算、幂等和 ToolExecution 持久化，先用确定性内置 Tool；
-3. **Project/Evidence Context**：实现固定授权快照、最小 Context Builder 和跨用户/Project 隔离测试；
+3. **Project/Evidence Context**：强化 Chunk Index、Review Matrix、Artifact 的固定授权快照与隔离测试；
 4. **MCP Registry 与策略拦截**：固定 Server/Tool、Schema 漂移检测、权限/预算/超时/输出限制和审计；
 5. **Browser/URL/下载安全**：URL Policy、SSRF/Redirect/DNS 测试、内容限制、隔离下载和来源记录；
 6. **Approval 与恢复**：业务 Approval、Deep Agents Interrupt/Resume、过期/取消/重复决定和 UI；
-7. **Workspace/Sandbox 强化**：Run 隔离、网络/资源限制、文件传输、TTL 清理和故障补偿；
+7. **Workspace/Sandbox 强化**：Turn Lease 隔离、WorkspaceSnapshot 重建、文件工具限制、网络/资源限制、TTL 清理和故障补偿；
 8. **Budget 与无进展检测**：步骤/Token/费用/时间/Tool/输出限制和循环终止；
-9. **Agent UI 与 Artifact**：Run Detail、Step、Tool、审批、Manifest、报告和文件查看/下载；
+9. **Agent UI 与 Artifact**：多轮 Chat、Turn Detail、Step、Tool、审批、来源、Manifest、报告和文件查看/下载；
 10. **故障注入与安全测试**：Runtime/MCP/Browser/Sandbox 故障、Prompt Injection、Secret、越权、恶意文件和取消竞争；
 11. **评测与升级保护**：固定 Agent 评测集、Deep Agents 升级契约测试、性能/成本基线和已知限制；
 12. **验收复盘**：Runtime Compose/Profile、隔离 Workspace 恢复边界、演示运行文档、模块学习笔记和
@@ -354,19 +393,23 @@ Run ── RuntimeSession ── Workspace
 - **Runtime Contract**：Deep Agents 版本升级前后运行同一契约套件；
 - **MCP**：Schema 漂移、恶意 Tool 描述/输出、超时、断连、认证失败、会话泄漏和拦截器；
 - **Browser/HTTP**：IPv4/IPv6 私网、DNS rebinding、Redirect 链、超时、大响应、错误 MIME 和 Prompt Injection Fixture；
-- **Sandbox**：跨 Run 文件隔离、Secret/宿主路径不可见、网络拒绝、CPU/内存/PID/磁盘/时间限制、销毁和清理补偿；
+- **Sandbox**：跨 Turn 文件隔离、WorkspaceSnapshot 取回/重建、模型不可见 `execute`、Secret/宿主路径
+  不可见、网络拒绝、CPU/内存/PID/磁盘/时间限制、销毁和清理补偿；
 - **PostgreSQL**：唯一约束、条件更新、Approval 单次决定、ToolExecution 去重、Usage 和跨用户隔离；
 - **故障注入**：Worker/Runtime/MCP/Sandbox 退出、响应丢失、重复 Job、取消竞争、Artifact 提交前后崩溃；
-- **E2E**：创建 Agent Run → 查找公开资源 → 审批下载 → Manifest/报告/Artifact → 刷新恢复与取消；
-- **评测**：固定资源发现、来源正确性、Groundedness、策略遵守、Prompt Injection 和无进展样本。
+- **E2E**：打开 Agent Session → 项目内分析 → 追问 → 查找公开资源 → 审批下载 → Artifact → 刷新恢复与取消；
+- **评测**：多轮上下文、项目内分析、资源发现、来源正确性、Groundedness、策略遵守、Prompt Injection 和无进展样本。
 
 普通 CI 必须完全离线且不需要真实模型、外部 MCP、公共网站或付费 Sandbox。真实运行使用显式 Marker/环境开关、专用测试账号、硬预算和可删除 Workspace；只记录实际执行结果。
 
 ## 阶段完成条件
 
-- 至少一个论文相关公开资源发现用户故事可从 UI 端到端完成；
+- 至少一个绑定 Project 的多轮研究用户故事可从 UI 端到端完成，并能使用项目索引、Review Matrix、
+  公开资源或受控工具生成可追溯 Artifact；
 - Deep Agents 继续被 `ResearchAgentRuntime` Adapter 隔离，SDK 类型不污染 Domain 和公开 API；
-- Agent 只能访问当前 Run 授权的 Project Context、Tool、网络目标和 Workspace；
+- AgentSession/Message/AgentTurnRun、SDK Thread/Execution、Snapshot 和 Workspace 的所有权与恢复语义有测试证据；
+- 临时文件、内部 WorkspaceSnapshot 和正式 Artifact 的生命周期分离，Sandbox 丢失后可重建内部工作状态；
+- Agent 只能访问当前 Turn 授权的 Project Context、Tool、Skill、网络目标和 Workspace；
 - MCP、Browser、下载、Approval、Budget 和 Sandbox 策略均有自动化及必要的真实验证证据；
 - Prompt Injection 不能获得平台 Secret、数据库权限、宿主文件或未授权网络；
 - 最大步骤、Token、费用、时间、Tool Call、下载和输出限制实际生效；
@@ -385,7 +428,7 @@ Run ── RuntimeSession ── Workspace
 4. Budget 默认值、费用数据不可得时的替代限制和告警阈值；
 5. Workspace TTL、清理补偿和 Artifact 安全扫描策略；
 6. 是否存在足够用户价值加入受限代码分析；若没有，保持禁用；
-7. Agent 报告与 Phase 2 Citation Validator、Phase 3 Artifact/Evidence Matrix 的复用方式；
+7. 首批平台 Research Skills 的能力、版本、评测和禁用方式；
 8. Deep Agents 子 Agent 和长期 Memory 是否保持永久禁用；首版默认禁用。
 
 任何扩大网络、代码执行、用户自定义 Tool/MCP、对外写操作或长期 Memory 的决定都必须单独更新本 Spec，并在满足 `AGENTS.md` 条件时创建 ADR。
@@ -404,11 +447,12 @@ Run ── RuntimeSession ── Workspace
 
 模块真正完成后再撰写，不预建空文件：
 
-- `research-agent-runtime.md`：业务 Run 与 Deep Agents Thread/Checkpoint 的集成边界；
+- `research-agent-runtime.md`：Agent Session/Turn 与 Deep Agents Thread/Execution/Checkpoint 的集成边界；
 - `agent-tool-policy.md`：Tool/MCP Registry、权限、预算、审批和副作用；
 - `browser-download-security.md`：URL、SSRF、Prompt Injection 和文件隔离；
 - `agent-sandbox.md`：Workspace 生命周期、资源限制、文件传输和清理；
-- `agent-evaluation.md`：资源发现、来源、策略遵守和安全评测。
+- `agent-skills.md`：平台 Skills 的版本、权限依赖、评测和升级；
+- `agent-evaluation.md`：多轮研究、项目上下文、资源发现、来源、策略遵守和安全评测。
 
 ## 参考资料
 
