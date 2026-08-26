@@ -20,11 +20,11 @@ RuntimeTurnRequest（只含本轮新消息 + Context/Policy Snapshot）
        → 最终 checkpoint_id 写入 SDK-neutral RuntimeTurnBinding
 ```
 
-Adapter 由分层/集成测试显式构造，生产 Worker 仍装配 `FakeResearchAgentRuntime`。因此本切片没有决定
-Runtime 位于 ARQ Worker 进程内还是独立 Deployment，也没有新增真实 Provider 配置。这三项相互依赖的
-恢复缺口统一记录在
-[`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)，由 Phase 5
-切片 6 在 Project Context 接入后闭合。
+Adapter 由分层/集成测试显式 DI 构造，生产 Worker 仍固定装配 `FakeResearchAgentRuntime`；当前没有
+环境变量可启用真实 Deep Worker 模式。Provider/`BaseChatModel` factory、Secret/费用和 Worker runtime
+配置属于切片 7.0。切片 6 已由 ADR-0006 决定 Runtime 位于 ARQ Worker 进程内，并以独立
+`RuntimeExecution` lease/fencing 闭合跨进程恢复控制；实现与真实进程证据见
+[`agent-runtime-execution-recovery.md`](agent-runtime-execution-recovery.md)。
 
 ## 状态、数据模型和事务
 
@@ -73,6 +73,20 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
 
 ## 失败、重复和取消
 
+切片 6 补充：
+
+- 图调用显式使用 `durability="sync"`；RuntimeExecution 持久保存最后确认 checkpoint、状态、版本和
+  当前 Attempt/owner/fence；
+- 新进程只认领已过期 lease，重新加载原 Context/Policy 后以 `resume_turn(response=None)` 和
+  `astream(None, ...)` 沿同一 checkpoint 恢复；控制水位为空或落后于物理最新 Checkpoint 时都先选择
+  物理最新状态，只有 Checkpointer 中确实不存在本 Turn 状态才重新提交首次消息；
+- listing 和精确 checkpoint ID 都必须匹配 Turn、Session、Execution、request hash 与 runtime/graph
+  revision，不能仅凭 thread/checkpoint ID 接受状态；
+- 模型与 Tool middleware 在实际调用边界复核 permit，过期 owner 不能启动下一次调用或写 Runtime 终态；
+- `FAILED/CANCELLED/SUCCEEDED` 均可跨 Adapter/进程对账；取消还必须先验证业务 Run 已进入取消路径；
+- Runtime/Graph/Deep Agents/LangGraph revision 必须完全匹配，不兼容时 fail-closed；
+- 真实进程测试已证明同步 checkpoint 确认的模型/Tool 不重放，但未确认的在途调用仍可能重试。
+
 - 已存在 checkpoint 的相同请求只重放四个确定性 Event，不再次调用模型或 Tool；相同 Turn 的不同请求
   hash 返回 permanent `runtime_turn_conflict`；
 - Provider/图异常归一化为不含原始内容的 temporary `runtime_execution_failed`；未授权 Tool 返回
@@ -81,13 +95,11 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   `STARTED`。此后取消可返回真实 checkpoint binding，并在进入下一模型/Tool 边界前停止；测试证明
   STARTED 后取消时 Fake Model/Tool 调用数均为 0；
 - 已成功并提交最终 checkpoint 的结果可以在新连接/新 Adapter 中重复收集，模拟本地响应丢失时不会再次
-  调用模型或 Tool；该测试消除了对 Adapter 内存状态的依赖，但没有启动第二个 OS 进程；
+  调用模型或 Tool；切片 6 进一步启动第二个 OS 进程并真实终止第一个执行进程；
 - 上述证据不等于任意 Tool 副作用的 Effectively Once。Tool 已执行、其 checkpoint 尚未成功提交时的
   崩溃窗口未验证；正式 Project Tool 必须在切片 5 使用稳定 call/effect ID、唯一约束或调用记录保护；
-- 在途取消与失败状态目前保存在 Adapter 协作状态中。虽然其最近 checkpoint ID 可对账，但本切片不宣称
-  CANCELLED/FAILED Runtime 终态标记本身可跨进程恢复，也不宣称可立即中止真实远端 Provider 的在途
-  请求。新 Adapter 遇到 orphan `RUNNING` checkpoint 也不会自动 resume；部署拓扑与 Runtime lease
-  所有权确定前，不能宣称 Worker 在执行途中崩溃后可恢复；
+- 失败/取消终态和 orphan `RUNNING` 已由切片 6 的持久 RuntimeExecution 对账；仍不宣称可立即中止已发出
+  的真实远端请求，也不重放效果未知的 orphan `ToolExecution=RUNNING`；
 - Checkpoint 列举或 state reconstruction 的 SDK/数据库/Serializer 异常统一归一化为安全 temporary
   Port 错误，原始异常内容不进入 safe message；`CancelledError` 保持取消语义并直接传播。
 
@@ -124,22 +136,24 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
 - 离线脚本模型：`backend/tests/fakes/deep_agent_model.py`
 - Adapter 测试：`backend/tests/infrastructure/test_deep_agents_research_agent_runtime.py`
 - PostgreSQL 恢复：`backend/tests/integration/test_deep_agents_runtime_checkpoint.py`
+- Runtime lease/fencing：`backend/src/literature_agent/application/runtime_execution_control.py`
+- 真实 OS 进程恢复：`backend/tests/integration/test_agent_runtime_process_recovery.py`
 - Checkpointer：`backend/src/literature_agent/infrastructure/workflow/postgres_checkpoint.py`
 
 ## 已知限制
 
-- 生产 Worker 仍使用 Fake Runtime，真实 Adapter 只完成受限 Spike；
+- 生产 Worker 仍固定使用 Fake Runtime，真实 Adapter 只完成显式 DI 的受限恢复 Spike；可运行 Deep 模式
+  等待切片 7.0 的 Provider/model factory 与显式 Worker 配置；
 - `resume_turn` 保留五方法 Port 语义，但本切片没有配置 Deep Agents HITL Interrupt，调用会明确返回
   `runtime_turn_not_interrupted`；
-- 成功 Execution 已有新连接/新 Adapter 恢复证据，证明不依赖 Adapter 内存状态，但没有启动第二个 OS
-  进程；失败/取消终态没有独立持久 Runtime registry，orphan `RUNNING` checkpoint 不会自动 resume；
-- Runtime 部署拓扑与 Execution lease/recovery owner 尚未决定；这是切片 6 的显式门槛，不由 Adapter
-  默认假设。门槛通过前不能把同进程测试描述为执行中 Worker 崩溃恢复；
+- 成功、失败、取消及 orphan RUNNING 已有持久 RuntimeExecution 和第二 OS 进程恢复证据；只允许相同
+  Runtime/Graph/SDK revision 自动恢复，跨版本迁移尚未实现；
 - 没有真实模型、Usage、流式 token、统一模型/Tool 动态预算、MCP、Browser、Sandbox、Skill、正式
   Artifact 或 WorkspaceSnapshot；两个 Project Tool 已由平台按稳定 effect 强制 `max_tool_calls`，但
   Adapter 的其他内置/自定义 Tool 与 `max_model_calls` 尚未统一计数；
 - Project Tool 成功后的重放、并发和 temporary retry 已有持久 effect 证据；Tool 外部调用完成后、
-  ToolExecution 成功记录提交前的崩溃窗口仍没有 Exactly Once 证据，orphan RUNNING 留给切片 6；
+  ToolExecution 成功记录提交前的崩溃窗口仍没有 Exactly Once 证据，orphan RUNNING 当前 fail-safe 拒绝
+  自动重放，需随具体外部 Tool 设计幂等/查询/补偿；
 - StateBackend 对话历史文件仍依赖 Thread checkpoint，不能替代业务 Artifact/WorkspaceSnapshot 的保留、
   权限和清理策略。
 

@@ -86,12 +86,18 @@ class RuntimeResumeRequest:
 
     turn_run_id: str
     response: str | None
+    turn_request: RuntimeTurnRequest | None = None
 
     def __post_init__(self) -> None:
         if not self.turn_run_id.strip():
             raise ValueError("turn_run_id 不能为空")
         if self.response is not None and len(self.response) > 16_000:
             raise ValueError("Runtime 恢复输入长度不能超过 16000")
+        if (
+            self.turn_request is not None
+            and self.turn_request.turn_run_id != self.turn_run_id
+        ):
+            raise ValueError("Runtime 恢复请求与原 Turn 输入不一致")
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +144,7 @@ class RuntimeTurnReconciliation:
     turn_binding: RuntimeTurnBinding
     last_event_sequence: int
     result_available: bool
+    resume_available: bool = False
 
 
 class ResearchAgentRuntime(Protocol):

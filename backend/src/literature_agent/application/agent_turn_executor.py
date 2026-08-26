@@ -20,6 +20,7 @@ from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntimeError,
     RuntimeErrorKind,
     RuntimeExecutionState,
+    RuntimeResumeRequest,
     RuntimeTurnReconciliation,
     RuntimeTurnRequest,
 )
@@ -350,6 +351,26 @@ class AgentTurnExecutor[TSession: Session]:
             and reconciliation.result_available
         ):
             return reconciliation
+        if (
+            reconciliation.state is RuntimeExecutionState.RUNNING
+            and reconciliation.resume_available
+        ):
+            cancelled = await self._execute_with_cancellation_watch(
+                request,
+                run,
+                session_id,
+                correlation_id,
+                resume=True,
+            )
+            if cancelled:
+                return None
+            reconciliation = await self._runtime.reconcile_turn(request.turn_run_id)
+            self._validate_reconciliation_scope(request, reconciliation)
+            if (
+                reconciliation.state is RuntimeExecutionState.SUCCEEDED
+                and reconciliation.result_available
+            ):
+                return reconciliation
         if reconciliation.state is RuntimeExecutionState.RUNNING:
             raise ResearchAgentRuntimeError(
                 kind=RuntimeErrorKind.TEMPORARY,
@@ -386,11 +407,24 @@ class AgentTurnExecutor[TSession: Session]:
         run: Run,
         session_id: str,
         correlation_id: str,
+        *,
+        resume: bool = False,
     ) -> bool:
         """并行观察业务取消意图，并在事务外传播到 Runtime。"""
 
         async def consume() -> None:
-            async for _event in self._runtime.execute_turn(request):
+            stream = (
+                self._runtime.resume_turn(
+                    RuntimeResumeRequest(
+                        turn_run_id=request.turn_run_id,
+                        response=None,
+                        turn_request=request,
+                    )
+                )
+                if resume
+                else self._runtime.execute_turn(request)
+            )
+            async for _event in stream:
                 pass
 
         stream_task = asyncio.create_task(consume())

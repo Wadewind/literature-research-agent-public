@@ -92,9 +92,9 @@ Fake 不调用模型、网络、MCP、Browser 或 Sandbox，不读取环境密�
 切片 4 已在不修改该 Port 的前提下新增真实 `DeepAgentsResearchAgentRuntime`；其 SDK 行为与测试证据见
 `deep-agents-runtime-adapter.md`。成功 Turn 不再依赖进程内记录：Adapter 通过 PostgreSQL Checkpoint
 metadata 反查稳定 Turn/Session/请求哈希，并从真实 checkpoint 重建结果与 opaque Binding。
-但这只覆盖成功结果的新连接/新 Adapter 对账，不覆盖第二 OS 进程接管、失败/取消 Runtime 终态持久化或
-orphan `RUNNING` 自动恢复；三项耦合缺口见
-[`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)。
+切片 6 已在不增加第六个 Port 方法的前提下加入 SDK-neutral `RuntimeExecution` 控制记录；第二 OS 进程
+可以认领 orphan、用 `resume_turn(response=None)` 沿同一 checkpoint 恢复，失败/取消/成功终态也可跨
+Adapter 对账。详见 [`agent-runtime-execution-recovery.md`](agent-runtime-execution-recovery.md)。
 
 ## 关键决定与替代方案
 
@@ -217,24 +217,36 @@ Context/Policy 闭包复核，但这不把 Fake 测试冒充为授权证据。
 - 引用结果与 Runtime Binding、候选 Artifact、安全 Event、Run 终态在同一短事务提交；旧生产 Fake 没有
   Project Tool/Evidence 时继续写 `claim_set_id=NULL`，不把任意正文误标为“证据不足”。
 
+## 切片 6 落地补充
+
+- 五方法 Port 仍未扩大；`RuntimeResumeRequest.turn_request` 只携带平台重新加载并复核的原 Context/Policy，
+  `response=None` 表示崩溃恢复，不引入 SDK Command 类型；
+- `RuntimeTurnReconciliation.resume_available` 只在业务 Run/最新 Attempt 可运行且 Runtime lease 已
+  orphan 时为真；Application reconcile-first 后才选择 resume，不再次调用 execute；
+- RunAttempt 继续表达业务投递，RuntimeExecution 单独表达 Turn 级唯一 Execution、checkpoint、版本、
+  lease/fence 和 Runtime 终态；两者不能合并；
+- Runtime 调用、模型/Tool 和 checkpoint 仍在数据库事务外；Runtime SUCCEEDED 后由 Application 另开短
+  事务提交产品 Message/Event，响应丢失可重复 collect 而不重复业务提交；
+- 生产 Worker 固定 Fake 不变，没有环境变量可启用真实 Deep 模式；真实 Adapter 只通过显式 DI 测试。
+  Provider/`BaseChatModel` factory、Secret/费用与 Worker runtime 配置属于切片 7.0；
+- 无新 Provider、MCP、Browser、Sandbox、Skill 或依赖。
+
 ## 已知限制
 
-- 已有同进程 Fake 的 PostgreSQL commit/响应丢失、重复 Job、取消和 Worker lease 故障注入；Fake 状态不
-  跨进程，不能据此宣称跨 Worker Runtime 恢复。切片 4 用持久 Checkpoint 和新连接/新 Adapter 消除了
-  成功结果恢复对 Adapter 内存状态的依赖，但没有启动第二 OS 进程或验证执行途中 Worker 崩溃；
+- Fake 状态仍不跨进程，不能据此宣称恢复；真实 Deep Adapter 已由切片 6 用 PostgreSQL Checkpoint、
+  RuntimeExecution 和两个真实 OS 进程验证执行途中 Worker 崩溃接管；
 - 两个固定 Project Tool 已可读取精确 ChunkSet 和指定 Evidence Matrix；正式 Artifact 仍只有授权稳定引用；
 - 只有 Artifact candidate staged，没有文件 Storage、正式 Artifact commit 或下载；
 - 生产 Fake 不返回 Evidence；显式启用 Project Tool 的 Deep/Application 测试已持久化 Agent Evidence 与
   Claim/Citation，但生产 Worker 尚未切换；
-- Worker 生产装配尚未接入 Deep Agents；真实 Adapter 已以 PostgreSQL Checkpoint 完成跨连接恢复 Spike，
+- Worker 生产默认尚未切到 Deep Agents；真实 Adapter 已在 ARQ Worker 进程拓扑下完成跨进程恢复 Spike，
   并可组装两个真实 Project Tool，但 MCP、Browser、Sandbox、WorkspaceSnapshot 与 Skill 仍未接入；
-- Fake 状态仍位于进程内；切片 4 的新连接/新 Adapter 成功恢复证据不反向改变 Fake 语义，也不能扩张为
-  跨 OS 进程或 orphan `RUNNING` Execution 自动恢复结论；
+- Fake 状态仍位于进程内；真实恢复结论只适用于显式配置持久 RuntimeExecution + PostgreSQL Checkpointer
+  的 Deep Adapter，不反向改变 Fake 语义；
 - 已验证平台能停止消费 Fake 流、事务外传播取消并拒绝结果；尚未验证真实 Deep Agents、模型/Tool 或
   远端 Provider 对已在途调用的立即中止能力。
-- Deep Agents 生产部署拓扑、Runtime Execution lease/recovery owner、真实第二 OS 进程恢复，以及
-  `FAILED`/`CANCELLED`/orphan `RUNNING` 的持久对账尚未闭合；Phase 5 切片 6 是进入外部能力 Spike 与
-  Agent Chat UI 前的门槛。
+- 未确认的外部 Provider/Tool 调用仍可能重试，Project Tool orphan RUNNING 当前拒绝自动重放；这不是
+  Exactly Once，后续外部能力必须分别设计幂等或补偿。
 
 ## 60 秒面试说明
 

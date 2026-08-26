@@ -2,6 +2,8 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -23,17 +25,62 @@ from literature_agent.application.ports.research_agent_runtime import (
     RuntimeEvent,
     RuntimeEventKind,
     RuntimeExecutionState,
+    RuntimeResumeRequest,
     RuntimeTurnRequest,
+)
+from literature_agent.application.runtime_execution_control import (
+    RuntimeExecutionControlService,
 )
 from literature_agent.domain.research_agent import (
     create_context_snapshot,
     create_policy_snapshot,
 )
+from literature_agent.domain.run import RunStatus, create_run
+from literature_agent.domain.run_attempt import AttemptStatus, RunAttempt
 from literature_agent.domain.tool_execution import ToolErrorKind
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
+    _checkpoint_id,
+    _opaque_id,
+    _request_hash,
+    _TurnContext,
 )
 from tests.fakes.deep_agent_model import ScriptedDeepAgentChatModel
+from tests.fakes.fake_attempt_repository import FakeAttemptRepository
+from tests.fakes.fake_project_repository import fake_session
+from tests.fakes.fake_run_repository import FakeRunRepository
+from tests.fakes.fake_runtime_execution_repository import FakeRuntimeExecutionRepository
+
+_LEASE_NOW = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
+
+
+async def _controlled_runtime_dependencies(turn_run_id: str):
+    clock = [_LEASE_NOW]
+    run_repo = FakeRunRepository()
+    run = create_run(project_id="project-1", owner_id="owner-1", run_type="agent_turn")
+    run = replace(run.transition_to(RunStatus.RUNNING), run_id=turn_run_id)
+    await run_repo.add(run)
+    attempt_repo = FakeAttemptRepository()
+    first_attempt = RunAttempt(
+        attempt_id="attempt-1",
+        run_id=turn_run_id,
+        attempt_number=1,
+        worker_id="worker-1",
+        status=AttemptStatus.RUNNING,
+        started_at=clock[0],
+        heartbeat_at=clock[0],
+    )
+    await attempt_repo.add(first_attempt)
+    execution_repo = FakeRuntimeExecutionRepository()
+    control = RuntimeExecutionControlService(
+        session_factory=fake_session,
+        run_repo_factory=lambda _: run_repo,
+        attempt_repo_factory=lambda _: attempt_repo,
+        execution_repo_factory=lambda _: execution_repo,
+        lease_seconds=30,
+        clock=lambda: clock[0],
+    )
+    return control, clock, attempt_repo, execution_repo
 
 
 class _ProjectContext:
@@ -266,6 +313,558 @@ async def test_real_adapter_replays_checkpoint_without_duplicate_model_or_tool()
     assert model.model_call_count == first_model_calls
     assert tool_calls == ["第一轮受控记录"]
     assert all("task" not in names and "execute" not in names for names in model.visible_tool_names)
+
+
+async def test_real_adapter_uses_sync_checkpoint_durability() -> None:
+    """每个 Agent 图 Step 必须在下一 Step 前同步持久化。"""
+
+    class _GraphProxy:
+        def __init__(self, graph) -> None:
+            self._graph = graph
+            self.durabilities: list[str | None] = []
+
+        def astream(self, *args, **kwargs):
+            self.durabilities.append(kwargs.get("durability"))
+            return self._graph.astream(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._graph, name)
+
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(), checkpointer=MemorySaver()
+    )
+    proxy = _GraphProxy(runtime._graph)  # noqa: SLF001
+    runtime._graph = proxy  # type: ignore[assignment]  # noqa: SLF001
+
+    await _collect(
+        runtime.execute_turn(_request(turn_run_id="turn-2", allowed_tool_names=()))
+    )
+
+    assert proxy.durabilities == ["sync"]
+
+
+async def test_new_adapter_resumes_running_checkpoint_without_readding_human_message() -> None:
+    """进程重建后 response=None 沿 checkpoint 继续，而不是再次提交用户输入。"""
+    checkpointer = MemorySaver()
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    first_model = ScriptedDeepAgentChatModel()
+    first = DeepAgentsResearchAgentRuntime(model=first_model, checkpointer=checkpointer)
+    stream = first.execute_turn(request)
+    assert (await anext(stream)).kind is RuntimeEventKind.BOUND
+    assert (await anext(stream)).kind is RuntimeEventKind.STARTED
+    await stream.aclose()
+    assert first_model.model_call_count == 0
+
+    second_model = ScriptedDeepAgentChatModel()
+    second = DeepAgentsResearchAgentRuntime(model=second_model, checkpointer=checkpointer)
+    events = await _collect(
+        second.resume_turn(
+            RuntimeResumeRequest(
+                turn_run_id=request.turn_run_id,
+                response=None,
+                turn_request=request,
+            )
+        )
+    )
+    recovered = await second.reconcile_turn(request.turn_run_id)
+    latest = await checkpointer.aget_tuple(
+        {
+            "configurable": {
+                "thread_id": recovered.session_binding.runtime_thread_id,
+                "checkpoint_ns": "",
+                "checkpoint_id": recovered.turn_binding.runtime_checkpoint_id,
+            }
+        }
+    )
+    assert latest is not None
+    state = await second._graph.aget_state(latest.config)  # noqa: SLF001
+
+    assert events[0].kind is RuntimeEventKind.RESUMED
+    assert recovered.state is RuntimeExecutionState.SUCCEEDED
+    assert second_model.model_call_count == 1
+    texts = [message.text for message in state.values["messages"]]
+    assert sum("第二轮继续" in text for text in texts) == 1
+
+
+async def test_persistent_execution_fences_old_owner_and_new_owner_resumes() -> None:
+    """旧 owner 失权后不能进入模型边界，新 owner 沿同一 Checkpoint 完成。"""
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, clock, attempts, _ = await _controlled_runtime_dependencies(
+        request.turn_run_id
+    )
+    checkpointer = MemorySaver()
+    old_model = ScriptedDeepAgentChatModel()
+    old_runtime = DeepAgentsResearchAgentRuntime(
+        model=old_model,
+        checkpointer=checkpointer,
+        execution_control=control,
+        runtime_owner_id="runtime-old",
+        lease_heartbeat_interval_seconds=3600,
+    )
+    old_stream = old_runtime.execute_turn(request)
+    assert (await anext(old_stream)).kind is RuntimeEventKind.BOUND
+    assert (await anext(old_stream)).kind is RuntimeEventKind.STARTED
+    first_record = await control.get(request.turn_run_id)
+    assert first_record is not None and first_record.last_checkpoint_id
+
+    await attempts.finish_if_running(
+        "attempt-1", AttemptStatus.FAILED, clock[0] + timedelta(seconds=31)
+    )
+    await attempts.add(
+        RunAttempt(
+            attempt_id="attempt-2",
+            run_id=request.turn_run_id,
+            attempt_number=2,
+            worker_id="worker-2",
+            status=AttemptStatus.RUNNING,
+            started_at=clock[0] + timedelta(seconds=31),
+            heartbeat_at=clock[0] + timedelta(seconds=31),
+        )
+    )
+    clock[0] += timedelta(seconds=31)
+
+    new_model = ScriptedDeepAgentChatModel()
+    new_runtime = DeepAgentsResearchAgentRuntime(
+        model=new_model,
+        checkpointer=checkpointer,
+        execution_control=control,
+        runtime_owner_id="runtime-new",
+        lease_heartbeat_interval_seconds=3600,
+    )
+    before = await new_runtime.reconcile_turn(request.turn_run_id)
+    assert before.state is RuntimeExecutionState.RUNNING
+    assert before.resume_available
+    await _collect(
+        new_runtime.resume_turn(
+            RuntimeResumeRequest(
+                turn_run_id=request.turn_run_id,
+                response=None,
+                turn_request=request,
+            )
+        )
+    )
+    final_record = await control.get(request.turn_run_id)
+    assert final_record is not None
+    assert final_record.state.value == "succeeded"
+    assert final_record.fencing_token == 2
+    assert new_model.model_call_count == 1
+
+    with pytest.raises(ResearchAgentRuntimeError) as stale:
+        await anext(old_stream)
+    assert stale.value.code == "runtime_execution_lease_lost"
+    assert old_model.model_call_count == 0
+    await old_stream.aclose()
+
+
+async def test_recovery_without_checkpoint_adds_the_first_human_message_once() -> None:
+    """DB claim 后、首个 Checkpoint 前崩溃时可安全执行首次图输入。"""
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, clock, attempts, _ = await _controlled_runtime_dependencies(
+        request.turn_run_id
+    )
+    first = await control.claim(
+        turn_run_id=request.turn_run_id,
+        session_id=request.session_id,
+        runtime_execution_id=_opaque_id("execution", request.turn_run_id),
+        request_hash=_request_hash(request),
+        owner_id="runtime-crashed-before-checkpoint",
+    )
+    assert first.last_checkpoint_id is None
+    await attempts.finish_if_running(
+        "attempt-1", AttemptStatus.FAILED, clock[0] + timedelta(seconds=31)
+    )
+    await attempts.add(
+        RunAttempt(
+            attempt_id="attempt-2",
+            run_id=request.turn_run_id,
+            attempt_number=2,
+            worker_id="worker-2",
+            status=AttemptStatus.RUNNING,
+            started_at=clock[0] + timedelta(seconds=31),
+            heartbeat_at=clock[0] + timedelta(seconds=31),
+        )
+    )
+    clock[0] += timedelta(seconds=31)
+
+    saver = MemorySaver()
+    model = ScriptedDeepAgentChatModel()
+    recovered = DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-recovered-before-checkpoint",
+    )
+    await _collect(
+        recovered.resume_turn(
+            RuntimeResumeRequest(
+                turn_run_id=request.turn_run_id,
+                response=None,
+                turn_request=request,
+            )
+        )
+    )
+    reconciliation = await recovered.reconcile_turn(request.turn_run_id)
+    latest = await saver.aget_tuple(
+        {
+            "configurable": {
+                "thread_id": reconciliation.session_binding.runtime_thread_id,
+                "checkpoint_ns": "",
+                "checkpoint_id": reconciliation.turn_binding.runtime_checkpoint_id,
+            }
+        }
+    )
+    assert latest is not None
+    state = await recovered._graph.aget_state(latest.config)  # noqa: SLF001
+    humans = [item for item in state.values["messages"] if isinstance(item, HumanMessage)]
+    assert [item.id for item in humans].count(request.user_message_id) == 1
+    assert model.model_call_count == 1
+
+
+async def test_recovery_uses_synced_checkpoint_when_control_record_was_not_advanced() -> None:
+    """同步 Checkpoint 后、控制记录推进前崩溃时不能重复追加 HumanMessage。"""
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, clock, attempts, executions = await _controlled_runtime_dependencies(
+        request.turn_run_id
+    )
+    saver = MemorySaver()
+    first = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-crashed-after-synced-checkpoint",
+        lease_heartbeat_interval_seconds=3600,
+    )
+    stream = first.execute_turn(request)
+    assert (await anext(stream)).kind is RuntimeEventKind.BOUND
+    assert (await anext(stream)).kind is RuntimeEventKind.STARTED
+    recorded = await executions.get(request.turn_run_id)
+    assert recorded is not None and recorded.last_checkpoint_id is not None
+    assert await executions.save(
+        replace(recorded, last_checkpoint_id=None), expected=recorded
+    )
+    await stream.aclose()
+
+    await attempts.finish_if_running(
+        "attempt-1", AttemptStatus.FAILED, clock[0] + timedelta(seconds=31)
+    )
+    await attempts.add(
+        RunAttempt(
+            attempt_id="attempt-2",
+            run_id=request.turn_run_id,
+            attempt_number=2,
+            worker_id="worker-2",
+            status=AttemptStatus.RUNNING,
+            started_at=clock[0] + timedelta(seconds=31),
+            heartbeat_at=clock[0] + timedelta(seconds=31),
+        )
+    )
+    clock[0] += timedelta(seconds=31)
+
+    recovered = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-recovered-after-synced-checkpoint",
+    )
+
+    class _GraphInputProxy:
+        def __init__(self, graph) -> None:
+            self._graph = graph
+            self.inputs: list[Any] = []
+
+        def astream(self, input, *args, **kwargs):
+            self.inputs.append(input)
+            return self._graph.astream(input, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._graph, name)
+
+    proxy = _GraphInputProxy(recovered._graph)  # noqa: SLF001
+    recovered._graph = proxy  # type: ignore[assignment]  # noqa: SLF001
+    await _collect(
+        recovered.resume_turn(
+            RuntimeResumeRequest(
+                turn_run_id=request.turn_run_id,
+                response=None,
+                turn_request=request,
+            )
+        )
+    )
+    reconciliation = await recovered.reconcile_turn(request.turn_run_id)
+    latest = await saver.aget_tuple(
+        {
+            "configurable": {
+                "thread_id": reconciliation.session_binding.runtime_thread_id,
+                "checkpoint_ns": "",
+                "checkpoint_id": reconciliation.turn_binding.runtime_checkpoint_id,
+            }
+        }
+    )
+    assert latest is not None
+    state = await recovered._graph.aget_state(latest.config)  # noqa: SLF001
+    humans = [item for item in state.values["messages"] if isinstance(item, HumanMessage)]
+    assert [item.id for item in humans].count(request.user_message_id) == 1
+    assert proxy.inputs == [None]
+
+
+async def test_recovery_prefers_newer_synced_checkpoint_over_stale_control_watermark() -> None:
+    """控制水位停在 C1 时必须从物理最新 C2 恢复，不重放 C2 已确认模型。"""
+    request = _request()
+    control, clock, attempts, _ = await _controlled_runtime_dependencies(
+        request.turn_run_id
+    )
+    saver = MemorySaver()
+    tool_calls: list[str] = []
+
+    @tool
+    def record_research_step(note: str) -> str:
+        """记录一次确定性的研究步骤。"""
+        tool_calls.append(note)
+        return "recorded"
+
+    first_model = ScriptedDeepAgentChatModel()
+    first = DeepAgentsResearchAgentRuntime(
+        model=first_model,
+        tools=(record_research_step,),
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-crashed-with-stale-watermark",
+        lease_heartbeat_interval_seconds=3600,
+    )
+    first_stream = first.execute_turn(request)
+    assert (await anext(first_stream)).kind is RuntimeEventKind.BOUND
+    assert (await anext(first_stream)).kind is RuntimeEventKind.STARTED
+    recorded = await control.get(request.turn_run_id)
+    assert recorded is not None and recorded.last_checkpoint_id is not None
+    c1 = recorded.last_checkpoint_id
+    await first_stream.aclose()
+
+    physical_stream = first._graph.astream(  # noqa: SLF001
+        None,
+        first._config(  # noqa: SLF001
+            request,
+            checkpoint_id=c1,
+            permit=recorded.permit,
+        ),
+        context=_TurnContext(
+            turn_run_id=request.turn_run_id,
+            allowed_tool_names=frozenset(request.policy_snapshot.allowed_tool_names),
+            runtime_permit=recorded.permit,
+        ),
+        stream_mode="updates",
+        durability="sync",
+    )
+    await anext(physical_stream)
+    await physical_stream.aclose()
+    physical_latest = await first._find_checkpoint(  # noqa: SLF001
+        request.turn_run_id,
+        fencing_token=recorded.fencing_token,
+    )
+    assert physical_latest is not None
+    c2 = _checkpoint_id(physical_latest.config)
+    assert c2 != c1
+    assert first_model.model_call_count == 1
+    assert tool_calls == []
+    assert (await control.get(request.turn_run_id)).last_checkpoint_id == c1  # type: ignore[union-attr]
+
+    await attempts.finish_if_running(
+        "attempt-1", AttemptStatus.FAILED, clock[0] + timedelta(seconds=31)
+    )
+    await attempts.add(
+        RunAttempt(
+            attempt_id="attempt-2",
+            run_id=request.turn_run_id,
+            attempt_number=2,
+            worker_id="worker-2",
+            status=AttemptStatus.RUNNING,
+            started_at=clock[0] + timedelta(seconds=31),
+            heartbeat_at=clock[0] + timedelta(seconds=31),
+        )
+    )
+    clock[0] += timedelta(seconds=31)
+
+    recovered_model = ScriptedDeepAgentChatModel()
+    recovered = DeepAgentsResearchAgentRuntime(
+        model=recovered_model,
+        tools=(record_research_step,),
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-recovered-from-newest-checkpoint",
+    )
+
+    class _GraphResumeProxy:
+        def __init__(self, graph) -> None:
+            self._graph = graph
+            self.inputs: list[Any] = []
+            self.checkpoint_ids: list[str | None] = []
+
+        def astream(self, input, config, *args, **kwargs):
+            self.inputs.append(input)
+            self.checkpoint_ids.append(
+                config.get("configurable", {}).get("checkpoint_id")
+            )
+            return self._graph.astream(input, config, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._graph, name)
+
+    proxy = _GraphResumeProxy(recovered._graph)  # noqa: SLF001
+    recovered._graph = proxy  # type: ignore[assignment]  # noqa: SLF001
+    await _collect(
+        recovered.resume_turn(
+            RuntimeResumeRequest(
+                turn_run_id=request.turn_run_id,
+                response=None,
+                turn_request=request,
+            )
+        )
+    )
+
+    assert proxy.inputs == [None]
+    assert proxy.checkpoint_ids == [c2]
+    assert recovered_model.model_call_count == 1
+    assert tool_calls == ["第一轮受控记录"]
+
+
+async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> None:
+    """即使 checkpoint_id 命中，也不能接受与控制记录 Session 不同的状态。"""
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, _, _, _ = await _controlled_runtime_dependencies(request.turn_run_id)
+    saver = MemorySaver()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-checkpoint-identity",
+        lease_heartbeat_interval_seconds=3600,
+    )
+    stream = runtime.execute_turn(request)
+    assert (await anext(stream)).kind is RuntimeEventKind.BOUND
+    assert (await anext(stream)).kind is RuntimeEventKind.STARTED
+    record = await control.get(request.turn_run_id)
+    assert record is not None and record.last_checkpoint_id is not None
+    checkpoint = await saver.aget_tuple(
+        {
+            "configurable": {
+                "thread_id": _opaque_id("thread", request.session_id),
+                "checkpoint_ns": "",
+                "checkpoint_id": record.last_checkpoint_id,
+            }
+        }
+    )
+    assert checkpoint is not None
+    tampered = checkpoint._replace(
+        metadata={**checkpoint.metadata, "agent_runtime_session_id": "session-other"}
+    )
+
+    class _TamperedCheckpointLookup:
+        async def aget_tuple(self, config):
+            del config
+            return tampered
+
+    runtime._checkpointer = _TamperedCheckpointLookup()  # type: ignore[assignment]  # noqa: SLF001
+
+    with pytest.raises(ResearchAgentRuntimeError) as exc_info:
+        await runtime._checkpoint_for_record(record)  # noqa: SLF001
+
+    assert exc_info.value.kind is RuntimeErrorKind.PERMANENT
+    assert exc_info.value.code == "runtime_checkpoint_identity_mismatch"
+    await stream.aclose()
+
+
+async def test_persistent_failed_and_cancelled_states_survive_adapter_recreation() -> None:
+    """FAILED/CANCELLED 不依赖旧 Adapter 的 `_local_turns`。"""
+    failed_request = _request()
+    failed_control, _, _, _ = await _controlled_runtime_dependencies(
+        failed_request.turn_run_id
+    )
+    failed_saver = MemorySaver()
+    failing = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=failed_saver,
+        execution_control=failed_control,
+        runtime_owner_id="runtime-failed",
+        lease_heartbeat_interval_seconds=3600,
+    )
+    with pytest.raises(ResearchAgentRuntimeError) as failure:
+        await _collect(failing.execute_turn(_request(allowed_tool_names=())))
+    assert failure.value.code == "runtime_tool_not_allowed"
+    recreated_failed = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=failed_saver,
+        execution_control=failed_control,
+        runtime_owner_id="runtime-recreated",
+    )
+    assert (
+        await recreated_failed.reconcile_turn(failed_request.turn_run_id)
+    ).state is RuntimeExecutionState.FAILED
+
+    cancelled_request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    cancelled_control, _, _, _ = await _controlled_runtime_dependencies(
+        cancelled_request.turn_run_id
+    )
+    cancelled_saver = MemorySaver()
+    active = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=cancelled_saver,
+        execution_control=cancelled_control,
+        runtime_owner_id="runtime-cancelled",
+        lease_heartbeat_interval_seconds=3600,
+    )
+    active_stream = active.execute_turn(cancelled_request)
+    await anext(active_stream)
+    await anext(active_stream)
+    run_repo = cancelled_control._run_repo_factory(None)  # type: ignore[arg-type]  # noqa: SLF001
+    run = await run_repo.get_by_id(cancelled_request.turn_run_id)
+    assert run is not None
+    assert await run_repo.update_status(
+        run.run_id,
+        RunStatus.RUNNING,
+        RunStatus.CANCEL_REQUESTED,
+        run.event_sequence + 1,
+    )
+    cancelled = await active.cancel_turn(cancelled_request.turn_run_id)
+    await active_stream.aclose()
+    assert cancelled.state is RuntimeExecutionState.CANCELLED
+    recreated_cancelled = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=cancelled_saver,
+        execution_control=cancelled_control,
+        runtime_owner_id="runtime-after-cancel",
+    )
+    assert (
+        await recreated_cancelled.reconcile_turn(cancelled_request.turn_run_id)
+    ).state is RuntimeExecutionState.CANCELLED
+
+
+async def test_runtime_revision_mismatch_is_permanent_and_does_not_call_model() -> None:
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, _, _, repo = await _controlled_runtime_dependencies(request.turn_run_id)
+    saver = MemorySaver()
+    first_model = ScriptedDeepAgentChatModel()
+    first = DeepAgentsResearchAgentRuntime(
+        model=first_model,
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-first",
+    )
+    await _collect(first.execute_turn(request))
+    record = repo._items[request.turn_run_id]  # noqa: SLF001
+    repo._items[request.turn_run_id] = replace(  # noqa: SLF001
+        record, graph_revision="deep-agent-graph.v2"
+    )
+
+    new_model = ScriptedDeepAgentChatModel()
+    recreated = DeepAgentsResearchAgentRuntime(
+        model=new_model,
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-new",
+    )
+    with pytest.raises(ResearchAgentRuntimeError) as incompatible:
+        await recreated.reconcile_turn(request.turn_run_id)
+    assert incompatible.value.code == "runtime_version_incompatible"
+    assert new_model.model_call_count == 0
 
 
 async def test_same_thread_appends_only_new_message_and_native_summary_offloads_history() -> None:

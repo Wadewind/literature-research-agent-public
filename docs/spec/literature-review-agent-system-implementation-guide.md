@@ -1444,10 +1444,10 @@ Index 和指定 Review Evidence Matrix 回答第一轮，在第二轮继续同�
 
 Phase 5 切片 4 已将首个真实 Adapter 精确固定到 `deepagents==0.7.8`。该 Spike 使用 StateBackend 与
 PostgreSQL Checkpointer 验证成功 Execution 的新连接/新 Adapter 结果恢复、同 Thread 增量消息、原生摘要与
-`/conversation_history/*.md` 卸载；它没有把 Worker 生产装配切离 Fake Runtime，也没有提前决定 Runtime
-部署拓扑或接入 Sandbox、MCP、Browser、长期 Memory、Skill 和真实 Project Tool。新 Adapter 测试没有
-启动第二 OS 进程，也不证明 orphan `RUNNING` checkpoint 自动 resume 或 Tool 执行后、checkpoint 提交前
-崩溃窗口的 Effectively Once；正式 Project Tool 需要稳定 call/effect ID 与持久调用记录。
+`/conversation_history/*.md` 卸载；它没有把 Worker 生产装配切离 Fake Runtime，也没有接入 Sandbox、
+MCP、Browser、长期 Memory、Skill 和真实 Project Tool。该切片当时尚未启动第二 OS 进程，也不证明
+orphan `RUNNING` checkpoint 自动 resume 或 Tool 执行后、checkpoint 提交前崩溃窗口的 Effectively Once；
+正式 Project Tool 需要稳定 call/effect ID 与持久调用记录。
 
 Phase 5 切片 5 已以 SDK-neutral `ProjectResearchContext` 接入固定的
 `search_project_chunks`/`read_review_evidence_matrix`。Deep Agents `ToolRuntime` 只注入稳定
@@ -1459,10 +1459,18 @@ ContextSnapshot 精确下推 PaperVersion/ChunkSet，验证指定 Matrix 的 Out
 校验和原子提交。生产 Worker 仍使用 Fake Runtime；该证据不替代后续部署与崩溃恢复门槛。
 
 切片 4 同时暴露了三项耦合缺口：没有真实第二 OS 进程恢复证据，失败/取消终态与 orphan `RUNNING`
-缺少持久对账事实，生产部署与 Runtime Execution lease/recovery owner 尚未决定。因此 Phase 5 在
-Project Research Context 后增加一个独立恢复门槛；该门槛通过前不得进入高风险外部能力或最小 Agent
-Chat UI。证据、选项和非声明边界见
+缺少持久对账事实，生产部署与 Runtime Execution lease/recovery owner 尚未决定。切片 6 已由 ADR-0006
+选择 ARQ Worker 内运行，并增加 SDK-neutral RuntimeExecution lease/fencing、同步 checkpoint durability、
+严格版本兼容和真实双 OS 进程恢复证据，三项缺口均已闭合。只承诺不重复已持久确认的调用，不宣称在途
+外部调用 Exactly Once。平台 `last_checkpoint_id` 只表示已观察水位；无论水位为空还是停在旧 C1，恢复
+都必须先选择并校验物理最新 Checkpoint，以 `astream(None)` 继续，不能重新追加用户消息或重放 C2 前
+已确认 Step。Checkpoint 必须匹配 Turn/Session/Execution/request hash/runtime+graph revision。证据和非声明边界见
 [`phase-05-runtime-recovery-gap-log.md`](../learning-journal/reports/phase-05-runtime-recovery-gap-log.md)。
+
+切片 6 只通过显式依赖注入构造真实 Deep Adapter；生产 Worker 继续固定 Fake，当前不存在环境变量可启用
+的真实 Deep Worker 模式。切片 7 必须先完成 **7.0 Real Deep Agent Runtime Enablement**，决定并接入
+Provider/`BaseChatModel` factory、Secret/费用和 Worker `fake | deep_agents` 显式配置，然后才依次验证
+MCP、Browser/下载、Sandbox/WorkspaceSnapshot 和平台 Skill。本项目不以空开关或测试 Fake 伪造生产模式。
 
 #### 需要学习和验证
 
@@ -1490,14 +1498,18 @@ Chat UI。证据、选项和非声明边界见
 ```text
 Project Research Context
   → Runtime 部署与崩溃恢复门槛
-  → MCP / Browser / Sandbox / 平台 Skill 独立 Spike
+  → 7.0 Real Deep Agent Runtime Enablement
+  → MCP
+  → Browser / 下载
+  → Sandbox / WorkspaceSnapshot
+  → 平台 Skill
   → 最小 Agent Chat UI
   → 集成 ADR 与阶段复盘
 ```
 
-恢复门槛必须先根据 Project Tool 的调用记录和副作用边界，决定 ARQ Worker 内运行或独立 Runtime
-Deployment，并固定 lease/recovery owner。验收测试必须实际启动第二个 OS 进程，沿用同一
-Execution/Checkpoint 恢复且不重新追加用户输入；同进程新 Adapter 只能作为较低层测试，不能替代该证据。
+恢复门槛已根据 Project Tool 的调用记录和副作用边界决定 ARQ Worker 内运行，并固定 lease/recovery
+owner。验收测试实际启动第二个 OS 进程，沿用同一 Execution/Checkpoint 恢复且不重新追加用户输入；
+同进程新 Adapter 仅作为较低层测试。切片 7.0 完成前不得把显式 DI Spike 描述为可运行生产 Deep 模式。
 
 #### 最小垂直切片
 

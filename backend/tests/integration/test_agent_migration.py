@@ -1,4 +1,4 @@
-"""Phase 5 切片 2 Alembic 迁移往返验证。"""
+"""Phase 5 Agent 业务与 Runtime Execution 迁移往返验证。"""
 
 import os
 import subprocess
@@ -7,6 +7,7 @@ from testcontainers.community.postgres import PostgresContainer
 
 from literature_agent.infrastructure.persistence.models import (
     AgentContextSnapshotORM,
+    AgentRuntimeExecutionORM,
     AgentTurnRunORM,
 )
 
@@ -26,6 +27,28 @@ def test_agent_turn_foreign_keys_close_the_business_fact_graph() -> None:
         "fk_agent_turn_runs_policy_snapshot",
     } <= turn_fks
     assert "fk_agent_context_snapshots_user_message" in context_fks
+
+
+def test_runtime_execution_references_turn_session_and_current_attempt() -> None:
+    """Runtime 控制事实不替代 Turn、Session 或 RunAttempt。"""
+    targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentRuntimeExecutionORM.__table__.foreign_keys
+    }
+    assert targets == {
+        "agent_turn_runs.turn_run_id",
+        "agent_sessions.session_id",
+        "run_attempts.attempt_id",
+    }
+    assert {
+        "request_hash",
+        "runtime_revision",
+        "graph_revision",
+        "fencing_token",
+        "lease_owner_id",
+        "lease_expires_at",
+        "last_checkpoint_id",
+    } <= set(AgentRuntimeExecutionORM.__table__.columns.keys())
 
 
 def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:

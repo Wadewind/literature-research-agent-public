@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, cast
+from uuid import uuid4
 
 from deepagents import (
     GeneralPurposeSubagentProfile,
@@ -48,10 +52,25 @@ from literature_agent.application.ports.research_agent_runtime import (
     RuntimeTurnRequest,
     RuntimeTurnResult,
 )
+from literature_agent.application.ports.runtime_execution_control import (
+    RuntimeExecutionControl,
+)
+from literature_agent.application.runtime_execution_control import (
+    DEEPAGENTS_REVISION,
+    LANGGRAPH_REVISION,
+    RUNTIME_CONTRACT_REVISION,
+    RUNTIME_GRAPH_REVISION,
+    RuntimeExecutionControlError,
+)
 from literature_agent.domain.agent_answer import parse_agent_answer
 from literature_agent.domain.research_agent import (
     RuntimeSessionBinding,
     RuntimeTurnBinding,
+)
+from literature_agent.domain.runtime_execution import (
+    RuntimeControlState,
+    RuntimeExecution,
+    RuntimeExecutionPermit,
 )
 from literature_agent.domain.tool_execution import ToolErrorKind, canonical_tool_args
 
@@ -59,6 +78,9 @@ _TURN_METADATA_KEY = "agent_runtime_turn_id"
 _SESSION_METADATA_KEY = "agent_runtime_session_id"
 _REQUEST_HASH_METADATA_KEY = "agent_runtime_request_hash"
 _EXECUTION_METADATA_KEY = "agent_runtime_execution_id"
+_FENCING_METADATA_KEY = "agent_runtime_fencing_token"
+_RUNTIME_REVISION_METADATA_KEY = "agent_runtime_revision"
+_GRAPH_REVISION_METADATA_KEY = "agent_graph_revision"
 _FILESYSTEM_TOOL_NAMES = frozenset(
     {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}
 )
@@ -71,6 +93,7 @@ class _TurnContext:
 
     turn_run_id: str
     allowed_tool_names: frozenset[str]
+    runtime_permit: RuntimeExecutionPermit | None = None
 
 
 @dataclass(slots=True)
@@ -86,8 +109,14 @@ class _LocalTurn:
 class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
     """在最终模型调用边界收窄内置与平台工具可见性。"""
 
-    def __init__(self, *, registered_tool_names: frozenset[str]) -> None:
+    def __init__(
+        self,
+        *,
+        registered_tool_names: frozenset[str],
+        execution_control: RuntimeExecutionControl | None = None,
+    ) -> None:
         self._registered_tool_names = registered_tool_names
+        self._execution_control = execution_control
 
     def _allowed(self, context: _TurnContext) -> frozenset[str]:
         return context.allowed_tool_names & self._registered_tool_names
@@ -103,6 +132,7 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
         request: ModelRequest[_TurnContext],
         handler: Callable[[ModelRequest[_TurnContext]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
+        self._require_async_guard(request.runtime.context)
         return handler(request.override(tools=self._filtered(request)))
 
     async def awrap_model_call(
@@ -110,6 +140,7 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
         request: ModelRequest[_TurnContext],
         handler: Callable[[ModelRequest[_TurnContext]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
+        await self._assert_active(request.runtime.context)
         return await handler(request.override(tools=self._filtered(request)))
 
     def wrap_tool_call(
@@ -117,6 +148,7 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
+        self._require_async_guard(cast(_TurnContext, request.runtime.context))
         self._require_allowed_tool(request)
         return handler(request)
 
@@ -128,8 +160,31 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
             Awaitable[ToolMessage | Command[Any]],
         ],
     ) -> ToolMessage | Command[Any]:
+        await self._assert_active(cast(_TurnContext, request.runtime.context))
         self._require_allowed_tool(request)
         return await handler(request)
+
+    async def _assert_active(self, context: _TurnContext) -> None:
+        if self._execution_control is None:
+            return
+        if context.runtime_permit is None:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_execution_lease_missing",
+                "Runtime Execution 缺少 lease",
+            )
+        try:
+            await self._execution_control.assert_active(context.runtime_permit)
+        except RuntimeExecutionControlError as exc:
+            raise _control_error(exc) from exc
+
+    def _require_async_guard(self, context: _TurnContext) -> None:
+        if self._execution_control is not None and context.runtime_permit is not None:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_sync_execution_forbidden",
+                "受控 Runtime 只允许异步模型与 Tool 边界",
+            )
 
     def _require_allowed_tool(self, request: ToolCallRequest) -> None:
         context = cast(_TurnContext, request.runtime.context)
@@ -155,9 +210,19 @@ class DeepAgentsResearchAgentRuntime:
         project_context: ProjectResearchContext | None = None,
         summarization_trigger: tuple[str, int | float] = ("messages", 100),
         summarization_keep: tuple[str, int | float] = ("messages", 20),
+        execution_control: RuntimeExecutionControl | None = None,
+        runtime_owner_id: str | None = None,
+        lease_heartbeat_interval_seconds: float = 5.0,
     ) -> None:
+        if lease_heartbeat_interval_seconds <= 0:
+            raise ValueError("Runtime lease heartbeat interval 必须为正数")
         self._checkpointer = checkpointer
         self._local_turns: dict[str, _LocalTurn] = {}
+        self._execution_control = execution_control
+        self._runtime_owner_id = runtime_owner_id or (
+            f"runtime:{socket.gethostname()}:{os.getpid()}:{uuid4()}"
+        )
+        self._lease_heartbeat_interval_seconds = lease_heartbeat_interval_seconds
 
         backend = StateBackend()
         self._register_restricted_harness_profile(model)
@@ -195,7 +260,8 @@ class DeepAgentsResearchAgentRuntime:
                     filesystem,
                     summarization,
                     _RuntimeToolPolicyMiddleware(
-                        registered_tool_names=registered_tool_names
+                        registered_tool_names=registered_tool_names,
+                        execution_control=execution_control,
                     ),
                 ),
             ),
@@ -212,7 +278,45 @@ class DeepAgentsResearchAgentRuntime:
         return self._execute_stream(request)
 
     async def _execute_stream(self, request: RuntimeTurnRequest) -> AsyncIterator[RuntimeEvent]:
-        existing = await self._find_checkpoint(request.turn_run_id)
+        permit: RuntimeExecutionPermit | None = None
+        if self._execution_control is not None:
+            record = await self._execution_control.get(request.turn_run_id)
+            if record is not None:
+                self._require_record_compatible(record, request)
+                if record.state is RuntimeControlState.SUCCEEDED:
+                    existing = await self._checkpoint_for_record(record)
+                    if existing is None:
+                        raise _runtime_error(
+                            RuntimeErrorKind.TEMPORARY,
+                            "runtime_checkpoint_unavailable",
+                            "Runtime 成功 Checkpoint 暂时不可用",
+                        )
+                    async for event in self._replay_succeeded(
+                        request.turn_run_id, existing
+                    ):
+                        yield event
+                    return
+                raise _runtime_error(
+                    RuntimeErrorKind.TEMPORARY,
+                    "runtime_execution_requires_resume",
+                    "Runtime Execution 已存在，必须沿 Checkpoint 恢复",
+                )
+            try:
+                claimed = await self._execution_control.claim(
+                    turn_run_id=request.turn_run_id,
+                    session_id=request.session_id,
+                    runtime_execution_id=_opaque_id("execution", request.turn_run_id),
+                    request_hash=_request_hash(request),
+                    owner_id=self._runtime_owner_id,
+                )
+            except RuntimeExecutionControlError as exc:
+                raise _control_error(exc) from exc
+            permit = claimed.permit
+
+        existing = await self._find_checkpoint(
+            request.turn_run_id,
+            fencing_token=permit.fencing_token if permit is not None else None,
+        )
         if existing is not None:
             self._validate_existing_request(existing, request)
             reconciliation = await self._reconciliation_from_checkpoint(existing)
@@ -221,6 +325,15 @@ class DeepAgentsResearchAgentRuntime:
                     yield event
             return
 
+        async for event in self._run_fresh_graph(request, permit):
+            yield event
+
+    async def _run_fresh_graph(
+        self,
+        request: RuntimeTurnRequest,
+        permit: RuntimeExecutionPermit | None,
+    ) -> AsyncIterator[RuntimeEvent]:
+        """仅在没有任何持久 Checkpoint 时追加首次 HumanMessage。"""
         local = self._local_turns.get(request.turn_run_id)
         if local is not None:
             if local.request != request:
@@ -239,12 +352,14 @@ class DeepAgentsResearchAgentRuntime:
         yield self._event(request.turn_run_id, 1, RuntimeEventKind.BOUND, "Deep Agents 已绑定")
         if local.state is RuntimeExecutionState.CANCELLED:
             return
-        config = self._config(request)
+        config = self._config(request, permit=permit)
         context = _TurnContext(
             turn_run_id=request.turn_run_id,
             allowed_tool_names=frozenset(request.policy_snapshot.allowed_tool_names),
+            runtime_permit=permit,
         )
         stream: AsyncIterator[Any] | None = None
+        heartbeat = self._start_lease_heartbeat(permit)
         try:
             stream = self._graph.astream(
                 {
@@ -258,13 +373,18 @@ class DeepAgentsResearchAgentRuntime:
                 config,
                 context=context,
                 stream_mode="updates",
+                durability="sync",
             )
             # Deep Agents 固定的 before_agent 首个更新会先形成真实 Checkpoint，
             # 但尚未进入模型调用；STARTED 后取消因此既可对账，也不会新增模型/Tool。
             await anext(stream)
-            started_checkpoint = await self._find_checkpoint(request.turn_run_id)
+            started_checkpoint = await self._find_checkpoint(
+                request.turn_run_id,
+                fencing_token=permit.fencing_token if permit is not None else None,
+            )
             if started_checkpoint is not None:
                 local.checkpoint_id = _checkpoint_id(started_checkpoint.config)
+                await self._record_checkpoint(permit, local.checkpoint_id)
             local.last_event_sequence = 2
             yield self._event(
                 request.turn_run_id,
@@ -275,25 +395,39 @@ class DeepAgentsResearchAgentRuntime:
             if local.state is RuntimeExecutionState.CANCELLED:
                 return
             async for _ in stream:
+                await self._raise_if_heartbeat_failed(heartbeat)
+                current = await self._find_checkpoint(
+                    request.turn_run_id,
+                    fencing_token=permit.fencing_token if permit is not None else None,
+                )
+                if current is not None:
+                    await self._record_checkpoint(permit, _checkpoint_id(current.config))
                 if local.state is RuntimeExecutionState.CANCELLED:
                     return
-        except ResearchAgentRuntimeError:
+        except ResearchAgentRuntimeError as exc:
             local.state = RuntimeExecutionState.FAILED
+            await self._record_runtime_error(permit, exc)
             raise
         except Exception as exc:
             local.state = RuntimeExecutionState.FAILED
-            raise _runtime_error(
+            normalized = _runtime_error(
                 RuntimeErrorKind.TEMPORARY,
                 "runtime_execution_failed",
                 "Deep Agents 执行暂时失败",
-            ) from exc
+            )
+            await self._record_runtime_error(permit, normalized)
+            raise normalized from exc
         finally:
+            await self._stop_lease_heartbeat(heartbeat)
             if stream is not None:
                 await _close_stream(stream)
 
         if local.state is RuntimeExecutionState.CANCELLED:
             return
-        checkpoint = await self._find_checkpoint(request.turn_run_id)
+        checkpoint = await self._find_checkpoint(
+            request.turn_run_id,
+            fencing_token=permit.fencing_token if permit is not None else None,
+        )
         if checkpoint is None:
             local.state = RuntimeExecutionState.FAILED
             raise _runtime_error(
@@ -310,6 +444,13 @@ class DeepAgentsResearchAgentRuntime:
                 "Deep Agents 结果尚未就绪",
             )
         local.state = RuntimeExecutionState.SUCCEEDED
+        if permit is not None and self._execution_control is not None:
+            try:
+                await self._execution_control.succeed(
+                    permit, reconciliation.turn_binding.runtime_checkpoint_id
+                )
+            except RuntimeExecutionControlError as exc:
+                raise _control_error(exc) from exc
         result = await self._result_from_checkpoint(checkpoint)
         local.last_event_sequence = 3
         yield RuntimeEvent(
@@ -323,9 +464,9 @@ class DeepAgentsResearchAgentRuntime:
         yield self._event(request.turn_run_id, 4, RuntimeEventKind.COMPLETED, "Deep Agents 已完成")
 
     def resume_turn(self, request: RuntimeResumeRequest) -> AsyncIterator[RuntimeEvent]:
-        return self._unsupported_resume(request)
+        return self._resume_stream(request)
 
-    async def _unsupported_resume(
+    async def _resume_stream(
         self, request: RuntimeResumeRequest
     ) -> AsyncIterator[RuntimeEvent]:
         reconciliation = await self.reconcile_turn(request.turn_run_id)
@@ -335,14 +476,192 @@ class DeepAgentsResearchAgentRuntime:
                 "runtime_turn_cancelled",
                 "Turn 已取消，不能恢复",
             )
-        raise _runtime_error(
-            RuntimeErrorKind.PERMANENT,
-            "runtime_turn_not_interrupted",
-            "本切片未配置可恢复 Interrupt",
+        if request.response is not None:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_turn_not_interrupted",
+                "本切片未配置可恢复 Interrupt",
+            )
+        turn_request = request.turn_request
+        if turn_request is None:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_resume_context_missing",
+                "崩溃恢复缺少原始 Turn 授权上下文",
+            )
+        permit: RuntimeExecutionPermit | None = None
+        record: RuntimeExecution | None = None
+        checkpoint: CheckpointTuple | None = None
+        if self._execution_control is not None:
+            record = await self._execution_control.get(request.turn_run_id)
+            if record is None:
+                raise _runtime_error(
+                    RuntimeErrorKind.PERMANENT,
+                    "runtime_turn_not_found",
+                    "Runtime 中不存在指定 Turn",
+                )
+            self._require_record_compatible(record, turn_request)
+            try:
+                claimed = await self._execution_control.claim(
+                    turn_run_id=turn_request.turn_run_id,
+                    session_id=turn_request.session_id,
+                    runtime_execution_id=record.runtime_execution_id,
+                    request_hash=_request_hash(turn_request),
+                    owner_id=self._runtime_owner_id,
+                )
+            except RuntimeExecutionControlError as exc:
+                raise _control_error(exc) from exc
+            permit = claimed.permit
+            record = claimed
+            # LangGraph 的同步 Checkpoint 与平台控制水位是两个独立提交。
+            # 即使 last_checkpoint_id 非空，也可能落后于刚同步的下一 Step；
+            # 因此恢复始终先选同一稳定身份的物理最新 Checkpoint。
+            checkpoint = await self._latest_checkpoint_for_record(record)
+            if checkpoint is None:
+                async for event in self._run_fresh_graph(turn_request, permit):
+                    yield event
+                return
+        else:
+            checkpoint = await self._find_checkpoint(request.turn_run_id)
+        if checkpoint is None:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_turn_not_found",
+                "Runtime 中不存在指定 Turn",
+            )
+        self._validate_existing_request(checkpoint, turn_request)
+        checkpoint_reconciliation = await self._reconciliation_from_checkpoint(checkpoint)
+        if checkpoint_reconciliation.state is RuntimeExecutionState.SUCCEEDED:
+            if permit is not None and self._execution_control is not None:
+                try:
+                    await self._execution_control.succeed(
+                        permit, checkpoint_reconciliation.turn_binding.runtime_checkpoint_id
+                    )
+                except RuntimeExecutionControlError as exc:
+                    raise _control_error(exc) from exc
+            async for event in self._replay_succeeded(request.turn_run_id, checkpoint):
+                yield event
+            return
+        if reconciliation.state is not RuntimeExecutionState.RUNNING:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_turn_not_interrupted",
+                "当前 Runtime 状态不允许崩溃恢复",
+            )
+
+        local = _LocalTurn(turn_request, RuntimeExecutionState.RUNNING, 2)
+        self._local_turns[request.turn_run_id] = local
+        config = self._config(
+            turn_request,
+            checkpoint_id=_checkpoint_id(checkpoint.config),
+            permit=permit,
         )
-        yield  # pragma: no cover - 保持异步迭代器签名
+        context = _TurnContext(
+            turn_run_id=turn_request.turn_run_id,
+            allowed_tool_names=frozenset(
+                turn_request.policy_snapshot.allowed_tool_names
+            ),
+            runtime_permit=permit,
+        )
+        stream: AsyncIterator[Any] | None = None
+        heartbeat = self._start_lease_heartbeat(permit)
+        try:
+            local.last_event_sequence = 3
+            yield self._event(
+                request.turn_run_id,
+                3,
+                RuntimeEventKind.RESUMED,
+                "Deep Agents 已从 Checkpoint 恢复",
+            )
+            stream = self._graph.astream(
+                None,
+                config,
+                context=context,
+                stream_mode="updates",
+                durability="sync",
+            )
+            async for _ in stream:
+                await self._raise_if_heartbeat_failed(heartbeat)
+                current = await self._find_checkpoint(
+                    request.turn_run_id,
+                    fencing_token=permit.fencing_token if permit is not None else None,
+                )
+                if current is not None:
+                    await self._record_checkpoint(permit, _checkpoint_id(current.config))
+                if local.state is RuntimeExecutionState.CANCELLED:
+                    return
+        except ResearchAgentRuntimeError as exc:
+            local.state = RuntimeExecutionState.FAILED
+            await self._record_runtime_error(permit, exc)
+            raise
+        except Exception as exc:
+            local.state = RuntimeExecutionState.FAILED
+            normalized = _runtime_error(
+                RuntimeErrorKind.TEMPORARY,
+                "runtime_execution_failed",
+                "Deep Agents 执行暂时失败",
+            )
+            await self._record_runtime_error(permit, normalized)
+            raise normalized from exc
+        finally:
+            await self._stop_lease_heartbeat(heartbeat)
+            if stream is not None:
+                await _close_stream(stream)
+
+        completed = await self._find_checkpoint(
+            request.turn_run_id,
+            fencing_token=permit.fencing_token if permit is not None else None,
+        )
+        if completed is None:
+            raise _runtime_error(
+                RuntimeErrorKind.TEMPORARY,
+                "runtime_checkpoint_missing",
+                "Deep Agents 最终 Checkpoint 尚不可用",
+            )
+        completed_reconciliation = await self._reconciliation_from_checkpoint(completed)
+        if completed_reconciliation.state is not RuntimeExecutionState.SUCCEEDED:
+            raise _runtime_error(
+                RuntimeErrorKind.TEMPORARY,
+                "runtime_result_not_ready",
+                "Deep Agents 恢复结果尚未就绪",
+            )
+        local.state = RuntimeExecutionState.SUCCEEDED
+        local.checkpoint_id = completed_reconciliation.turn_binding.runtime_checkpoint_id
+        if permit is not None and self._execution_control is not None:
+            try:
+                await self._execution_control.succeed(
+                    permit, completed_reconciliation.turn_binding.runtime_checkpoint_id
+                )
+            except RuntimeExecutionControlError as exc:
+                raise _control_error(exc) from exc
+        result = await self._result_from_checkpoint(completed)
+        local.last_event_sequence = 4
+        yield RuntimeEvent(
+            event_id=_opaque_id("event", f"{request.turn_run_id}:4:assistant_delta"),
+            turn_run_id=request.turn_run_id,
+            sequence=4,
+            kind=RuntimeEventKind.ASSISTANT_DELTA,
+            text_delta=result.assistant_content,
+        )
+        local.last_event_sequence = 5
+        yield self._event(
+            request.turn_run_id,
+            5,
+            RuntimeEventKind.COMPLETED,
+            "Deep Agents 已完成",
+        )
 
     async def cancel_turn(self, turn_run_id: str) -> RuntimeTurnReconciliation:
+        if self._execution_control is not None:
+            try:
+                record = await self._execution_control.cancel_for_business(turn_run_id)
+            except RuntimeExecutionControlError as exc:
+                raise _control_error(exc) from exc
+            if record is not None and record.state is RuntimeControlState.CANCELLED:
+                local = self._local_turns.get(turn_run_id)
+                if local is not None:
+                    local.state = RuntimeExecutionState.CANCELLED
+                return self._reconciliation_from_record(record)
         local = self._local_turns.get(turn_run_id)
         checkpoint = await self._find_checkpoint(turn_run_id)
         if local is None and checkpoint is None:
@@ -365,6 +684,40 @@ class DeepAgentsResearchAgentRuntime:
         return self._local_reconciliation(local)
 
     async def reconcile_turn(self, turn_run_id: str) -> RuntimeTurnReconciliation:
+        if self._execution_control is not None:
+            record = await self._execution_control.get(turn_run_id)
+            if record is None:
+                raise _runtime_error(
+                    RuntimeErrorKind.PERMANENT,
+                    "runtime_turn_not_found",
+                    "Runtime 中不存在指定 Turn",
+                )
+            self._require_record_revision(record)
+            if record.state is RuntimeControlState.SUCCEEDED:
+                checkpoint = await self._checkpoint_for_record(record)
+                if checkpoint is None:
+                    raise _runtime_error(
+                        RuntimeErrorKind.TEMPORARY,
+                        "runtime_checkpoint_unavailable",
+                        "Runtime 成功 Checkpoint 暂时不可用",
+                    )
+                return await self._reconciliation_from_checkpoint(checkpoint)
+            if record.state in {
+                RuntimeControlState.FAILED,
+                RuntimeControlState.CANCELLED,
+            }:
+                return self._reconciliation_from_record(record)
+            can_recover = await self._execution_control.can_recover(turn_run_id)
+            reconciliation = self._reconciliation_from_record(record)
+            return RuntimeTurnReconciliation(
+                turn_run_id=reconciliation.turn_run_id,
+                state=RuntimeExecutionState.RUNNING,
+                session_binding=reconciliation.session_binding,
+                turn_binding=reconciliation.turn_binding,
+                last_event_sequence=reconciliation.last_event_sequence,
+                result_available=False,
+                resume_available=can_recover,
+            )
         local = self._local_turns.get(turn_run_id)
         if local is not None and local.state in {
             RuntimeExecutionState.CANCELLED,
@@ -383,6 +736,35 @@ class DeepAgentsResearchAgentRuntime:
         )
 
     async def collect_turn_result(self, turn_run_id: str) -> RuntimeTurnResult:
+        if self._execution_control is not None:
+            record = await self._execution_control.get(turn_run_id)
+            if record is None:
+                raise _runtime_error(
+                    RuntimeErrorKind.PERMANENT,
+                    "runtime_turn_not_found",
+                    "Runtime 中不存在指定 Turn",
+                )
+            self._require_record_revision(record)
+            if record.state is RuntimeControlState.CANCELLED:
+                raise _runtime_error(
+                    RuntimeErrorKind.CANCELLED,
+                    "runtime_turn_cancelled",
+                    "已取消 Turn 没有可提交结果",
+                )
+            if record.state is not RuntimeControlState.SUCCEEDED:
+                raise _runtime_error(
+                    RuntimeErrorKind.TEMPORARY,
+                    "runtime_result_not_ready",
+                    "Runtime 结果尚未就绪",
+                )
+            checkpoint = await self._checkpoint_for_record(record)
+            if checkpoint is None:
+                raise _runtime_error(
+                    RuntimeErrorKind.TEMPORARY,
+                    "runtime_checkpoint_unavailable",
+                    "Runtime 成功 Checkpoint 暂时不可用",
+                )
+            return await self._result_from_checkpoint(checkpoint)
         local = self._local_turns.get(turn_run_id)
         if local is not None and local.state is RuntimeExecutionState.CANCELLED:
             raise _runtime_error(
@@ -427,11 +809,16 @@ class DeepAgentsResearchAgentRuntime:
         )
         yield self._event(turn_run_id, 4, RuntimeEventKind.COMPLETED, "Deep Agents 已完成")
 
-    async def _find_checkpoint(self, turn_run_id: str) -> CheckpointTuple | None:
+    async def _find_checkpoint(
+        self, turn_run_id: str, *, fencing_token: int | None = None
+    ) -> CheckpointTuple | None:
+        metadata_filter: dict[str, Any] = {_TURN_METADATA_KEY: turn_run_id}
+        if fencing_token is not None:
+            metadata_filter[_FENCING_METADATA_KEY] = fencing_token
         try:
             async for item in self._checkpointer.alist(
                 None,
-                filter={_TURN_METADATA_KEY: turn_run_id},
+                filter=metadata_filter,
                 limit=1,
             ):
                 return item
@@ -446,6 +833,44 @@ class DeepAgentsResearchAgentRuntime:
                 "runtime_checkpoint_unavailable",
                 "Runtime Checkpoint 暂时不可用",
             ) from exc
+
+    async def _checkpoint_for_record(
+        self, record: RuntimeExecution | None
+    ) -> CheckpointTuple | None:
+        if record is None or record.last_checkpoint_id is None:
+            return None
+        try:
+            checkpoint = await self._checkpointer.aget_tuple(
+                {
+                    "configurable": {
+                        "thread_id": _opaque_id("thread", record.session_id),
+                        "checkpoint_ns": "",
+                        "checkpoint_id": record.last_checkpoint_id,
+                    }
+                }
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise _runtime_error(
+                RuntimeErrorKind.TEMPORARY,
+                "runtime_checkpoint_unavailable",
+                "Runtime Checkpoint 暂时不可用",
+            ) from exc
+        if checkpoint is None:
+            return None
+        self._require_checkpoint_record_identity(checkpoint, record)
+        return checkpoint
+
+    async def _latest_checkpoint_for_record(
+        self, record: RuntimeExecution
+    ) -> CheckpointTuple | None:
+        """选择物理最新 Checkpoint；listing 不可见时回退到已确认水位。"""
+        checkpoint = await self._find_checkpoint(record.turn_run_id)
+        if checkpoint is None:
+            return await self._checkpoint_for_record(record)
+        self._require_checkpoint_record_identity(checkpoint, record)
+        return checkpoint
 
     async def _read_state(self, checkpoint: CheckpointTuple) -> StateSnapshot:
         try:
@@ -512,6 +937,139 @@ class DeepAgentsResearchAgentRuntime:
             evidence_ids=evidence_ids,
         )
 
+    def _reconciliation_from_record(
+        self, record: RuntimeExecution
+    ) -> RuntimeTurnReconciliation:
+        state = {
+            RuntimeControlState.RUNNING: RuntimeExecutionState.RUNNING,
+            RuntimeControlState.INTERRUPTED: RuntimeExecutionState.INTERRUPTED,
+            RuntimeControlState.SUCCEEDED: RuntimeExecutionState.SUCCEEDED,
+            RuntimeControlState.FAILED: RuntimeExecutionState.FAILED,
+            RuntimeControlState.CANCELLED: RuntimeExecutionState.CANCELLED,
+        }[record.state]
+        checkpoint_id = record.last_checkpoint_id or _opaque_id(
+            "checkpoint", f"{record.turn_run_id}:not-created"
+        )
+        return RuntimeTurnReconciliation(
+            turn_run_id=record.turn_run_id,
+            state=state,
+            session_binding=self._session_binding(record.session_id),
+            turn_binding=self._turn_binding(
+                record.session_id, record.turn_run_id, checkpoint_id
+            ),
+            last_event_sequence=4 if state is RuntimeExecutionState.SUCCEEDED else 2,
+            result_available=state is RuntimeExecutionState.SUCCEEDED,
+        )
+
+    @staticmethod
+    def _require_record_revision(record: RuntimeExecution) -> None:
+        if (
+            record.runtime_revision != RUNTIME_CONTRACT_REVISION
+            or record.graph_revision != RUNTIME_GRAPH_REVISION
+            or record.deepagents_version != DEEPAGENTS_REVISION
+            or record.langgraph_version != LANGGRAPH_REVISION
+        ):
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_version_incompatible",
+                "Runtime 版本不兼容，拒绝自动恢复",
+            )
+
+    def _require_record_compatible(
+        self, record: RuntimeExecution, request: RuntimeTurnRequest
+    ) -> None:
+        self._require_record_revision(record)
+        if (
+            record.session_id != request.session_id
+            or record.runtime_execution_id
+            != _opaque_id("execution", request.turn_run_id)
+            or record.request_hash != _request_hash(request)
+        ):
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_turn_conflict",
+                "同一 turn_run_id 已绑定不同输入",
+            )
+
+    @staticmethod
+    def _require_checkpoint_revision(checkpoint: CheckpointTuple) -> None:
+        if (
+            checkpoint.metadata.get(_RUNTIME_REVISION_METADATA_KEY)
+            != RUNTIME_CONTRACT_REVISION
+            or checkpoint.metadata.get(_GRAPH_REVISION_METADATA_KEY)
+            != RUNTIME_GRAPH_REVISION
+        ):
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_version_incompatible",
+                "Runtime Checkpoint 版本不兼容，拒绝自动恢复",
+            )
+
+    async def _record_checkpoint(
+        self, permit: RuntimeExecutionPermit | None, checkpoint_id: str
+    ) -> None:
+        if permit is None or self._execution_control is None:
+            return
+        try:
+            await self._execution_control.record_checkpoint(permit, checkpoint_id)
+        except RuntimeExecutionControlError as exc:
+            raise _control_error(exc) from exc
+
+    async def _record_runtime_error(
+        self,
+        permit: RuntimeExecutionPermit | None,
+        error: ResearchAgentRuntimeError,
+    ) -> None:
+        if permit is None or self._execution_control is None:
+            return
+        try:
+            if error.kind is RuntimeErrorKind.PERMANENT:
+                await self._execution_control.fail(
+                    permit, code=error.code, safe_message=error.safe_message
+                )
+            elif error.kind is RuntimeErrorKind.CANCELLED:
+                await self._execution_control.cancel_for_business(permit.turn_run_id)
+            else:
+                await self._execution_control.temporary_error(
+                    permit, code=error.code, safe_message=error.safe_message
+                )
+        except RuntimeExecutionControlError:
+            # 旧 owner 已被 fencing 时不能覆盖新 owner；保留原 Runtime 错误。
+            return
+
+    def _start_lease_heartbeat(
+        self, permit: RuntimeExecutionPermit | None
+    ) -> asyncio.Task[None] | None:
+        if permit is None or self._execution_control is None:
+            return None
+        return asyncio.create_task(self._lease_heartbeat_loop(permit))
+
+    async def _lease_heartbeat_loop(self, permit: RuntimeExecutionPermit) -> None:
+        while True:
+            await asyncio.sleep(self._lease_heartbeat_interval_seconds)
+            assert self._execution_control is not None
+            try:
+                await self._execution_control.renew(permit)
+            except RuntimeExecutionControlError as exc:
+                raise _control_error(exc) from exc
+
+    @staticmethod
+    async def _raise_if_heartbeat_failed(
+        heartbeat: asyncio.Task[None] | None,
+    ) -> None:
+        if heartbeat is not None and heartbeat.done():
+            error = heartbeat.exception()
+            if error is not None:
+                raise error
+
+    @staticmethod
+    async def _stop_lease_heartbeat(heartbeat: asyncio.Task[None] | None) -> None:
+        if heartbeat is None:
+            return
+        heartbeat.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat
+
     @staticmethod
     def _project_context_tools(
         project_context: ProjectResearchContext | None,
@@ -575,9 +1133,13 @@ class DeepAgentsResearchAgentRuntime:
     def _validate_existing_request(
         self, checkpoint: CheckpointTuple, request: RuntimeTurnRequest
     ) -> None:
+        self._require_checkpoint_revision(checkpoint)
         metadata = checkpoint.metadata
         if (
-            metadata.get(_SESSION_METADATA_KEY) != request.session_id
+            metadata.get(_TURN_METADATA_KEY) != request.turn_run_id
+            or metadata.get(_SESSION_METADATA_KEY) != request.session_id
+            or metadata.get(_EXECUTION_METADATA_KEY)
+            != _opaque_id("execution", request.turn_run_id)
             or metadata.get(_REQUEST_HASH_METADATA_KEY) != _request_hash(request)
         ):
             raise _runtime_error(
@@ -586,15 +1148,50 @@ class DeepAgentsResearchAgentRuntime:
                 "同一 turn_run_id 已绑定不同输入",
             )
 
-    def _config(self, request: RuntimeTurnRequest) -> RunnableConfig:
+    def _require_checkpoint_record_identity(
+        self, checkpoint: CheckpointTuple, record: RuntimeExecution
+    ) -> None:
+        """精确 checkpoint_id 也必须匹配平台稳定身份与版本。"""
+        self._require_checkpoint_revision(checkpoint)
+        metadata = checkpoint.metadata
+        if (
+            metadata.get(_TURN_METADATA_KEY) != record.turn_run_id
+            or metadata.get(_SESSION_METADATA_KEY) != record.session_id
+            or metadata.get(_EXECUTION_METADATA_KEY) != record.runtime_execution_id
+            or metadata.get(_REQUEST_HASH_METADATA_KEY) != record.request_hash
+        ):
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_checkpoint_identity_mismatch",
+                "Runtime Checkpoint 身份不匹配，拒绝自动恢复",
+            )
+
+    def _config(
+        self,
+        request: RuntimeTurnRequest,
+        *,
+        checkpoint_id: str | None = None,
+        permit: RuntimeExecutionPermit | None = None,
+    ) -> RunnableConfig:
         execution_id = _opaque_id("execution", request.turn_run_id)
+        configurable = {"thread_id": _opaque_id("thread", request.session_id)}
+        if checkpoint_id is not None:
+            configurable["checkpoint_ns"] = ""
+            configurable["checkpoint_id"] = checkpoint_id
         return {
-            "configurable": {"thread_id": _opaque_id("thread", request.session_id)},
+            "configurable": configurable,
             "metadata": {
                 _TURN_METADATA_KEY: request.turn_run_id,
                 _SESSION_METADATA_KEY: request.session_id,
                 _REQUEST_HASH_METADATA_KEY: _request_hash(request),
                 _EXECUTION_METADATA_KEY: execution_id,
+                _RUNTIME_REVISION_METADATA_KEY: RUNTIME_CONTRACT_REVISION,
+                _GRAPH_REVISION_METADATA_KEY: RUNTIME_GRAPH_REVISION,
+                **(
+                    {_FENCING_METADATA_KEY: permit.fencing_token}
+                    if permit is not None
+                    else {}
+                ),
             },
         }
 
@@ -733,6 +1330,16 @@ def _runtime_error(
     kind: RuntimeErrorKind, code: str, safe_message: str
 ) -> ResearchAgentRuntimeError:
     return ResearchAgentRuntimeError(kind=kind, code=code, safe_message=safe_message)
+
+
+def _control_error(error: RuntimeExecutionControlError) -> ResearchAgentRuntimeError:
+    if error.code == "runtime_turn_cancelled":
+        kind = RuntimeErrorKind.CANCELLED
+    elif error.temporary:
+        kind = RuntimeErrorKind.TEMPORARY
+    else:
+        kind = RuntimeErrorKind.PERMANENT
+    return _runtime_error(kind, error.code, error.safe_message)
 
 
 def _runtime_kind(error: ProjectResearchContextError) -> RuntimeErrorKind:

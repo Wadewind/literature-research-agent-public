@@ -2,16 +2,15 @@
 
 ## 状态与用途
 
-状态：待闭合。记录日期：2026-08-25。
+状态：已闭合。记录日期：2026-08-25；决策与闭合日期：2026-08-26。
 
-本报告记录 Phase 5 切片 4 的真实 Deep Agents Adapter Spike 暴露出的恢复证据缺口，并作为切片 6
-“Runtime 部署与崩溃恢复门槛”的输入。它不是 ADR，不提前决定部署拓扑；拓扑与恢复所有权必须在切片 6
-根据切片 5 的 Project Tool 及副作用模型证据做出决定后，再写入集成 ADR。
+本报告记录 Phase 5 切片 4 的真实 Deep Agents Adapter Spike 暴露出的恢复证据缺口，以及切片 6 的闭合
+证据。部署与恢复所有权已由 ADR-0006 固化，具体实现见 Agent Runtime Execution 恢复控制模块笔记。
 
-切片 5“Project Research Context”可以继续；在本门槛通过前，不进入 MCP、Browser、Sandbox、平台
-Skill 或最小 Agent Chat UI，不宣称执行途中 Worker 崩溃已经可恢复。
+该门槛已经通过，但不会自动授权进入后续切片；MCP、Browser、Sandbox、Skill 和 UI 仍按 Phase 5 Spec
+逐项受限验证。
 
-## 已确认事实
+## 切片 4/5 暴露缺口时的已确认事实
 
 - `DeepAgentsResearchAgentRuntime` 使用 `deepagents==0.7.8`、StateBackend 与 PostgreSQL Checkpointer；
 - 成功 Execution 已通过关闭旧连接、创建同进程新 Adapter 的测试，按 checkpoint metadata 恢复结果，
@@ -41,6 +40,24 @@ Skill 或最小 Agent Chat UI，不宣称执行途中 Worker 崩溃已经可恢�
 固定谁续租 Execution lease、谁认领 orphan、谁传播取消、何时允许业务 Attempt 重试。这个决定会影响
 部署与故障边界，不能由 Adapter 私自选择。
 
+## 闭合结果
+
+- P5-RUNTIME-001：真实 spawn 两个 OS 进程；第一个在 Tool Step 同步 checkpoint 后被 terminate，第二个
+  以新 Attempt/fence 沿同一 Execution/Checkpoint 完成；
+- P5-RUNTIME-002：`agent_runtime_executions` 持久化 RUNNING/SUCCEEDED/FAILED/CANCELLED、最后
+  checkpoint、版本与安全错误；orphan 由 lease 派生，两个并发恢复者最多一个认领；
+- P5-RUNTIME-003：ADR-0006 决定 ARQ Worker 内运行，Runtime lease 绑定当前 Attempt 但不替代 Attempt；
+- 取消要求业务 Run 已为 CANCEL_REQUESTED/CANCELLED；过期 owner 不能调用新模型/Tool、推进 checkpoint
+  或写 Runtime 错误/成功终态；
+- `durability="sync"` 只证明已确认 Step 不重放；测试明确观察到未确认的在途模型调用被重试；
+- LangGraph Checkpoint 与平台 `last_checkpoint_id` 是两个独立提交；故障窗口测试覆盖空水位及非空旧水位
+  C1/物理最新 C2。新 owner 优先探测并校验物理最新 C2，以 `astream(None)` 恢复，不重新传入
+  HumanMessage，也不重放 C2 前已确认模型调用；错误 Session 等稳定身份安全拒绝；
+- runtime/graph/Deep Agents/LangGraph revision 不一致时返回 permanent
+  `runtime_version_incompatible`，不自动迁移 checkpoint。
+- 本门槛只验证显式 DI 构造的真实 Deep Adapter；生产 Worker 仍固定 Fake，当前没有环境变量可启用的
+  Deep Worker 模式。Provider/`BaseChatModel` factory、Secret/费用与 Worker runtime 配置移入切片 7.0。
+
 ## 切片 6 的决策选项
 
 ### 选项 A：ARQ Worker 内运行
@@ -54,8 +71,12 @@ checkpoint，而不是创建第二次逻辑执行。
 优点是长时间 Runtime 的 owner 和生命周期更集中，Worker 只负责提交/对账。代价是新增服务、部署配置、
 认证、网络故障与双层 lease，明显扩大 Phase 5 的实现和运维范围。
 
-当前不在本报告中选择。对本个人项目，若切片 5 未出现必须由独立服务解决的长连接或资源隔离证据，切片
-6 应优先评估选项 A；无论选择哪项，都必须以 ADR、失败测试和真实跨进程证据固定结果。
+项目维护者已接受选项 A，详见 ADR-0006。Deep Agents 在现有 ARQ Worker 内运行；平台新增独立于
+RunAttempt 的 SDK-neutral RuntimeExecution 控制事实，以 Attempt 绑定 lease 和单调 fencing token 管理
+同一逻辑 Execution 的恢复权。LangGraph 显式使用同步 durability，恢复只允许相同 Runtime/Graph 版本。
+
+切片 6 只承诺不重复已经由同步 checkpoint 或成功 ToolExecution 持久确认的调用；在途外部调用仍不
+宣称 Exactly Once。
 
 ## 切片 6 验收门槛
 
@@ -65,7 +86,7 @@ checkpoint，而不是创建第二次逻辑执行。
 - 恢复沿用同一 Session Binding、Runtime Execution 与真实 Checkpoint，不重新追加用户消息；
 - `FAILED`/`CANCELLED` 可在旧进程退出后由新进程安全对账，且不会提交 Assistant Message 或候选 Artifact；
 - 至少一个测试实际终止或退出执行进程，并由第二个 OS 进程恢复；测试记录真实命令和结果；
-- 恢复、重复 Job 与取消竞争不会产生新的模型/Tool 调用；Event 仍只保存筛选后的安全事实；
+- 恢复、重复 Job 与取消竞争不会重复已持久确认的模型/Tool 调用；Event 仍只保存筛选后的安全事实；
 - 所有普通测试保持离线、确定性、零费用，不访问真实 Provider、网站、MCP 或付费 Sandbox。
 
 ## 明确不随本门槛解决的窗口
@@ -82,3 +103,5 @@ Tool 已经产生外部副作用、但对应 checkpoint 或平台调用记录尚
 - [Agent Runtime 业务契约](../modules/agent-runtime-contract.md)
 - [ADR-0001：选择 Deep Agents Runtime](../decisions/0001-select-deep-agents-runtime.md)
 - [ADR-0005：交互式 Research Agent 会话模型](../decisions/0005-interactive-research-agent-session-model.md)
+- [ADR-0006：在 ARQ Worker 内运行 Deep Agents Runtime](../decisions/0006-run-deep-agents-inside-arq-worker.md)
+- [Agent Runtime Execution 恢复控制](../modules/agent-runtime-execution-recovery.md)

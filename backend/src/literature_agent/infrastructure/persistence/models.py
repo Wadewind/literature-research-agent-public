@@ -205,6 +205,64 @@ class AgentRuntimeTurnBindingORM(Base):
     runtime_checkpoint_id: Mapped[str] = mapped_column(String(255), nullable=False)
 
 
+class AgentRuntimeExecutionORM(Base):
+    """一个 Agent Turn 唯一的 SDK-neutral Runtime 执行控制事实。"""
+
+    __tablename__ = "agent_runtime_executions"
+    turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), primary_key=True
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    runtime_execution_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_revision: Mapped[str] = mapped_column(String(100), nullable=False)
+    graph_revision: Mapped[str] = mapped_column(String(100), nullable=False)
+    deepagents_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    langgraph_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    fencing_token: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("run_attempts.attempt_id"), index=True, nullable=True
+    )
+    lease_owner_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=True
+    )
+    last_checkpoint_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_error_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_safe_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('running','interrupted','succeeded','failed','cancelled')",
+            name="ck_agent_runtime_execution_state",
+        ),
+        CheckConstraint("fencing_token >= 1", name="ck_agent_runtime_execution_fence"),
+        CheckConstraint(
+            "(state = 'running' AND finished_at IS NULL) OR "
+            "(state <> 'running' AND finished_at IS NOT NULL)",
+            name="ck_agent_runtime_execution_finished",
+        ),
+        CheckConstraint(
+            "(current_attempt_id IS NULL AND lease_owner_id IS NULL "
+            "AND lease_expires_at IS NULL) OR "
+            "(current_attempt_id IS NOT NULL AND lease_owner_id IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL)",
+            name="ck_agent_runtime_execution_lease",
+        ),
+        CheckConstraint(
+            "last_error_kind IS NULL OR last_error_kind IN "
+            "('temporary','permanent','cancelled')",
+            name="ck_agent_runtime_execution_error_kind",
+        ),
+    )
+
+
 class AgentArtifactCandidateORM(Base):
     """Runtime 候选产物；不是正式 Artifact。"""
 

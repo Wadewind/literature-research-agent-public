@@ -12,6 +12,9 @@
 切片 4 主审同时暴露了跨进程恢复所有权尚未闭合的三项耦合缺口；本 Spec 已在 Project Research
 Context 之后增加一个独立的 Runtime 部署与崩溃恢复门槛，详见
 [`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)。
+2026-08-26 已由 ADR-0006 决定 Deep Agents 在现有 ARQ Worker 内运行，使用独立 SDK-neutral
+RuntimeExecution lease/fencing 控制同一 Execution 的跨进程恢复，并显式采用同步 checkpoint
+durability；切片 6 已完成实现与真实 OS 进程验收。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -429,13 +432,18 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    Execution/Checkpoint、原生上下文压缩和文件卸载；不接真实模型、Sandbox、MCP、长期 Memory 或子 Agent；
 5. **Project Research Context（已完成）**：正式接入 Project Retriever、Review Evidence Matrix
    Reader、稳定 ToolExecution effect 与 Citation Validator；
-6. **Runtime 部署与崩溃恢复门槛**：先基于切片 5 的 Project Tool 证据决定 ARQ Worker 内运行或独立
-   Runtime Deployment，明确 Runtime Execution lease/recovery owner；持久化可对账的失败/取消终态，
+6. **Runtime 部署与崩溃恢复门槛（已完成）**：按 ADR-0006 在 ARQ Worker 内运行 Deep Agents，使用
+   独立 Runtime Execution lease/fencing 明确 recovery owner；持久化可对账的失败/取消终态，
    识别并受控认领 orphan `RUNNING` checkpoint，沿同一 Execution/Checkpoint 恢复且不重新追加用户输入；
-   用第二个真实 OS 进程验证恢复后不重复发起模型或 Tool 调用。该切片不顺便建设通用分布式调度器，
+   用第二个真实 OS 进程验证恢复后不重复已持久确认的模型或 Tool 调用。该切片不顺便建设通用分布式调度器，
    也不把 Tool 已产生外部副作用但 checkpoint 尚未提交的窗口伪称为已解决；
-7. **能力 Spike**：只有切片 6 门槛通过后，才按 MCP → Browser/下载 → Sandbox 文件工具与
-   WorkspaceSnapshot → 平台 Skill 的顺序分别验证，不捆绑验收；
+7. **能力 Spike**：只有切片 6 门槛通过后才开始，且不捆绑验收：
+   - **7.0 Real Deep Agent Runtime Enablement**：先决定并接入 Provider/`BaseChatModel` factory、Secret/
+     费用策略和 Worker `fake | deep_agents` 显式配置；默认必须保持 Fake；
+   - **7.1 MCP**：验证固定、平台维护的 MCP；
+   - **7.2 Browser/下载**：验证受控导航、下载与来源/文件边界；
+   - **7.3 Sandbox/WorkspaceSnapshot**：验证隔离文件工具、物理 Sandbox 生命周期与逻辑 Workspace 恢复；
+   - **7.4 Platform Skill**：最后验证平台维护、版本固定的科研 Skill；
 8. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
 9. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
 
@@ -575,6 +583,44 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   `pyright src` 为 `0 errors, 0 warnings, 0 informations`；完整非集成后端回归为
   `779 passed, 4 skipped in 72.79s`。
 
+切片 6 实现与验证（2026-08-26）：
+
+- ADR-0006 固化 ARQ Worker 内运行、当前 PostgreSQL/checkpoint schema、独立 RuntimeExecution、同步
+  durability 和严格版本兼容；生产默认 Fake 不变，未新增依赖、服务、队列或外部 Provider；
+- 新增 `agent_runtime_executions`、Domain/Application/Repository Port 与 PostgreSQL Repository；Turn 与
+  Execution 为 1:1，Attempt 与 Execution 语义分离，lease 绑定当前最新 RUNNING Attempt，fence 单调递增；
+- claim 使用 Run/Execution 行锁与唯一约束，renew/checkpoint/终态以 owner+Attempt+fence CAS；所有
+  Runtime/模型/Tool/checkpoint I/O 均在短事务外；过期 owner 和非取消业务状态不能改写 Runtime；
+- Deep Adapter 的模型/Tool middleware 在真实调用边界复核 permit，所有 `astream` 显式
+  `durability="sync"`；已有 checkpoint 使用 `resume_turn(response=None)` / `astream(None, ...)`，没有
+  checkpoint 时才追加首次 HumanMessage；
+- Runtime/Graph/Deep Agents 0.7.8/LangGraph 1.2.11 revision 完全匹配才恢复；不匹配安全拒绝为
+  `runtime_version_incompatible`；FAILED/CANCELLED/SUCCEEDED 均可跨 Adapter 对账；
+- 首轮 Domain/Application 红灯为 2 个 collection error；durability/resume 红灯为 2 failed；取消授权和
+  过期 owner 补强分别为 1 failed 与 2 failed；稳定 Session/Execution 身份补强首轮 3 failed；同步
+  Checkpoint 已写入但平台水位未推进的恢复窗口首轮 1 failed；活动性预检后 Attempt 失效的竞争测试首轮
+  1 failed；非空旧水位 C1/物理最新 C2 与 checkpoint Session 身份篡改测试各首轮 1 failed，均已修复；
+- RuntimeExecution Domain/Application 最终 12 passed；Deep Adapter 完全离线最终回归 30 passed in
+  1.26s；水位与身份两项定向最终 2 passed in 0.80s；
+  PostgreSQL 并发恢复者测试 1 passed；
+- 真实 OS 进程测试 1 passed in 8.14s：第一个 spawn 进程在 Tool Step 已同步 checkpoint、下一模型调用
+  在途时被 terminate，第二进程以 Attempt 2/fence 2 完成；已确认模型/Tool 各一次，未确认模型调用明确
+  重试一次，业务 Assistant Message 只提交一次；
+- Alembic 使用项目标准 `uv run pytest` 完成 head → downgrade -1 → head → check，最终复跑 3 passed in
+  5.16s；直接虚拟环境 pytest 的首次运行仅因子进程 PATH 找不到 `alembic` 失败；新增 ORM 列断言首轮因
+  测试误把 Column 对象与字符串比较得到 1 failed/2 passed，修正测试后通过；
+- 切片相关 Domain/Application/Fake/Deep Adapter 回归 60 passed in 54.56s；Runtime/真实进程/Checkpoint/
+  Agent PostgreSQL 回归 7 passed in 28.46s；Project Context 扩大回归 8 passed in 27.25s；
+  水位补强后真实跨进程恢复定向复跑 1 passed in 8.41s；
+- 主智能体独立复验 Domain/Application/Deep Adapter 42 passed in 1.27s，Runtime 控制与真实跨
+  进程恢复 2 passed in 11.70s，迁移往返与 ORM 契约 3 passed in 5.02s，完整非集成后端回归
+  800 passed, 4 skipped in 76.94s；
+- `ruff check src tests`、`git diff --check` 通过，`pyright src` 为 0 errors；`alembic heads` 为单 head
+  `a4c8e1f2b7d9`。一次受限沙箱内 `uv run alembic heads` 因 uv 不能写用户 cache 返回 read-only error，
+  随后使用同一虚拟环境 `./.venv/bin/alembic heads` 成功；
+- 模块细节见
+  [`agent-runtime-execution-recovery.md`](../modules/agent-runtime-execution-recovery.md)。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -598,13 +644,12 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. 切片 6 在已有 Project Tool 与恢复测试证据上决定 Deep Agents 运行在 ARQ Worker 内还是独立
-   Runtime Deployment，并以 ADR 固化 Runtime Execution lease/recovery owner；在该决定前不得接入高风险
-   外部能力或宣称执行中崩溃可恢复；
-2. Checkpointer/Store 与业务 PostgreSQL 的数据库或 Schema 隔离方式；
-3. 首个 Deep Agents Fake Tool、固定 MCP、Browser 测试目标和平台 Skill；
-4. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；
-5. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
+1. 首个固定 MCP、Browser 测试目标和平台 Skill；
+2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；
+3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
+
+切片 6 的部署、数据库和恢复决策已由 ADR-0006 固化：ARQ Worker 内运行、当前 PostgreSQL/checkpoint
+schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runtime/Graph revision 才自动恢复。
 
 ## 已知预期限制
 
@@ -615,17 +660,15 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - Session 级并发首版采用单活动 Turn，不提供分支、排队或多人协作；
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
-- Worker 生产装配仍使用 Fake Runtime；切片 4 的 Deep Agents Adapter 仅由分层/真实 PostgreSQL 测试
-  实例化；切片 5 的两个 Project Tool 同样只在显式 Application/Adapter/PostgreSQL 测试策略中启用，
-  因此尚未决定 Worker 内运行还是独立 Runtime Deployment；
-- 切片 4 已证明成功 Execution 可跨连接/Adapter 通过 PostgreSQL Checkpoint 恢复并重复收集；取消与
-  失败终态目前仍由在途 Adapter 的协作状态对账，不宣称其 Runtime 终态标记可跨进程恢复；该测试没有
-  启动第二 OS 进程，新 Adapter 对 orphan `RUNNING` checkpoint 也不会自动 resume，执行途中 Worker
-  崩溃恢复须由切片 6 闭合，当前证据与门槛见
-  [`phase-05-runtime-recovery-gap-log.md`](../reports/phase-05-runtime-recovery-gap-log.md)；
+- Worker 生产默认仍使用 Fake Runtime；ADR-0006 已决定 Deep Agents 在 ARQ Worker 内运行，真实 Adapter
+  只由显式 DI 测试装配验证；当前不存在环境变量可启用的真实 Deep Worker 模式。Provider/model factory、
+  Secret/费用和 Worker `fake | deep_agents` 配置是切片 7.0，不在切片 6 伪造；
+- 成功/失败/取消/orphan RUNNING 已可借 RuntimeExecution 和 PostgreSQL Checkpoint 跨 OS 进程对账；
+  该结论要求相同 Runtime/Graph/SDK revision，不扩张为跨版本迁移或公网生产 SLA；
 - 切片 5 已用稳定 effect ID、唯一约束、条件状态更新和持久调用记录证明成功 Project Tool replay、
   RUNNING 并发拒绝、temporary 同 effect 重试与平台 `max_tool_calls` 预算；但 Tool 外部效果完成后、
-  ToolExecution 成功记录提交前的崩溃窗口仍不宣称 Exactly Once，orphan RUNNING 由切片 6 处理；
+  ToolExecution 成功记录提交前的崩溃窗口仍不宣称 Exactly Once，orphan RUNNING 当前 fail-safe 拒绝
+  自动重放，需按未来具体外部 Tool 设计幂等、查询或补偿；
 - 切片 5 只对两个平台 Project Tool 强制 `max_tool_calls`；`max_model_calls` 和其他 Deep Agents 内置/
   自定义 Tool 的统一动态预算尚未实现；
 - Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界
@@ -638,6 +681,7 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 - `../decisions/0001-select-deep-agents-runtime.md`
 - `../decisions/0005-interactive-research-agent-session-model.md`
+- `../decisions/0006-run-deep-agents-inside-arq-worker.md`
 - [`Phase 5 Runtime 恢复缺口台账`](../reports/phase-05-runtime-recovery-gap-log.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Customization](https://docs.langchain.com/oss/python/deepagents/customization)
