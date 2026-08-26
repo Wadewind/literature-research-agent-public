@@ -8,6 +8,10 @@
 SDK Thread 和 Workspace 的所有权映射。本 ADR 继续负责 Deep Agents 选型与
 `ResearchAgentRuntime` 隔离边界，不被 ADR-0005 取代。
 
+ADR-0007 已进一步选择 OpenSandbox 并决定在 Slice 7 的 Session 专属远程 Sandbox 中开放
+`execute`。下文“Phase 5 默认关闭任意 Shell”保留为本 ADR 作出时以及 Slice 1–6 的历史边界；Slice 7
+起由 ADR-0007 的可执行 Workspace、网络和隔离边界修订。宿主 Shell/Python 仍然禁止。
+
 ## 背景
 
 Core Research Backend 先交付确定性的文献导入、RAG、引用校验和固定 Review Workflow。其上的 Research Agent Extension 需要在授权 Evidence 范围内规划研究任务、调用 MCP 工具，并在受限 Sandbox 中处理文件和生成 Artifact。

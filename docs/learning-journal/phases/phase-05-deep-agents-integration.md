@@ -15,6 +15,9 @@ Context 之后增加一个独立的 Runtime 部署与崩溃恢复门槛，详见
 2026-08-26 已由 ADR-0006 决定 Deep Agents 在现有 ARQ Worker 内运行，使用独立 SDK-neutral
 RuntimeExecution lease/fencing 控制同一 Execution 的跨进程恢复，并显式采用同步 checkpoint
 durability；切片 6 已完成实现与真实 OS 进程验收。
+2026-08-26 又由 ADR-0007 选择 OpenSandbox 作为 Slice 7 的远程可执行 Workspace，并决定在每个
+AgentSession/SDK Thread 专属的短 TTL Lease 中向模型开放 Sandbox `execute`。这是待实现、待验证的
+Slice 7 契约，不表示当前 Worker 已接入 OpenSandbox 或已经通过隔离/网络/资源安全验证。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -60,7 +63,8 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 - 两轮会话、单活动 Turn、消息顺序、Run/Event/Outbox、取消、恢复和结果对账；
 - Deep Agents Adapter 的最小闭环：Fake Chat Model、Thread、Checkpoint、流式事件和错误转换；
 - Runtime 部署与崩溃恢复门槛：恢复所有权、持久终态、orphan `RUNNING` 识别和真实跨进程恢复；
-- 后续独立 Spike：固定 MCP、受控 Browser/下载、隔离 Sandbox、平台维护的 Research Skill；
+- 后续独立 Spike：OpenSandbox/Lease/WorkspaceSnapshot、同 Sandbox Browser/下载、固定 MCP、平台维护的
+  Research Skill；
 - 候选 Artifact 的 staged、校验、内容哈希和幂等提交；
 - 最小 Agent Chat/API 集成与完全离线的默认测试；
 - 集成 ADR、Spike 证据和是否进入 Phase 6 的结论。
@@ -69,7 +73,8 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 
 - 任意目标的通用 Agent 或 Coding Agent；
 - 用户自定义系统 Prompt、Tool、Skill、MCP Server、Sandbox、网络权限或 SDK 配置；
-- 任意 Shell、宿主 Python、开放网络、自动安装未知依赖；
+- 宿主 Shell、宿主 Python、开放网络、动态安装依赖；Sandbox `execute` 仅按 ADR-0007 在 Session 专属
+  OpenSandbox 的固定镜像、固定依赖和默认禁网边界内开放；
 - 登录站点、付费墙、CAPTCHA、用户凭据委托或对外写操作；
 - 多 Agent、开放式子 Agent 树、跨 Project Memory 或长期个性化 Memory；
 - 完整 Browser 安全产品、复杂审批中心或通用 Agent 工作台；
@@ -140,6 +145,11 @@ ChunkSet 作用域均由稳定 `turn_run_id` 在平台侧反查。
 `approval_required`、`max_model_calls`、`max_tool_calls`、`snapshot_hash`、`created_at`。首版默认
 Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以构造和持久化策略快照。
 
+上述默认值是当前 Fake/切片 1–6 的已实现事实。Slice 7 只能由服务端选择固定 Capability Profile，为
+`sandbox_enabled`、`network_enabled`、Tool/MCP/Skill allowlist 和预算生成不可变 Snapshot；用户请求体
+仍不能直接切换 Sandbox、网络、MCP 或 `execute`。Snapshot 必须引用平台策略/镜像/Catalog 版本，精确
+字段和迁移在相应 7.x 切片通过失败测试确定，不在本次文档对齐中宣称已经落库。
+
 ### 切片 1 领域字段清单
 
 以下字段与当前冻结 dataclass 完全一致：
@@ -175,12 +185,17 @@ Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以�
 ### Workspace
 
 - 逻辑 Workspace 属于 Session，用于解释连续研究过程中的文件命名空间；
-- 物理 Sandbox Lease 默认属于单个 Turn，或使用明确短 TTL，不能无限期保活；
-- Sandbox 自有文件系统作为本轮物理 Workspace，不能直接挂载 API/Worker 宿主目录；
+- 一个 AgentSession/SDK Thread 最多拥有一个短 TTL 物理 Sandbox Lease，跨 Turn 复用但不能无限期保活，
+  也不能跨 owner/Session 共享；
+- Sandbox 自有文件系统作为当前 Lease 的物理 Workspace，不能直接挂载 API/Worker 宿主目录；
 - 临时文件在 Turn 结束后丢弃；需要跨 Turn 的内部研究笔记和中间文件保存为受控
   `WorkspaceSnapshot`，下一轮重建时恢复；
 - 用户可见或可下载的正式产物才经过平台校验并提交为业务 Artifact；
 - SDK Store/Workspace 不能成为唯一持久化位置。
+
+Lease 过期、Provider 丢失、取消后环境污染或策略要求重置时，平台递增 Sandbox generation，从最近一次
+允许的 WorkspaceSnapshot 与显式授权 Artifact 重建。OpenSandbox Provider 的 ID、endpoint 和凭据只在
+Adapter/基础设施层存在，不进入公开 API、Prompt 或业务 Event。
 
 Deep Agents 默认文件空间中的对话历史卸载、大型 Tool 结果和临时研究文件属于 Runtime 工作状态，不自动
 成为业务 Message、Evidence、WorkspaceSnapshot 或 Artifact。平台只持久化筛选后的产品事实；确需跨
@@ -213,7 +228,7 @@ SDK Execution/Checkpoint     Runtime 内部单轮执行与恢复状态
 SDK Store                    Runtime 内部辅助状态
 Logical Workspace            Session 语义下的文件命名空间
 WorkspaceSnapshot            跨 Turn 持久化的内部工作文件与 Manifest
-Sandbox Lease               Turn 范围或短 TTL 的物理执行环境
+Sandbox Lease               Session/SDK Thread 范围短 TTL 的物理执行环境
 Artifact                     平台校验后持久化的业务文件
 ```
 
@@ -386,20 +401,40 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 
 ### MCP、Browser、Sandbox 与 Skills
 
-- MCP 只连接平台配置、固定版本的测试 Server，只暴露白名单 Tool；用户不能提交 Server；
-- Browser 只访问预先允许的公开 HTTPS 测试目标，平台执行 URL、DNS/IP、Redirect、大小、MIME 和超时策略；
-- 下载先进入隔离 Workspace，校验来源、哈希、类型和大小后才能提交 Artifact；
-- Sandbox 默认禁网，不挂载宿主源码、数据库/Docker Socket、Secret 或 Provider Key；
+- Deep Agents 作为完整 Harness 组装 Backend、文件、`execute`、Project Tool、Browser Tool、MCP Tool 和
+  Skill；平台不复制 Agent Loop，但仍负责 owner/Project、Policy、预算、恢复、审计和业务提交；
+- OpenSandbox 是 Slice 7 的 Sandbox Provider。OpenSandbox Backend 作为 `CompositeBackend` 默认 Backend，
+  使文件工具、Sandbox `execute` 与 Browser 下载操作同一物理 Workspace；`/conversation_history/`、
+  `/large_tool_results/` 等 Runtime 内部路径路由 `StateBackend`；
+- 每个 AgentSession/SDK Thread 一个短 TTL Sandbox Lease，跨 Turn 复用且不跨 owner/Session 共享；Lease
+  失效或环境污染时递增 generation，并从 WorkspaceSnapshot/授权 Artifact 重建；
+- Sandbox 默认禁网，只允许平台固定 Browser 域名进入 egress allowlist；策略必须覆盖 Chromium、Python、
+  `curl` 等 Sandbox 内全部进程，而不是只校验 Browser Tool URL；
+- Sandbox 使用非 root、固定镜像和 Python/pandas/numpy/matplotlib/字体等固定依赖，不允许动态安装包；
+  限制 CPU、内存、PID、磁盘、文件数、墙钟、命令和 stdout/stderr/Tool 输出；
+- 不挂载宿主源码、用户目录、数据库/Valkey/Docker Socket、Secret、Provider Key、OpenSandbox Key 或 MCP
+  Token；
 - `FilesystemBackend`、`LocalShellBackend` 或等价宿主执行能力不得作为生产方案；
 - 平台通过受控文件传输向 Sandbox 注入授权输入，并取回 WorkspaceSnapshot 或候选 Artifact；模型不能
   指定宿主路径或绕过文件 Manifest；
-- 第一版只向模型暴露受限 `ls/read_file/write_file/edit_file/glob/grep` 等文件工具，不开放
-  `execute`、Shell、宿主 Python、自动装包或任意网络；若所选 Sandbox Backend 会自动暴露 `execute`，
-  必须由 `ResearchAgentRuntime` 内部的受限 Backend Adapter 隐藏或拒绝；
+- Slice 7 向模型开放的 `execute` 只落在当前 Session 专属 OpenSandbox；离线命令不逐条审批，但扩大网络、
+  外部副作用和正式 Artifact 提交仍由平台策略或审批控制；
 - Deep Agents 文件权限和文件工具 allowlist 只约束内置文件工具，不能授权或保护自定义 Tool、MCP、
   Sandbox `execute`、owner/Project、预算或副作用；这些边界继续由平台 Snapshot、Tool Adapter、应用服务
-  和审计事实执行；
+  和审计事实执行，不能用命令字符串 allowlist 冒充强隔离；
+- Browser 通过自定义 `browser_*` Tool 操作同一 Sandbox 中的 Chromium/CDP，只访问预先允许的公开 HTTPS
+  目标；平台执行 URL、DNS/IP、Redirect、大小、MIME 和超时策略，CDP/VNC/noVNC endpoint 不暴露给模型
+  或公开 API；
+- 下载先进入隔离 `/workspace` incoming 区域，校验来源、最终 URL、哈希、类型和大小后才能进入
+  WorkspaceSnapshot 或候选 Artifact；noVNC 在 Phase 5 只作为可信本地诊断，用户鉴权代理留到 Phase 6；
+- MCP 通过 `langchain-mcp-adapters` 作为 LangChain Tool 传入 `create_deep_agent`。只连接平台 Catalog 中
+  固定版本的受控 Streamable HTTP/独立容器 Server；用户不能提交 URL、transport、command、env 或认证
+  配置，Phase 5 不在 Worker 宿主以 stdio 启动第三方 MCP；
+- 首个 MCP 固定为只读 `search_arxiv_metadata`，默认 stateless；Tool 名称、输入 Schema、版本/哈希和
+  allowlist 必须 fail-closed 校验，平台 interceptor 负责 Turn scope、权限、取消、预算、超时、输出限制
+  和 ToolExecution 审计；
 - Skill 只能由平台维护、版本化和 allowlist 启用；Skill 是提示与能力组合，不是权限边界；
+- Skill 如需脚本，脚本只能来自固定 Sandbox 镜像或受控只读路径，输出只写 `/workspace`；
 - 子 Agent 与长期 Memory 默认关闭，除非 Phase 6 通过新 ADR 明确开放。
 
 以上能力每项都是后续独立 Spike。某项失败不应迫使业务 Session/Turn 契约返工，也不自动阻塞其他项。
@@ -417,8 +452,6 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 - Runtime 断连、模型限流和 Sandbox 短暂不可用是可重试候选；越权、策略拒绝和非法输出是永久失败；
 - 候选 Artifact 必须 staged 后校验，使用稳定执行 ID、内容哈希和唯一约束去重；
 - Session 关闭不等于删除业务历史；SDK 清理失败可重试且不改变已提交业务事实。
-- WorkspaceSnapshot 只保存允许跨 Turn 的内部工作文件，不自动升级为用户可见 Artifact；Sandbox
-  丢失后能够从 Snapshot 与已授权 Artifact 重建，不把 Provider 文件系统当唯一事实来源。
 
 ## 实现切片顺序
 
@@ -440,9 +473,11 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 7. **能力 Spike**：只有切片 6 门槛通过后才开始，且不捆绑验收：
    - **7.0 Real Deep Agent Runtime Enablement**：先决定并接入 Provider/`BaseChatModel` factory、Secret/
      费用策略和 Worker `fake | deep_agents` 显式配置；默认必须保持 Fake；
-   - **7.1 MCP**：验证固定、平台维护的 MCP；
-   - **7.2 Browser/下载**：验证受控导航、下载与来源/文件边界；
-   - **7.3 Sandbox/WorkspaceSnapshot**：验证隔离文件工具、物理 Sandbox 生命周期与逻辑 Workspace 恢复；
+   - **7.1 OpenSandbox/Lease/WorkspaceSnapshot**：验证 Session 级短 TTL Lease、可执行默认 Backend、
+     隔离文件与命令、物理 Sandbox 生命周期、Snapshot 取回和逻辑 Workspace 重建；
+   - **7.2 Browser/下载**：验证同一 Sandbox Chromium/CDP、受控导航、统一 egress、下载与来源/文件边界；
+   - **7.3 MCP**：验证固定、平台维护的只读 `search_arxiv_metadata` MCP、Catalog、Schema/hash 和
+     interceptor；
    - **7.4 Platform Skill**：最后验证平台维护、版本固定的科研 Skill；
 8. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
 9. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
@@ -455,7 +490,9 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 - **Deep Agents**：Fake Chat Model + Fake Tool；同一 Thread 连续两轮只传新增消息，并通过可控低阈值至少
   强制触发一次原生 summarization 后仍能完成第二轮；默认不调用真实模型；
 - **Context**：跨用户/Project 隔离、ChunkSet/Evidence Matrix 版本固定、token 限制和 Citation 校验；
-- **Workspace/Sandbox**：文件传入/取回、Snapshot 重建、跨 Turn 隔离、模型不可见 `execute`、超时和销毁；
+- **Workspace/Sandbox**：文件传入/取回、Snapshot 重建、Session 跨 Turn 复用、跨 owner/Session 隔离、
+  模型可见 `execute` 只能到当前 OpenSandbox、宿主/Secret 不可见、默认禁网、固定 egress、资源/输出
+  上限、超时、销毁和 orphan 清理；
 - **故障注入**：重复 Job、Worker 崩溃、Runtime 断连、成功响应丢失、提交前后崩溃和取消竞争；切片 6
   必须启动第二个真实 OS 进程，而不是只用新连接或同进程新 Adapter 模拟重启；
 - **安全**：未授权 Project、伪造 SDK ID、未授权 Tool/Skill/MCP、内网 URL、超限输出和 Secret 泄漏；
@@ -644,9 +681,11 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. 首个固定 MCP、Browser 测试目标和平台 Skill；
-2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；
-3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
+1. 固定 Browser 测试域名和首个平台 Research Skill 的精确内容；
+2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
+   逐命令审批；
+3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact；
+4. OpenSandbox 精确版本、固定镜像 digest、TTL/资源默认值，以及真实 Provider Adapter 的精确依赖版本。
 
 切片 6 的部署、数据库和恢复决策已由 ADR-0006 固化：ARQ Worker 内运行、当前 PostgreSQL/checkpoint
 schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runtime/Graph revision 才自动恢复。
@@ -659,6 +698,8 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - Sandbox 不能自动消除 Prompt Injection 或网络外泄，平台策略与 Secret 隔离仍不可缺少；
 - Session 级并发首版采用单活动 Turn，不提供分支、排队或多人协作；
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
+- ADR-0007 已选择 OpenSandbox 并允许隔离 Sandbox `execute`，但在 7.1/7.2 实际完成前，不宣称 Lease、
+  默认禁网、统一 egress、资源限制、WorkspaceSnapshot 重建、Browser/CDP 或 Artifact 取回已验证；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
 - Worker 生产默认仍使用 Fake Runtime；ADR-0006 已决定 Deep Agents 在 ARQ Worker 内运行，真实 Adapter
   只由显式 DI 测试装配验证；当前不存在环境变量可启用的真实 Deep Worker 模式。Provider/model factory、
@@ -682,6 +723,7 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - `../decisions/0001-select-deep-agents-runtime.md`
 - `../decisions/0005-interactive-research-agent-session-model.md`
 - `../decisions/0006-run-deep-agents-inside-arq-worker.md`
+- `../decisions/0007-use-opensandbox-executable-workspace.md`
 - [`Phase 5 Runtime 恢复缺口台账`](../reports/phase-05-runtime-recovery-gap-log.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Customization](https://docs.langchain.com/oss/python/deepagents/customization)

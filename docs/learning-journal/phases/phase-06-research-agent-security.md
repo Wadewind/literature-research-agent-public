@@ -2,7 +2,12 @@
 
 ## 状态
 
-计划中，尚未开始实现。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25。
+计划中，尚未开始实现。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25；按 ADR-0007
+调整日期：2026-08-26。
+
+ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute`、
+WorkspaceSnapshot、同 Sandbox Browser、固定 MCP 和平台 Skill 的最小能力验证提前到 Phase 5 Slice 7。
+本阶段不重复实现这些 Spike，而是在其实际证据基础上完成 Registry、审批、安全专项、UI 和运维强化。
 
 进入条件：Phase 5 已完成并通过 ADR 确认 Deep Agents 的版本策略、部署拓扑、`ResearchAgentRuntime` 契约、MCP 模式、Sandbox Provider、重试所有权和升级方法；Phase 5 的安全、取消、断连和重复副作用验证没有未解决的阻塞项。
 
@@ -45,7 +50,8 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 - Prompt Injection、跨用户隔离、Secret 外泄和恶意下载测试；
 - Deep Agents 升级契约测试、故障注入、Agent 评测集和运维文档；
 - 平台维护、版本化和 allowlist 控制的 Research Skills；
-- 经真实用户价值和 ADR 证明后，可加入结构化、受限的数据分析能力。
+- 基于 Phase 5 OpenSandbox `execute` 与固定依赖的实际 Spike 证据，强化并产品化结构化、受限的数据分析
+  与绘图能力。
 
 ### 不包含
 
@@ -53,13 +59,14 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 - 每轮从 PostgreSQL 重放完整产品消息历史，或把 `ContextSnapshot` 当作第二套 Runtime 对话状态；
 - 任意用户提供的 MCP Server、Tool 代码、Sandbox 镜像或系统 Prompt；
 - 用户上传、安装或修改任意 Skill；
-- 默认开放任意 Shell、宿主 Python、包管理器、Docker Socket 或宿主文件系统；
+- 宿主 Shell、宿主 Python、动态包安装、Docker Socket 或宿主文件系统；Sandbox `execute` 仅限
+  ADR-0007 的 Session 专属 OpenSandbox；
 - 绕过登录、付费墙、robots/站点限制、CAPTCHA 或下载授权；
 - 自动对外发帖、发邮件、提交表单、修改远程仓库或执行金融/不可逆操作；
 - 无上限自主运行、无限子 Agent、跨 Project Memory 或跨用户共享 Workspace；
 - 把网页/论文中的指令视为系统指令；
 - 用 Agent 替代 Phase 3 的确定性 Review Workflow；
-- 在没有 ADR、安全测试和明确用户价值前开放通用 `run_python_analysis`。
+- 把 OpenSandbox `execute` 扩张为宿主执行、开放网络、动态依赖安装或通用 Coding Agent。
 
 ## 涉及模块
 
@@ -79,7 +86,8 @@ Phase 6 仍只支持“Project 范围内的受控研究”，不扩大为通用 
 1. 用户打开 Phase 5 创建的 Agent Session，并继续多轮提出分析、比较或资料补充问题；
 2. 每轮由平台固定可见 Paper/Chunk、Review Evidence Matrix、Artifact、Tool、Skill、网络和 Budget；
 3. Agent 优先使用项目内部证据分析；需要时可搜索官方项目页、仓库、数据集和补充材料；
-4. 需要计算时仅调用已批准的结构化 Tool；受限代码分析必须另有 ADR；
+4. 需要计算时可使用 ADR-0007 已批准的 OpenSandbox `execute` 和固定 Python 依赖；扩大网络、依赖、
+   外部副作用或宿主能力必须另行决策；
 5. Agent 输出带 Evidence/来源的回答、Resource Manifest 或候选 Artifact；
 6. 用户可以查看每轮来源、审批、Tool 历史、预算、错误和最终产物，并在同一 Session 中追问。
 
@@ -96,7 +104,7 @@ Context/Policy     每轮不可变的授权、版本、工具和预算快照
 Run Step           用户可理解的计划/阶段投影，不复制内部思考
 Tool Execution     一次版本化 Tool/MCP 调用及副作用幂等记录
 Approval Request   等待用户批准、编辑或拒绝的动作
-Workspace          Session 逻辑命名空间与 Turn 范围物理 Sandbox Lease
+Workspace          Session 逻辑命名空间与 Session/Thread 范围短 TTL Sandbox Lease
 WorkspaceSnapshot  跨 Turn 持久化的内部工作文件与 Manifest
 Usage/Budget       已消费与剩余额度的业务事实
 Resource Manifest  发现的外部资源及来源验证结果
@@ -169,10 +177,15 @@ Project、Budget、Approval 和参数策略。
 
 - MCP Server 只能由部署配置注册，不能从 Prompt、网页、Project 数据或用户请求动态添加；
 - Server、Transport、Endpoint、认证方式和允许 Tool 列表需要版本化；
-- 远程 MCP 优先使用受控 HTTP，stdio 仅允许启动固定二进制和参数，不能拼接用户命令；
+- 远程 MCP 优先使用受控 Streamable HTTP；开源 MCP 优先固定版本并部署为独立容器。ARQ Worker 宿主
+  不以 stdio 启动第三方 MCP；未来若例外采用 stdio，必须另有供应链、宿主权限和 Secret 审查；
 - MCP Tool 加载结果必须与 Registry 中的名称和 Schema 对比；漂移时 fail closed；
 - 拦截器负责权限、Correlation、预算、超时、输出裁剪和审计；
 - MCP Resources/Prompts 默认不直接注入 Agent Context，使用前需单独审核和限制。
+
+Phase 5 只验证平台固定、只读、默认 stateless 的 `search_arxiv_metadata`。Phase 6 才建设完整 MCP
+Registry、让用户从已审核 Catalog 中选择、处理 OAuth/Credential 生命周期，并继续禁止用户提交原始
+endpoint、transport、command、env 或认证配置。
 
 ### Research Skills
 
@@ -184,7 +197,8 @@ Project、Budget、Approval 和参数策略。
 ### 审批
 
 - 只读、低风险、当前 Project 内的 Evidence 查询可自动执行；
-- 下载新文件、扩大网络范围、覆盖 Artifact、执行代码或产生外部副作用必须按策略审批；
+- Session 专属 OpenSandbox 中默认禁网的离线 `execute` 不逐命令审批；下载新文件、扩大网络范围、覆盖或
+  正式提交 Artifact、使用凭据或产生外部副作用必须按策略审批；
 - 审批 UI 展示工具名、参数摘要、目标域名、风险、预算影响和预期副作用；
 - 用户可以批准、编辑允许编辑的字段或拒绝；编辑后重新走 Schema 和策略校验；
 - Approval Token 单次使用，绑定 run_id、tool_execution_id、参数哈希、actor 和过期时间。
@@ -213,33 +227,40 @@ Project、Budget、Approval 和参数策略。
 
 ## Workspace 和 Sandbox 安全
 
-- Session 可拥有逻辑 Workspace；默认每个 Turn 获取隔离的物理 Sandbox Lease，跨 Turn 不复用进程、
-  网络命名空间或临时凭据；临时文件随 Lease 丢弃，需要跨 Turn 的内部工作文件保存到受控
-  WorkspaceSnapshot，正式业务产物才提交为 Artifact；
+- Session 拥有逻辑 Workspace；每个 AgentSession/SDK Thread 最多复用一个短 TTL OpenSandbox Lease，
+  不跨 owner/Session 共享。同一 Session 继续以单活动 Turn 防止并发写入；Lease 失效、取消后环境污染或
+  策略要求重置时递增 generation，并从受控 WorkspaceSnapshot/Artifact 重建；
 - Agent 运行在 Worker/Runtime，Sandbox 作为 Tool；模型和平台 Secret 不进入 Sandbox；
 - Sandbox 自有文件系统作为物理 Workspace，不直接挂载 API/Worker 宿主目录；平台通过 Provider 原生
   文件传输或受控 Adapter 注入 Snapshot/Artifact，并取回新 Snapshot 或候选 Artifact；
-- Sandbox 使用非 root 用户、只读基础镜像、独立临时目录和显式输入 Snapshot/Artifact；
-- 默认禁网；需要网络时只通过受控代理/Allowlist，并记录域名、流量和拒绝原因；
+- Sandbox 使用非 root 用户、固定镜像、独立临时目录和显式输入 Snapshot/Artifact；首版固定 Python、
+  pandas、numpy、matplotlib 和必要字体，不允许动态安装包；
+- 默认禁网；只有平台固定 Browser 目标进入 egress allowlist，策略覆盖 Chromium、Python、`curl` 等全部
+  Sandbox 进程，并记录域名、流量和拒绝原因；
 - 限制 CPU、内存、PID、磁盘、文件数、单文件大小、墙钟时间和输出大小；
 - 不挂载宿主源码、用户主目录、Docker Socket、数据库 Socket、云元数据或 Secret；
 - 禁止特权模式、宿主网络、危险 Capability 和不受控嵌套容器；
 - 文件传入/取回走 Provider 原生传输或平台 Adapter，不由模型构造宿主路径；
-- 第一版模型只看到受限文件工具，不看到 `execute`、Shell、包管理器或任意网络；即使 Backend 内部依赖
-  `execute` 实现文件操作，也必须由 Runtime Adapter 隐藏模型可调用的执行 Tool；
-- Workspace 在终态或 TTL 后幂等清理；清理失败进入可观察的补偿队列；
+- OpenSandbox Backend 是 Deep Agents `CompositeBackend` 默认 Backend，模型可调用的 `execute` 只能到
+  当前 Session Sandbox；`/conversation_history/`、`/large_tool_results/` 等 Runtime 内部路径路由
+  `StateBackend`，不进入业务 WorkspaceSnapshot；
+- Deep Agents 文件 `permissions` 不能保护 `execute`、自定义 Tool 或 MCP；平台不能以命令字符串检查
+  冒充强隔离，必须依靠 Sandbox、统一 egress、Secret/宿主隔离、资源限制和文件提交协议；
+- Workspace 在 Session 关闭、Sandbox Lease TTL 到期、generation 重置或策略要求回收时幂等清理；普通
+  Turn 终态不自动销毁仍有效的 Session 级 Lease。清理失败进入可观察的补偿队列；
 - Artifact 提交后仍不信任 Workspace，必须由平台重新读取并校验。
 
 ### 受限代码分析
 
-首版默认不提供 `execute` 或 `run_python_analysis`。只有同时满足以下条件才可通过独立 ADR 加入：
+ADR-0007 已批准 Phase 5 Slice 7 在 OpenSandbox 中开放 `execute`，用于研究数据处理与绘图。Phase 6 的
+任务是把已通过 Spike 的配置强化为可观察产品能力，而不是再次决定是否开放。至少保持以下条件：
 
-- 固定研究用户故事确实需要，且确定性应用服务不能满足；
 - 使用固定依赖和固定镜像，不允许任意安装包；
-- 输入只来自显式 Artifact，输出只允许明确目录；
+- 输入只来自显式 WorkspaceSnapshot/Artifact，输出只允许 `/workspace` Manifest 中的路径；
 - 默认禁网，资源和时间限制有实际测试；
 - 代码、命令、stdout/stderr 和产物受大小及敏感信息过滤；
-- 需要的审批、取消、幂等和审计行为已定义。
+- 离线命令不逐条审批，但网络扩大、外部副作用和正式 Artifact 提交的审批、取消、幂等和审计已定义；
+- 不向 Sandbox 注入模型、MCP 或 OpenSandbox Secret，且取消后不启动新命令。
 
 ## Budget、无进展和终止策略
 
@@ -305,10 +326,13 @@ Event Payload 保持小型、版本化和脱敏。高频 Token/流式片段不�
 具体迁移在对应切片前确定，关系至少覆盖：
 
 ```text
-AgentSession ── AgentMessage
- ├─ RuntimeThreadBinding ── WorkspaceSnapshot
+AgentSession
+ ├─ AgentMessage
+ ├─ RuntimeThreadBinding
+ ├─ SandboxLease
+ ├─ WorkspaceSnapshot
  └─ AgentTurnRun ── ContextSnapshot / PolicySnapshot
-      ├─ RuntimeExecutionBinding ── WorkspaceLease
+      ├─ RuntimeExecutionBinding
       ├─ RunStep
       ├─ ToolExecution ── ApprovalRequest
       ├─ UsageLedger
@@ -376,13 +400,20 @@ Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范
 
 ## 实现切片顺序
 
-1. **产品契约与威胁模型**：复核 Session/Turn/Snapshot 边界、资产/信任边界、攻击面和安全验收；
-2. **Tool Registry 与执行记录**：版本化 Schema、权限、风险、预算、幂等和 ToolExecution 持久化，先用确定性内置 Tool；
+Phase 5 Slice 7 先分别提供 OpenSandbox、Browser、固定 MCP 和 Skill 的最小证据。Phase 6 只在这些 Spike
+实际通过后按以下顺序强化，不把 ADR-0007 本身当作测试结果：
+
+1. **产品契约与威胁模型**：复核 Session/Turn/Snapshot、Session 级 Sandbox Lease、资产/信任边界、
+   `execute` 攻击面和安全验收；
+2. **Tool Registry 与执行记录**：版本化 Schema、权限、风险、预算、幂等和 ToolExecution 持久化；
 3. **Project/Evidence Context**：强化 Chunk Index、Review Matrix、Artifact 的固定授权快照与隔离测试；
-4. **MCP Registry 与策略拦截**：固定 Server/Tool、Schema 漂移检测、权限/预算/超时/输出限制和审计；
-5. **Browser/URL/下载安全**：URL Policy、SSRF/Redirect/DNS 测试、内容限制、隔离下载和来源记录；
+4. **MCP Registry 与策略拦截**：从 Phase 5 固定 MCP 扩展到已审核 Catalog、Schema 漂移、权限/预算/超时/
+   输出限制、OAuth/Credential 和审计；
+5. **Browser/URL/下载安全**：在 Phase 5 同 Sandbox Browser 基础上补齐 URL Policy、SSRF/Redirect/DNS、
+   Prompt Injection、内容限制、隔离下载和来源记录；
 6. **Approval 与恢复**：业务 Approval、Deep Agents Interrupt/Resume、过期/取消/重复决定和 UI；
-7. **Workspace/Sandbox 强化**：Turn Lease 隔离、WorkspaceSnapshot 重建、文件工具限制、网络/资源限制、TTL 清理和故障补偿；
+7. **Workspace/Sandbox 强化**：Session Lease/generation 隔离、WorkspaceSnapshot 重建、`execute`、统一
+   egress、资源限制、TTL 清理和故障补偿；
 8. **Budget 与无进展检测**：步骤/Token/费用/时间/Tool/输出限制和循环终止；
 9. **Agent UI 与 Artifact**：多轮 Chat、Turn Detail、Step、Tool、审批、来源、Manifest、报告和文件查看/下载；
 10. **故障注入与安全测试**：Runtime/MCP/Browser/Sandbox 故障、Prompt Injection、Secret、越权、恶意文件和取消竞争；
@@ -397,8 +428,9 @@ Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范
 - **Runtime Contract**：Deep Agents 版本升级前后运行同一契约套件；
 - **MCP**：Schema 漂移、恶意 Tool 描述/输出、超时、断连、认证失败、会话泄漏和拦截器；
 - **Browser/HTTP**：IPv4/IPv6 私网、DNS rebinding、Redirect 链、超时、大响应、错误 MIME 和 Prompt Injection Fixture；
-- **Sandbox**：跨 Turn 文件隔离、WorkspaceSnapshot 取回/重建、模型不可见 `execute`、Secret/宿主路径
-  不可见、网络拒绝、CPU/内存/PID/磁盘/时间限制、销毁和清理补偿；
+- **Sandbox**：Session 内跨 Turn 复用与跨 owner/Session 隔离、WorkspaceSnapshot 取回/重建、模型可见
+  `execute` 只能到当前 OpenSandbox、Secret/宿主路径不可见、统一网络拒绝、CPU/内存/PID/磁盘/时间/
+  输出限制、取消后不启动新命令、销毁和清理补偿；
 - **PostgreSQL**：唯一约束、条件更新、Approval 单次决定、ToolExecution 去重、Usage 和跨用户隔离；
 - **故障注入**：Worker/Runtime/MCP/Sandbox 退出、响应丢失、重复 Job、取消竞争、Artifact 提交前后崩溃；
 - **E2E**：打开 Agent Session → 项目内分析 → 追问 → 查找公开资源 → 审批下载 → Artifact → 刷新恢复与取消；
@@ -426,16 +458,18 @@ Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范
 
 ## 实现前仍需确定
 
-1. Phase 5 ADR 选定的 Runtime 部署和 Sandbox Provider 的具体生产配置；
+1. ADR-0007 已选 OpenSandbox；仍需由 Phase 5 证据确定最终部署模式、固定镜像 digest、TTL、资源和清理
+   默认值；
 2. 首版允许的域名类别、搜索 Provider 和 MCP Server；
 3. Approval 风险矩阵及允许编辑的参数；
 4. Budget 默认值、费用数据不可得时的替代限制和告警阈值；
 5. Workspace TTL、清理补偿和 Artifact 安全扫描策略；
-6. 是否存在足够用户价值加入受限代码分析；若没有，保持禁用；
+6. Phase 5 Sandbox `execute` Spike 通过后，哪些计算与绘图能力进入用户可见产品、如何展示和审批；
 7. 首批平台 Research Skills 的能力、版本、评测和禁用方式；
 8. Deep Agents 子 Agent 和长期 Memory 是否保持永久禁用；首版默认禁用。
 
-任何扩大网络、代码执行、用户自定义 Tool/MCP、对外写操作或长期 Memory 的决定都必须单独更新本 Spec，并在满足 `AGENTS.md` 条件时创建 ADR。
+任何把代码执行扩大到宿主、开放网络、动态包安装、用户自定义 Tool/MCP、对外写操作或长期 Memory 的
+决定都必须单独更新本 Spec，并在满足 `AGENTS.md` 条件时创建 ADR。
 
 ## 已知预期限制
 
@@ -444,7 +478,8 @@ Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范
 - 第三方模型、MCP 和 Sandbox Provider 会带来成本、可用性、隐私和供应商风险；
 - Prompt Injection 无法只靠分类器或 Prompt 消除，系统依赖最小权限和基础设施隔离限制后果；
 - 完整浏览器兼容性、复杂登录流程和网页交互不属于首版目标；
-- 多 Agent、长期 Memory 和通用代码执行保持关闭，除非后续有独立需求和安全证据；
+- 多 Agent、长期 Memory、宿主执行、动态安装和开放网络保持关闭；OpenSandbox `execute` 不改变 Research
+  Agent 的领域定位，也不代表通用 Coding Agent；
 - Research Agent Extension 可以独立禁用，Demo-ready Core Research Backend v1 仍应完整运行。
 
 ## 预期学习笔记
@@ -460,12 +495,15 @@ Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范
 
 ## 参考资料
 
+- [`ADR-0007：采用 OpenSandbox 可执行研究 Workspace`](../decisions/0007-use-opensandbox-executable-workspace.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Going to production](https://docs.langchain.com/oss/python/deepagents/going-to-production)
 - [Deep Agents Backends](https://docs.langchain.com/oss/python/deepagents/backends)
 - [Deep Agents Sandboxes](https://docs.langchain.com/oss/python/deepagents/sandboxes)
 - [Deep Agents Permissions](https://docs.langchain.com/oss/python/deepagents/permissions)
+- [Deep Agents Comparison](https://docs.langchain.com/oss/python/deepagents/comparison)
 - [Deep Agents Human-in-the-loop](https://docs.langchain.com/oss/python/deepagents/human-in-the-loop)
 - [LangChain MCP Adapter](https://docs.langchain.com/oss/python/langchain/mcp)
+- [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox)
 
 参考资料描述 SDK 能力，不构成本项目的安全保证。安全结论必须来自固定版本、实际部署配置、威胁分析和测试证据。

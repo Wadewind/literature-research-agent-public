@@ -4,6 +4,11 @@
 - 日期：2026-08-25
 - 决策者：项目维护者
 
+ADR-0007 已修订本 ADR 的物理 Workspace 细节：Sandbox Lease 改为每个 AgentSession/SDK Thread 一个
+短 TTL Lease 并跨 Turn 复用；Slice 7 在该 Session 专属 OpenSandbox 中开放 `execute`。下文“Turn 或
+短 TTL”“首版隐藏 `execute`”保留为当时的历史决定，不再作为 Slice 7 契约。Session/Turn/Thread、
+逻辑 Workspace、平台业务事实和权限所有权仍由本 ADR 决定。
+
 ## 背景
 
 ADR-0001 已选择基于 LangGraph 的 Deep Agents 作为 `ResearchAgentRuntime` 内部实现。Phase 5 初版
