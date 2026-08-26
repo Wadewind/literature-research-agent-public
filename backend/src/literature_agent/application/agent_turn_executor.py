@@ -26,6 +26,9 @@ from literature_agent.application.ports.research_agent_runtime import (
 )
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
+from literature_agent.application.ports.workspace_snapshot_publisher import (
+    WorkspaceSnapshotPublisher,
+)
 from literature_agent.domain.agent_answer import (
     INSUFFICIENT_AGENT_EVIDENCE_TEXT,
     parse_agent_answer,
@@ -66,6 +69,11 @@ class AgentTurnExecutor[TSession: Session]:
         runtime: ResearchAgentRuntime,
         event_notifier: EventNotifier | None = None,
         cancellation_poll_interval_seconds: float = 0.5,
+        workspace_snapshot_publisher_factory: Callable[
+            [TSession], WorkspaceSnapshotPublisher
+        ]
+        | None = None,
+        workspace_snapshot_required: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -76,6 +84,12 @@ class AgentTurnExecutor[TSession: Session]:
         self._runtime = runtime
         self._event_notifier = event_notifier or NoopEventNotifier()
         self._cancellation_poll_interval_seconds = cancellation_poll_interval_seconds
+        self._workspace_snapshot_publisher_factory = (
+            workspace_snapshot_publisher_factory
+        )
+        self._workspace_snapshot_required = workspace_snapshot_required
+        if workspace_snapshot_required and workspace_snapshot_publisher_factory is None:
+            raise ValueError("Deep Runtime 必须配置 WorkspaceSnapshot publisher")
 
     async def execute(self, run: Run, correlation_id: str) -> None:
         """所有 Runtime I/O 均发生在读取事务结束以后。"""
@@ -293,6 +307,18 @@ class AgentTurnExecutor[TSession: Session]:
                 run.run_id, RunStatus.RUNNING, RunStatus.SUCCEEDED, event_sequence
             ):
                 raise RunConcurrentModificationError(run.run_id)
+            if self._workspace_snapshot_publisher_factory is not None:
+                published = await self._workspace_snapshot_publisher_factory(
+                    session
+                ).publish_for_success(
+                    owner_id=run.owner_id,
+                    project_id=run.project_id,
+                    session_id=turn.session_id,
+                    turn_run_id=run.run_id,
+                    required=self._workspace_snapshot_required,
+                )
+                if not published:
+                    raise RunConcurrentModificationError(run.run_id)
             if not await repo.release_active_turn(turn.session_id, run.run_id):
                 raise RunConcurrentModificationError(run.run_id)
             await session.commit()

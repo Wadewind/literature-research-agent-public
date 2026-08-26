@@ -109,7 +109,8 @@ def test_fake_research_runtime_does_not_construct_provider(monkeypatch) -> None:
         session_factory=lambda: None,  # type: ignore[arg-type]
         retriever=object(),  # type: ignore[arg-type]
         event_notifier=object(),  # type: ignore[arg-type]
-        checkpointer=None,
+        checkpoint_factory=None,
+        workspace_manager=None,
         runtime_owner_id="worker-1",
     )
 
@@ -125,12 +126,12 @@ async def test_open_fake_research_runtime_does_not_open_provider_resources(
         lambda **_: (_ for _ in ()).throw(AssertionError("不得构造 Provider")),
     )
 
-    class ForbiddenCheckpointStore:
+    class ForbiddenCheckpointPool:
         def __init__(self, *_: object, **__: object) -> None:
             raise AssertionError("不得创建 Agent Checkpointer")
 
     monkeypatch.setattr(
-        "literature_agent.worker.PostgresCheckpointStore", ForbiddenCheckpointStore
+        "literature_agent.worker.PostgresCheckpointPool", ForbiddenCheckpointPool
     )
 
     async with _open_research_agent_runtime(
@@ -148,6 +149,8 @@ def test_deep_research_runtime_uses_production_context_and_control(monkeypatch) 
     captured: dict[str, object] = {}
     model = object()
     checkpointer = object()
+    checkpoint_factory = object()
+    workspace_manager = object()
 
     def build_model(**kwargs: object) -> object:
         captured["model_kwargs"] = kwargs
@@ -164,6 +167,14 @@ def test_deep_research_runtime_uses_production_context_and_control(monkeypatch) 
     monkeypatch.setattr(
         "literature_agent.worker.DeepAgentsResearchAgentRuntime", StubRuntime
     )
+
+    class StubSandboxedRuntime:
+        def __init__(self, **kwargs: object) -> None:
+            captured["wrapper_kwargs"] = kwargs
+
+    monkeypatch.setattr(
+        "literature_agent.worker.SandboxedResearchAgentRuntime", StubSandboxedRuntime
+    )
     settings = Settings(
         research_runtime_backend="deep_agents",
         research_model_api_key="agent-secret",
@@ -174,16 +185,26 @@ def test_deep_research_runtime_uses_production_context_and_control(monkeypatch) 
         session_factory=lambda: None,  # type: ignore[arg-type]
         retriever=object(),  # type: ignore[arg-type]
         event_notifier=object(),  # type: ignore[arg-type]
-        checkpointer=checkpointer,  # type: ignore[arg-type]
+        checkpoint_factory=checkpoint_factory,  # type: ignore[arg-type]
+        workspace_manager=workspace_manager,  # type: ignore[arg-type]
         runtime_owner_id="worker-1",
     )
 
-    assert isinstance(runtime, StubRuntime)
+    assert isinstance(runtime, StubSandboxedRuntime)
+    wrapper_kwargs = captured["wrapper_kwargs"]
+    assert isinstance(wrapper_kwargs, dict)
+    assert wrapper_kwargs["checkpoint_factory"] is checkpoint_factory
+    assert wrapper_kwargs["workspace_manager"] is workspace_manager
+    async def before_succeed(request: object) -> None:
+        del request
+
+    wrapper_kwargs["runtime_factory"](checkpointer, object(), before_succeed)
     assert captured["checkpointer"] is checkpointer
     assert captured["model"] is model
     assert isinstance(captured["execution_control"], RuntimeExecutionControlService)
     assert isinstance(captured["project_context"], ProjectResearchContextService)
     assert captured["runtime_owner_id"] == "worker-1"
+    assert captured["before_succeed"] is before_succeed
     assert captured["model_kwargs"] == {
         "base_url": "https://api.deepseek.com",
         "api_key": "agent-secret",
@@ -202,7 +223,8 @@ def test_unknown_research_runtime_fails_closed() -> None:
             session_factory=lambda: None,  # type: ignore[arg-type]
             retriever=object(),  # type: ignore[arg-type]
             event_notifier=object(),  # type: ignore[arg-type]
-            checkpointer=None,
+            checkpoint_factory=None,
+            workspace_manager=None,
             runtime_owner_id="worker-1",
         )
 
@@ -216,12 +238,12 @@ async def test_open_deep_runtime_requires_key_before_opening_resources(
         lambda **_: (_ for _ in ()).throw(AssertionError("不得构造 Provider")),
     )
 
-    class ForbiddenCheckpointStore:
+    class ForbiddenCheckpointPool:
         def __init__(self, *_: object, **__: object) -> None:
             raise AssertionError("不得创建 Agent Checkpointer")
 
     monkeypatch.setattr(
-        "literature_agent.worker.PostgresCheckpointStore", ForbiddenCheckpointStore
+        "literature_agent.worker.PostgresCheckpointPool", ForbiddenCheckpointPool
     )
 
     with pytest.raises(ValueError, match="AGENT_RESEARCH_MODEL_API_KEY") as exc_info:
@@ -247,7 +269,8 @@ async def test_open_deep_runtime_owns_checkpoint_and_model_lifecycle(monkeypatch
     runtime = object()
 
     class StubStore:
-        def __init__(self, database_url: str) -> None:
+        def __init__(self, database_url: str, **kwargs: object) -> None:
+            assert kwargs == {"min_size": 1, "max_size": 4}
             assert database_url == "postgresql+psycopg://agent:agent@db/agent"
 
         @asynccontextmanager
@@ -259,7 +282,7 @@ async def test_open_deep_runtime_owns_checkpoint_and_model_lifecycle(monkeypatch
                 events.append("checkpoint_close")
 
     model = object()
-    monkeypatch.setattr("literature_agent.worker.PostgresCheckpointStore", StubStore)
+    monkeypatch.setattr("literature_agent.worker.PostgresCheckpointPool", StubStore)
     monkeypatch.setattr(
         "literature_agent.worker.build_deepseek_research_model", lambda **_: model
     )

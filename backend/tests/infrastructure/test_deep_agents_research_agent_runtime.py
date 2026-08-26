@@ -8,6 +8,12 @@ from typing import Any
 
 import pytest
 from deepagents import create_deep_agent
+from deepagents.backends.protocol import (
+    ExecuteResponse,
+    FileDownloadResponse,
+    FileUploadResponse,
+)
+from deepagents.backends.sandbox import BaseSandbox
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -29,6 +35,7 @@ from literature_agent.application.ports.research_agent_runtime import (
     RuntimeTurnRequest,
 )
 from literature_agent.application.runtime_execution_control import (
+    RuntimeExecutionControlError,
     RuntimeExecutionControlService,
 )
 from literature_agent.domain.research_agent import (
@@ -37,6 +44,7 @@ from literature_agent.domain.research_agent import (
 )
 from literature_agent.domain.run import RunStatus, create_run
 from literature_agent.domain.run_attempt import AttemptStatus, RunAttempt
+from literature_agent.domain.runtime_execution import RuntimeControlState
 from literature_agent.domain.tool_execution import ToolErrorKind
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
@@ -189,6 +197,59 @@ class _FailingMatrixContext(_ProjectContext):
         )
 
 
+class _ExecuteSandbox(BaseSandbox):
+    """只为离线预算测试提供确定性 execute。"""
+
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    @property
+    def id(self) -> str:
+        return "sandbox-budget-test"
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        del timeout
+        self.commands.append(command)
+        return ExecuteResponse(output="ok", exit_code=0, truncated=False)
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        return [FileUploadResponse(path=path) for path, _ in files]
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        return [FileDownloadResponse(path=path, content=b"") for path in paths]
+
+
+class _ProjectThenExecuteModel(_ProjectToolModel):
+    def _next_message(self, messages: list[Any]) -> AIMessage:
+        del messages
+        self.model_call_count += 1
+        if self.model_call_count == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "search_project_chunks",
+                        "args": {"query": "统一预算"},
+                        "id": "project-budget-call",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        if self.model_call_count == 2:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": "python -c 'print(1)'"},
+                        "id": "execute-budget-call",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        return AIMessage(content="当前授权上下文证据不足。")
+
+
 def _request(
     *,
     session_id: str = "session-1",
@@ -230,6 +291,57 @@ def _request(
 
 async def _collect(stream: AsyncIterator[RuntimeEvent]) -> list[RuntimeEvent]:
     return [event async for event in stream]
+
+
+async def test_unified_tool_budget_counts_project_and_execute_once_each() -> None:
+    model = _ProjectThenExecuteModel()
+    context = _ProjectContext()
+    sandbox = _ExecuteSandbox()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=MemorySaver(),
+        backend=sandbox,
+        project_context=context,
+    )
+
+    events = await _collect(
+        runtime.execute_turn(
+            _request(
+                allowed_tool_names=("search_project_chunks", "execute"),
+                max_tool_calls=2,
+            )
+        )
+    )
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert context.search_calls == [("turn-1", "统一预算")]
+    assert sandbox.commands == ["python -c 'print(1)'"]
+
+
+async def test_unified_tool_budget_rejects_execute_before_second_tool_effect() -> None:
+    model = _ProjectThenExecuteModel()
+    context = _ProjectContext()
+    sandbox = _ExecuteSandbox()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=MemorySaver(),
+        backend=sandbox,
+        project_context=context,
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as exc_info:
+        await _collect(
+            runtime.execute_turn(
+                _request(
+                    allowed_tool_names=("search_project_chunks", "execute"),
+                    max_tool_calls=1,
+                )
+            )
+        )
+
+    assert exc_info.value.code == "runtime_tool_call_limit_exceeded"
+    assert context.search_calls == [("turn-1", "统一预算")]
+    assert sandbox.commands == []
 
 
 async def test_model_call_budget_is_reserved_before_the_main_agent_call() -> None:
@@ -407,6 +519,164 @@ async def test_real_adapter_uses_sync_checkpoint_durability() -> None:
     )
 
     assert proxy.durabilities == ["sync"]
+
+
+async def test_workspace_finalizer_precedes_runtime_success_and_completed() -> None:
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, _, _, _ = await _controlled_runtime_dependencies(request.turn_run_id)
+    order: list[str] = []
+    original_succeed = control.succeed
+
+    async def finalize(turn_request: RuntimeTurnRequest) -> None:
+        assert turn_request == request
+        record = await control.get(request.turn_run_id)
+        assert record is not None and record.state is RuntimeControlState.RUNNING
+        order.append("snapshot")
+
+    async def succeed(permit, checkpoint_id):
+        order.append("control_succeed")
+        return await original_succeed(permit, checkpoint_id)
+
+    control.succeed = succeed  # type: ignore[method-assign]
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=MemorySaver(),
+        execution_control=control,
+        runtime_owner_id="runtime-finalization-order",
+        before_succeed=finalize,
+    )
+
+    events = await _collect(runtime.execute_turn(request))
+    order.append("completed")
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert order == ["snapshot", "control_succeed", "completed"]
+
+
+async def test_temporary_workspace_finalization_retries_succeeded_checkpoint() -> None:
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, _, _, _ = await _controlled_runtime_dependencies(request.turn_run_id)
+    saver = MemorySaver()
+    model = ScriptedDeepAgentChatModel()
+    calls = 0
+
+    async def finalize(turn_request: RuntimeTurnRequest) -> None:
+        nonlocal calls
+        assert turn_request == request
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary storage failure")
+
+    first = DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-finalization-retry",
+        before_succeed=finalize,
+    )
+    with pytest.raises(ResearchAgentRuntimeError) as failure:
+        await _collect(first.execute_turn(request))
+    assert failure.value.kind is RuntimeErrorKind.TEMPORARY
+    assert failure.value.code == "runtime_workspace_snapshot_failed"
+    record = await control.get(request.turn_run_id)
+    assert record is not None and record.state is RuntimeControlState.RUNNING
+    model_calls = model.model_call_count
+
+    second = DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-finalization-retry",
+        before_succeed=finalize,
+    )
+    events = await _collect(
+        second.resume_turn(
+            RuntimeResumeRequest(
+                turn_run_id=request.turn_run_id,
+                response=None,
+                turn_request=request,
+            )
+        )
+    )
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert calls == 2
+    assert model.model_call_count == model_calls
+    record = await control.get(request.turn_run_id)
+    assert record is not None and record.state is RuntimeControlState.SUCCEEDED
+
+
+async def test_permanent_workspace_validation_failure_never_succeeds_runtime() -> None:
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, _, _, _ = await _controlled_runtime_dependencies(request.turn_run_id)
+
+    async def reject(turn_request: RuntimeTurnRequest) -> None:
+        del turn_request
+        raise ValueError("symlink")
+
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=MemorySaver(),
+        execution_control=control,
+        runtime_owner_id="runtime-finalization-invalid",
+        before_succeed=reject,
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as failure:
+        await _collect(runtime.execute_turn(request))
+
+    assert failure.value.kind is RuntimeErrorKind.PERMANENT
+    assert failure.value.code == "runtime_workspace_snapshot_invalid"
+    record = await control.get(request.turn_run_id)
+    assert record is not None and record.state is RuntimeControlState.FAILED
+
+
+async def test_snapshot_survives_control_success_response_loss_without_reexecution() -> None:
+    request = _request(turn_run_id="turn-2", allowed_tool_names=())
+    control, _, _, _ = await _controlled_runtime_dependencies(request.turn_run_id)
+    saver = MemorySaver()
+    model = ScriptedDeepAgentChatModel()
+    snapshots = 0
+    original_succeed = control.succeed
+    lose_response = True
+
+    async def finalize(turn_request: RuntimeTurnRequest) -> None:
+        nonlocal snapshots
+        assert turn_request == request
+        snapshots += 1
+
+    async def succeed_then_lose_response(permit, checkpoint_id):
+        nonlocal lose_response
+        result = await original_succeed(permit, checkpoint_id)
+        if lose_response:
+            lose_response = False
+            raise RuntimeExecutionControlError(
+                "runtime_control_response_lost",
+                "Runtime 成功响应暂时丢失",
+                temporary=True,
+            )
+        return result
+
+    control.succeed = succeed_then_lose_response  # type: ignore[method-assign]
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=saver,
+        execution_control=control,
+        runtime_owner_id="runtime-control-response-loss",
+        before_succeed=finalize,
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError):
+        await _collect(runtime.execute_turn(request))
+    calls_after_loss = model.model_call_count
+    record = await control.get(request.turn_run_id)
+    assert record is not None and record.state is RuntimeControlState.SUCCEEDED
+
+    events = await _collect(runtime.execute_turn(request))
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert snapshots == 1
+    assert model.model_call_count == calls_after_loss
 
 
 async def test_new_adapter_resumes_running_checkpoint_without_readding_human_message() -> None:
@@ -716,6 +986,7 @@ async def test_recovery_prefers_newer_synced_checkpoint_over_stale_control_water
             turn_run_id=request.turn_run_id,
             allowed_tool_names=frozenset(request.policy_snapshot.allowed_tool_names),
             max_model_calls=request.policy_snapshot.max_model_calls,
+            max_tool_calls=request.policy_snapshot.max_tool_calls,
             runtime_permit=recorded.permit,
         ),
         stream_mode="updates",
@@ -811,7 +1082,7 @@ async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> 
     assert (await anext(stream)).kind is RuntimeEventKind.STARTED
     record = await control.get(request.turn_run_id)
     assert record is not None and record.last_checkpoint_id is not None
-    assert record.graph_revision == "deep-agent-graph.v2"
+    assert record.graph_revision == "deep-agent-graph.v3"
     checkpoint = await saver.aget_tuple(
         {
             "configurable": {
@@ -822,7 +1093,7 @@ async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> 
         }
     )
     assert checkpoint is not None
-    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v2"
+    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v3"
     tampered = checkpoint._replace(
         metadata={**checkpoint.metadata, "agent_runtime_session_id": "session-other"}
     )
@@ -842,8 +1113,8 @@ async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> 
     await stream.aclose()
 
 
-async def test_record_checkpoint_lookup_rejects_v1_graph_revision() -> None:
-    """新增预算 State 后不能把旧 v1 Checkpoint 当作兼容状态恢复。"""
+async def test_record_checkpoint_lookup_rejects_v2_graph_revision() -> None:
+    """统一 Tool 预算 State 后不能把旧 v2 Checkpoint 当作兼容状态恢复。"""
     request = _request(turn_run_id="turn-2", allowed_tool_names=())
     control, _, _, _ = await _controlled_runtime_dependencies(request.turn_run_id)
     saver = MemorySaver()
@@ -856,7 +1127,7 @@ async def test_record_checkpoint_lookup_rejects_v1_graph_revision() -> None:
     await _collect(runtime.execute_turn(request))
     record = await control.get(request.turn_run_id)
     assert record is not None and record.last_checkpoint_id is not None
-    assert record.graph_revision == "deep-agent-graph.v2"
+    assert record.graph_revision == "deep-agent-graph.v3"
     checkpoint = await saver.aget_tuple(
         {
             "configurable": {
@@ -867,9 +1138,9 @@ async def test_record_checkpoint_lookup_rejects_v1_graph_revision() -> None:
         }
     )
     assert checkpoint is not None
-    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v2"
+    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v3"
     old_checkpoint = checkpoint._replace(
-        metadata={**checkpoint.metadata, "agent_graph_revision": "deep-agent-graph.v1"}
+        metadata={**checkpoint.metadata, "agent_graph_revision": "deep-agent-graph.v2"}
     )
 
     class _OldCheckpointLookup:
@@ -951,7 +1222,7 @@ async def test_persistent_failed_and_cancelled_states_survive_adapter_recreation
     ).state is RuntimeExecutionState.CANCELLED
 
 
-async def test_v1_runtime_graph_revision_is_permanent_and_does_not_call_model() -> None:
+async def test_v2_runtime_graph_revision_is_permanent_and_does_not_call_model() -> None:
     request = _request(turn_run_id="turn-2", allowed_tool_names=())
     control, _, _, repo = await _controlled_runtime_dependencies(request.turn_run_id)
     saver = MemorySaver()
@@ -964,9 +1235,9 @@ async def test_v1_runtime_graph_revision_is_permanent_and_does_not_call_model() 
     )
     await _collect(first.execute_turn(request))
     record = repo._items[request.turn_run_id]  # noqa: SLF001
-    assert record.graph_revision == "deep-agent-graph.v2"
+    assert record.graph_revision == "deep-agent-graph.v3"
     repo._items[request.turn_run_id] = replace(  # noqa: SLF001
-        record, graph_revision="deep-agent-graph.v1"
+        record, graph_revision="deep-agent-graph.v2"
     )
 
     new_model = ScriptedDeepAgentChatModel()

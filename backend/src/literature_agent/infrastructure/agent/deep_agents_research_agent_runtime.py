@@ -19,8 +19,8 @@ from deepagents import (
     create_deep_agent,
     register_harness_profile,
 )
-from deepagents.backends import StateBackend
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.backends import BackendProtocol, CompositeBackend, StateBackend
+from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
 from deepagents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -86,7 +86,8 @@ _GRAPH_REVISION_METADATA_KEY = "agent_graph_revision"
 _FILESYSTEM_TOOL_NAMES = frozenset(
     {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}
 )
-_FORBIDDEN_TOOL_NAMES = frozenset({"execute", "task"})
+_FORBIDDEN_CUSTOM_TOOL_NAMES = frozenset({"execute", "task"})
+_ALWAYS_FORBIDDEN_TOOL_NAMES = frozenset({"task"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +97,7 @@ class _TurnContext:
     turn_run_id: str
     allowed_tool_names: frozenset[str]
     max_model_calls: int
+    max_tool_calls: int
     runtime_permit: RuntimeExecutionPermit | None = None
 
 
@@ -104,6 +106,13 @@ class _ModelCallBudgetState(AgentState[Any]):
 
     agent_model_budget_turn_run_id: NotRequired[Annotated[str, PrivateStateAttr]]
     agent_model_budget_reserved_calls: NotRequired[Annotated[int, PrivateStateAttr]]
+
+
+class _ToolCallBudgetState(AgentState[Any]):
+    """随 SDK Thread checkpoint 持久化的逐 Turn 统一 Tool 调用预留。"""
+
+    agent_tool_budget_turn_run_id: NotRequired[Annotated[str, PrivateStateAttr]]
+    agent_tool_budget_reserved_calls: NotRequired[Annotated[int, PrivateStateAttr]]
 
 
 @dataclass(slots=True)
@@ -252,6 +261,65 @@ class _RuntimeModelCallBudgetMiddleware(
         return self._reserve(state, cast(_TurnContext, runtime.context))
 
 
+class _RuntimeToolCallBudgetMiddleware(
+    AgentMiddleware[_ToolCallBudgetState, _TurnContext, Any]
+):
+    """在 Tool node 前一次性预留模型本轮产生的全部 Tool calls。"""
+
+    state_schema = _ToolCallBudgetState
+
+    def __init__(self, *, registered_tool_names: frozenset[str]) -> None:
+        self._registered_tool_names = registered_tool_names
+
+    def _reserve(
+        self,
+        state: _ToolCallBudgetState,
+        context: _TurnContext,
+    ) -> dict[str, Any] | None:
+        messages = state.get("messages", ())
+        if not messages or not isinstance(messages[-1], AIMessage):
+            return None
+        requested = len(messages[-1].tool_calls)
+        if requested == 0:
+            return None
+        allowed = context.allowed_tool_names & self._registered_tool_names
+        if any(item.get("name") not in allowed for item in messages[-1].tool_calls):
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_tool_not_allowed",
+                "Runtime Tool 未被本轮策略授权",
+            )
+        budget_turn_run_id = state.get("agent_tool_budget_turn_run_id")
+        used = (
+            state.get("agent_tool_budget_reserved_calls", 0)
+            if budget_turn_run_id == context.turn_run_id
+            else 0
+        )
+        if used + requested > context.max_tool_calls:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_tool_call_limit_exceeded",
+                "Runtime Tool 调用预算已耗尽",
+            )
+        return {
+            "agent_tool_budget_turn_run_id": context.turn_run_id,
+            "agent_tool_budget_reserved_calls": used + requested,
+        }
+
+    def after_model(
+        self,
+        state: _ToolCallBudgetState,
+        runtime: Any,
+    ) -> dict[str, Any] | None:
+        return self._reserve(state, cast(_TurnContext, runtime.context))
+
+    async def aafter_model(
+        self,
+        state: _ToolCallBudgetState,
+        runtime: Any,
+    ) -> dict[str, Any] | None:
+        return self._reserve(state, cast(_TurnContext, runtime.context))
+
 class DeepAgentsResearchAgentRuntime:
     """用原生 ``create_deep_agent`` 实现五方法业务 Port 的受限 Spike。"""
 
@@ -260,6 +328,7 @@ class DeepAgentsResearchAgentRuntime:
         *,
         model: BaseChatModel,
         checkpointer: BaseCheckpointSaver[str],
+        backend: BackendProtocol | None = None,
         tools: Sequence[BaseTool] = (),
         project_context: ProjectResearchContext | None = None,
         summarization_trigger: tuple[str, int | float] = ("messages", 100),
@@ -267,6 +336,7 @@ class DeepAgentsResearchAgentRuntime:
         execution_control: RuntimeExecutionControl | None = None,
         runtime_owner_id: str | None = None,
         lease_heartbeat_interval_seconds: float = 5.0,
+        before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None = None,
     ) -> None:
         if lease_heartbeat_interval_seconds <= 0:
             raise ValueError("Runtime lease heartbeat interval 必须为正数")
@@ -277,20 +347,37 @@ class DeepAgentsResearchAgentRuntime:
             f"runtime:{socket.gethostname()}:{os.getpid()}:{uuid4()}"
         )
         self._lease_heartbeat_interval_seconds = lease_heartbeat_interval_seconds
+        self._before_succeed = before_succeed
 
-        backend = StateBackend()
+        backend = backend or StateBackend()
+        if supports_execution(backend) and not isinstance(backend, CompositeBackend):
+            backend = CompositeBackend(
+                default=backend,
+                routes={
+                    "/conversation_history/": StateBackend(),
+                    "/large_tool_results/": StateBackend(),
+                },
+            )
         self._register_restricted_harness_profile(model)
         project_tools = self._project_context_tools(project_context)
         all_tools = (*tools, *project_tools)
         names = [item.name for item in all_tools]
         if len(names) != len(set(names)):
             raise ValueError("Deep Agents Tool 名称不得重复")
+        if supports_execution(backend) and _FORBIDDEN_CUSTOM_TOOL_NAMES & frozenset(names):
+            raise ValueError("execute/task 只能由受控 Deep Agents Backend 提供")
+        filesystem_tool_names = list(_FILESYSTEM_TOOL_NAMES)
+        if supports_execution(backend):
+            filesystem_tool_names.append("execute")
         registered_tool_names = (
-            _FILESYSTEM_TOOL_NAMES | frozenset(item.name for item in all_tools)
-        ) - _FORBIDDEN_TOOL_NAMES
+            frozenset(filesystem_tool_names) | frozenset(item.name for item in all_tools)
+        ) - _ALWAYS_FORBIDDEN_TOOL_NAMES - (
+            _FORBIDDEN_CUSTOM_TOOL_NAMES if not supports_execution(backend) else frozenset()
+        )
         filesystem = FilesystemMiddleware(
             backend=backend,
-            tools=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+            tools=cast(Any, filesystem_tool_names),
+            max_execute_timeout=60,
         )
         summarization = SummarizationMiddleware(
             model=model,
@@ -314,6 +401,9 @@ class DeepAgentsResearchAgentRuntime:
                     filesystem,
                     summarization,
                     _RuntimeModelCallBudgetMiddleware(),
+                    _RuntimeToolCallBudgetMiddleware(
+                        registered_tool_names=registered_tool_names
+                    ),
                     _RuntimeToolPolicyMiddleware(
                         registered_tool_names=registered_tool_names,
                         execution_control=execution_control,
@@ -376,6 +466,11 @@ class DeepAgentsResearchAgentRuntime:
             self._validate_existing_request(existing, request)
             reconciliation = await self._reconciliation_from_checkpoint(existing)
             if reconciliation.state is RuntimeExecutionState.SUCCEEDED:
+                await self._finalize_and_succeed(
+                    request,
+                    permit,
+                    reconciliation.turn_binding.runtime_checkpoint_id,
+                )
                 async for event in self._replay_succeeded(request.turn_run_id, existing):
                     yield event
             return
@@ -412,6 +507,7 @@ class DeepAgentsResearchAgentRuntime:
             turn_run_id=request.turn_run_id,
             allowed_tool_names=frozenset(request.policy_snapshot.allowed_tool_names),
             max_model_calls=request.policy_snapshot.max_model_calls,
+            max_tool_calls=request.policy_snapshot.max_tool_calls,
             runtime_permit=permit,
         )
         stream: AsyncIterator[Any] | None = None
@@ -503,14 +599,10 @@ class DeepAgentsResearchAgentRuntime:
                 "runtime_result_not_ready",
                 "Deep Agents 结果尚未就绪",
             )
+        await self._finalize_and_succeed(
+            request, permit, reconciliation.turn_binding.runtime_checkpoint_id
+        )
         local.state = RuntimeExecutionState.SUCCEEDED
-        if permit is not None and self._execution_control is not None:
-            try:
-                await self._execution_control.succeed(
-                    permit, reconciliation.turn_binding.runtime_checkpoint_id
-                )
-            except RuntimeExecutionControlError as exc:
-                raise _control_error(exc) from exc
         result = await self._result_from_checkpoint(checkpoint)
         local.last_event_sequence = 3
         yield RuntimeEvent(
@@ -592,13 +684,11 @@ class DeepAgentsResearchAgentRuntime:
         self._validate_existing_request(checkpoint, turn_request)
         checkpoint_reconciliation = await self._reconciliation_from_checkpoint(checkpoint)
         if checkpoint_reconciliation.state is RuntimeExecutionState.SUCCEEDED:
-            if permit is not None and self._execution_control is not None:
-                try:
-                    await self._execution_control.succeed(
-                        permit, checkpoint_reconciliation.turn_binding.runtime_checkpoint_id
-                    )
-                except RuntimeExecutionControlError as exc:
-                    raise _control_error(exc) from exc
+            await self._finalize_and_succeed(
+                turn_request,
+                permit,
+                checkpoint_reconciliation.turn_binding.runtime_checkpoint_id,
+            )
             async for event in self._replay_succeeded(request.turn_run_id, checkpoint):
                 yield event
             return
@@ -622,6 +712,7 @@ class DeepAgentsResearchAgentRuntime:
                 turn_request.policy_snapshot.allowed_tool_names
             ),
             max_model_calls=turn_request.policy_snapshot.max_model_calls,
+            max_tool_calls=turn_request.policy_snapshot.max_tool_calls,
             runtime_permit=permit,
         )
         stream: AsyncIterator[Any] | None = None
@@ -690,15 +781,13 @@ class DeepAgentsResearchAgentRuntime:
                 "runtime_result_not_ready",
                 "Deep Agents 恢复结果尚未就绪",
             )
-        local.state = RuntimeExecutionState.SUCCEEDED
         local.checkpoint_id = completed_reconciliation.turn_binding.runtime_checkpoint_id
-        if permit is not None and self._execution_control is not None:
-            try:
-                await self._execution_control.succeed(
-                    permit, completed_reconciliation.turn_binding.runtime_checkpoint_id
-                )
-            except RuntimeExecutionControlError as exc:
-                raise _control_error(exc) from exc
+        await self._finalize_and_succeed(
+            turn_request,
+            permit,
+            completed_reconciliation.turn_binding.runtime_checkpoint_id,
+        )
+        local.state = RuntimeExecutionState.SUCCEEDED
         result = await self._result_from_checkpoint(completed)
         local.last_event_sequence = 4
         yield RuntimeEvent(
@@ -1079,6 +1168,41 @@ class DeepAgentsResearchAgentRuntime:
             await self._execution_control.record_checkpoint(permit, checkpoint_id)
         except RuntimeExecutionControlError as exc:
             raise _control_error(exc) from exc
+
+    async def _finalize_and_succeed(
+        self,
+        request: RuntimeTurnRequest,
+        permit: RuntimeExecutionPermit | None,
+        checkpoint_id: str,
+    ) -> None:
+        """先持久化外部 Workspace，再允许 Runtime 形成成功终态。"""
+        if self._before_succeed is not None:
+            try:
+                await self._before_succeed(request)
+            except ResearchAgentRuntimeError as exc:
+                await self._record_runtime_error(permit, exc)
+                raise
+            except ValueError as exc:
+                normalized = _runtime_error(
+                    RuntimeErrorKind.PERMANENT,
+                    "runtime_workspace_snapshot_invalid",
+                    "WorkspaceSnapshot 安全校验失败",
+                )
+                await self._record_runtime_error(permit, normalized)
+                raise normalized from exc
+            except Exception as exc:
+                normalized = _runtime_error(
+                    RuntimeErrorKind.TEMPORARY,
+                    "runtime_workspace_snapshot_failed",
+                    "WorkspaceSnapshot 暂时无法提交",
+                )
+                await self._record_runtime_error(permit, normalized)
+                raise normalized from exc
+        if permit is not None and self._execution_control is not None:
+            try:
+                await self._execution_control.succeed(permit, checkpoint_id)
+            except RuntimeExecutionControlError as exc:
+                raise _control_error(exc) from exc
 
     async def _record_runtime_error(
         self,

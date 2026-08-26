@@ -55,4 +55,6 @@ Runtime、两轮离线业务闭环、取消恢复对账、受限 Deep Agents Ada
 RuntimeExecution control。ADR-0007 已选择
 [OpenSandbox 可执行研究 Workspace](decisions/0007-use-opensandbox-executable-workspace.md)，后续按
 OpenSandbox/Lease/WorkspaceSnapshot → 同 Sandbox Browser/下载 → 固定平台 MCP → 平台 Skill → Agent
-Chat UI 的顺序推进。这些后续能力仍是待验证计划，不是已经通过的隔离或安全能力。
+Chat UI 的顺序推进。其中 7.1 已完成实现与离线/临时 PostgreSQL 验证，详见
+[Agent Sandbox Workspace](modules/agent-sandbox-workspace.md)；真实 OpenSandbox 隔离/资源 Smoke 与
+7.2–7.4 能力仍待验证。

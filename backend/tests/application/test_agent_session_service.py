@@ -77,6 +77,26 @@ async def test_post_message_commits_one_scoped_bundle_and_replays_idempotently(
         assert context is not None
         assert context.review_output_id == scenario.matrix.output_id
         assert context.project_index_refs[0].chunk_set_id == scenario.chunk_set_id
+        policy = await agent_repo.get_policy_snapshot(turn.policy_snapshot_id)
+        assert policy is not None
+        assert policy.policy_version == "agent-policy.project-research-workspace.v1"
+        assert policy.allowed_tool_names == (
+            "search_project_chunks",
+            "read_review_evidence_matrix",
+            "ls",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "glob",
+            "grep",
+            "execute",
+        )
+        assert policy.allowed_skill_names == ()
+        assert policy.network_enabled is False
+        assert policy.sandbox_enabled is True
+        assert policy.approval_required is False
+        assert policy.max_model_calls == 8
+        assert policy.max_tool_calls == 12
 
 
 @pytest.mark.asyncio

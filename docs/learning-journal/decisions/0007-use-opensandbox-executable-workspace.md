@@ -11,9 +11,9 @@ Phase 5 切片 1–6 已建立 `AgentSession`、逐轮 `AgentTurnRun`、`Researc
 `StateBackend`，生产 Worker 仍固定为 Fake Runtime，尚未接入真实模型、Sandbox、Browser、MCP、Skill
 或 `WorkspaceSnapshot`。
 
-上述是本 ADR 作出时的基线。切片 7.0 随后已经完成真实 Runtime enablement 的实现，默认仍为 Fake，
-显式 `deep_agents` 模式才装配真实模型与持久 Checkpointer；OpenSandbox、Browser、MCP、Skill 和
-`WorkspaceSnapshot` 仍未在 7.0 接入或验证。
+上述是本 ADR 作出时的基线。切片 7.0 随后完成真实 Runtime enablement；切片 7.1 已完成 OpenSandbox
+薄 Adapter、Session Lease、WorkspaceSnapshot、统一 Tool 预算与 checkpoint pool 的实现和离线/临时
+PostgreSQL 验证。Browser、MCP 和 Skill 尚未接入；真实 OpenSandbox Smoke 尚未运行。
 
 后续能力 Spike 需要允许 Research Agent 在隔离环境中执行 Python 数据处理、生成图表，并让文件工具、
 代码执行和浏览器下载操作同一个 Session Workspace。仅把 Sandbox 当作受限文件后端、同时隐藏
@@ -149,6 +149,49 @@ Slice 7 调整为五个独立、可回退提交：
 - Slice 1 的固定 Policy 仍是单主模型调用且无 Tool。7.0 只启用无 Tool 单 Turn 的真实路径；7.1 前需要
   增加并验证服务端固定 Capability Profile，不能据此宣称真实 Project Tool 研究回路已完成。
 
+### Slice 7.1 已实现的精确边界
+
+- Capability Profile 固定为 `agent-policy.project-research-workspace.v1`：Sandbox 开启、网络/审批关闭，
+  `max_model_calls=8`、`max_tool_calls=12`；Project Tool、文件工具和 `execute` 可用，Browser/MCP/Skill/
+  `task` 关闭；
+- 精确依赖为 `opensandbox==0.1.15` 和 direct `psycopg-pool==3.3.1`。上游无官方 Deep Agents Adapter，
+  因此使用 infrastructure 内薄 `BaseSandbox` Adapter；该 alpha Spike 不宣称生产安全；
+- Worker checkpoint 使用 `AsyncConnectionPool(min_size=1,max_size=4)`，每次 Runtime operation 创建独立
+  Saver/graph；完成后的 collect/reconcile 只读 PostgreSQL control/checkpoint，不创建或连接 Sandbox；
+- Lease 滑动 TTL 10 分钟，generation 最长 60 分钟，1 CPU/2 GiB，命令 60 秒，inline 输出 64 KiB，
+  default-deny network；Lease 记录当前 holder Turn，同 Turn 重试不递增 fence，新 Turn 才抢占；已知
+  Runtime Execution 在 acquire 前离线对账，只有进入执行并产生事件后的失败/取消才标记 DIRTY；
+- 不同 Turn 复用 active 物理 Sandbox 以前，上一 holder 必须具有与 owner/Project/Session/Turn 一致、且
+  等于 Session 当前 latest 的 `STABLE` Snapshot；缺失、仅 `STAGED` 或非 latest 一律轮换 generation，并
+  只从 latest `STABLE` 恢复，防止业务取消、引用校验失败或事务回滚的文件污染下一 Turn；
+- generation 轮换先 create/restore 候选 Sandbox，再以旧 fence CAS Lease；CAS loser 只回收自己的候选，
+  winner 在 Lease 生效后 best-effort 回收旧实例，失败由 Provider TTL 兜底，避免旧观察者误销毁并发续租
+  的有效 Sandbox；
+- Snapshot 只允许 `/workspace` 普通文件，最多 128 个、单文件 10 MiB、总计 50 MiB，校验 path/type/
+  size/content hash/manifest hash；目录跳过，嵌套恢复创建父目录，下载前后均做有界完整性校验；元数据在
+  PostgreSQL，内容寻址 blob 在 Storage；
+- Deep adapter 的可选内部 finalizer 在 RuntimeExecution 成功前只捕获文件并登记不可见的 `STAGED`
+  Snapshot；临时捕获失败保留当前同 Turn Lease 供 checkpoint finalization 重试，永久安全校验失败置
+  DIRTY。Runtime/SDK 回调不得发布稳定版本；
+- `STAGED → STABLE` 只能发生在 AgentTurnExecutor 的业务成功短事务内，并与 assistant/evidence/candidate/
+  event、业务 Run 成功 CAS 和活动 Turn 释放原子提交，同时校验 scope 与 RuntimeExecution 已成功。取消、
+  引用校验或业务 CAS 失败的 `STAGED` 不进入 latest/restore；Runtime success 响应丢失时离线重放后发布
+  同一 `STAGED`，不重复模型/Tool，也不重新取得 Sandbox；该能力通过 SDK-neutral Application Port 注入，
+  不进入公开 `ResearchAgentRuntime` Port；
+- 可执行 Backend 由 Adapter 包成 `CompositeBackend`：OpenSandbox 是 default，Deep Agents 内部
+  conversation history/large result 路由 `StateBackend`；
+- 模型产生 Tool calls 后、Tool node 前统一预留额度；Project Tool、文件 Tool 和 `execute` 各计一次，
+  Project effect 预算不回灌全局计数。新增 checkpoint State 将 graph revision 升为
+  `deep-agent-graph.v3`；
+- 固定 derived image recipe 的 base 为 `opensandbox/chrome` index digest
+  `sha256:507a6c9075c6c588288ce64cab63d43b0b2ef2011e1da2c02b55fdec4c50cc58`，构建时预装固定
+  Python/numpy/pandas/matplotlib/fonts，运行时禁止动态安装；OpenSandbox server 不加入普通 compose，
+  Worker 不获得 Docker Socket。
+
+上述实现通过完全离线的 SDK/graph 测试与临时 PostgreSQL 迁移/CAS 测试。真实 OpenSandbox Server、
+derived image 构建、远端 network/resource/Secret/host isolation 和销毁补偿尚未 Smoke，不能把配置契约
+写成基础设施安全实测结论。
+
 这会把 OpenSandbox `execute`、Session 级 Lease、最小网络/资源边界和 WorkspaceSnapshot 从原 Phase 6
 计划提前到 Phase 5 Spike。Phase 6 仍负责完整 Registry、用户从已审核 Catalog 中选择、OAuth/
 Credential Vault、复杂审批中心、更广网络策略、Prompt Injection/恶意文件专项测试、Agent Chat/noVNC
@@ -191,13 +234,14 @@ Injection 后果；网络策略必须覆盖全部 Sandbox 进程；需要处理 
 
 ## 验证门槛与非声明
 
-本 ADR 记录已接受的计划，不表示以下能力已经实现或验证。每个 Slice 必须分别形成测试和真实 Smoke
-证据：
+本 ADR 的各能力必须分别形成测试和真实 Smoke 证据；已实现的离线契约不能替代未运行的外部基础设施
+验证：
 
 - 7.0：配置/factory/Worker 生命周期和主模型预算可由离线测试验证；真实 Provider Smoke 必须显式
   opt-in、单 Turn、有界且不触发 summarization。当前实现未使用真实 Key 或发出真实请求；
-- 7.1：owner/Session 隔离、稳定 Lease/generation、跨 Turn 复用、TTL/销毁/reconcile、Sandbox 丢失后
-  Snapshot 重建、宿主/Secret 不可见、默认禁网、资源/输出限制、取消后不启动新命令；
+- 7.1：已验证 owner/Session scope、Lease/generation/fence、跨 Turn 复用、Snapshot 重建、默认禁网配置、
+  资源/输出参数、取消 DIRTY、统一预算和离线 collect/reconcile；真实 OpenSandbox 下的宿主/Secret 不可见、
+  网络/资源限制、TTL 销毁和丢失补偿仍需显式 Smoke；
 - 7.2：Browser/CDP 与文件工具指向同一 Sandbox，导航/redirect/egress/下载边界、文件取回和 endpoint
   不泄漏；
 - 7.3：MCP Catalog、Schema 漂移拒绝、stateless 会话、interceptor、预算/取消/输出限制和执行记录；

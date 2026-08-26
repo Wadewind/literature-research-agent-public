@@ -263,6 +263,88 @@ class AgentRuntimeExecutionORM(Base):
     )
 
 
+class AgentSandboxLeaseORM(Base):
+    """Session 唯一的 SDK-neutral 物理 Sandbox Lease 控制记录。"""
+
+    __tablename__ = "agent_sandbox_leases"
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), primary_key=True
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    holder_turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), nullable=False
+    )
+    sandbox_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    image_ref: Mapped[str] = mapped_column(String(500), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    fencing_token: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    generation_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("generation >= 1", name="ck_agent_sandbox_lease_generation"),
+        CheckConstraint("fencing_token >= 1", name="ck_agent_sandbox_lease_fence"),
+        CheckConstraint(
+            "status IN ('active','dirty')", name="ck_agent_sandbox_lease_status"
+        ),
+    )
+
+
+class AgentWorkspaceSnapshotORM(Base):
+    """跨 Turn 可重建的内部工作文件 Manifest；正文位于 Storage。"""
+
+    __tablename__ = "agent_workspace_snapshots"
+    snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), unique=True, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    sandbox_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    files: Mapped[list] = mapped_column(JSONB, nullable=False)
+    total_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_agent_workspace_snapshot_version"),
+        CheckConstraint(
+            "sandbox_generation >= 1",
+            name="ck_agent_workspace_snapshot_generation",
+        ),
+        CheckConstraint(
+            "total_size_bytes BETWEEN 0 AND 52428800",
+            name="ck_agent_workspace_snapshot_total_size",
+        ),
+        CheckConstraint(
+            "status IN ('staged','stable')",
+            name="ck_agent_workspace_snapshot_status",
+        ),
+        Index(
+            "uq_agent_workspace_snapshot_stable_session_version",
+            "session_id",
+            "version",
+            unique=True,
+            postgresql_where=status == "stable",
+        ),
+    )
+
+
 class AgentArtifactCandidateORM(Base):
     """Runtime 候选产物；不是正式 Artifact。"""
 

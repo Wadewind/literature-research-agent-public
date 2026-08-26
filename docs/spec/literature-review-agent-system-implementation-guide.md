@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v7
+> 状态：Proposed v8
 >
 > 日期：2026-08-26
 >
@@ -30,6 +30,10 @@
 > Checkpointer、Project Context 和 RuntimeExecution control。`max_model_calls` 只覆盖 checkpoint 持久的
 > 主 Agent Loop，不覆盖 summarization 内部重试或 Provider 在途窗口；预算 State 只保留当前 Turn，graph
 > revision 升为 `deep-agent-graph.v2` 并拒绝恢复旧 v1；7.1 前仍需固定 Capability Profile。
+>
+> v8 变更：Slice 7.1 已实现固定 Capability Profile、OpenSandbox 0.1.15 薄 Adapter、Session Lease/
+> generation/fence、`WorkspaceSnapshot`、统一 Tool 预算和 checkpoint pool/per-operation graph；graph
+> revision 升为 `deep-agent-graph.v3`。真实 OpenSandbox Smoke 尚未运行，Browser/MCP/Skill 继续后置。
 
 ## 1. 文档用途
 
@@ -1496,14 +1500,15 @@ ContextSnapshot 精确下推 PaperVersion/ChunkSet，验证指定 Matrix 的 Out
 Enablement 的实现：生产 Worker 默认保持 Fake，只有显式 `deep_agents` 才使用
 `langchain-deepseek==1.1.0` 构造固定关闭 thinking 的 `deepseek-v4-flash`，并装配既有持久
 Checkpointer、Project Context 与 RuntimeExecution control；真实模式缺少专用 Key 时启动前失败。
-本切片尚未执行真实 Provider Smoke。后续继续按 ADR-0007 依次验证 OpenSandbox/Lease/
-WorkspaceSnapshot、同 Sandbox Browser/下载、固定平台 MCP 和平台 Skill。
+本切片尚未执行真实 Provider Smoke。切片 7.1 随后已实现 OpenSandbox/Lease/WorkspaceSnapshot 的
+SDK-neutral 边界、统一 Tool 预算与每 operation Saver/graph；后续继续按 ADR-0007 验证同 Sandbox
+Browser/下载、固定平台 MCP 和平台 Skill。真实 OpenSandbox Smoke 仍未运行。
 
 `PolicySnapshot.max_model_calls` 在 7.0 精确定义为逐 Turn 主 Agent Loop 模型调用预算：调用前预留计数并
 随同步 checkpoint 持久化，已确认 checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确定窗口，
 也不覆盖 `SummarizationMiddleware._summary_model.with_retry()` 最多 3 次内部 Provider 尝试，所以当前
-不是完整费用硬上限。Slice 1 固定 Policy 仍为一次主调用、无 Tool；7.1 前必须实现并验证服务端固定
-Capability Profile，才能宣称真实 Project Tool 回路可用。
+不是完整费用硬上限。Slice 7.1 已用固定 Capability Profile 把 Project、文件和 `execute` Tool 纳入
+统一逐 Turn 预算；这仍不等于真实 Provider/OpenSandbox 回路或费用上限已经 Smoke。
 
 #### 需要学习和验证
 
@@ -1741,17 +1746,17 @@ Agent Extension 另需覆盖：
 - 是否在 Phase 5 Spike 通过后进入正式 Agent 产品；
 - Deep Agents 的升级策略和兼容范围（首个 Adapter 版本已固定为 `0.7.8`）；
 - ADR-0006 已固定 ARQ Worker 内 Runtime；仍需确定真实 Provider/Sandbox 的进程资源和部署参数；
-- SDK Checkpoint、Store 和压缩策略的精确生命周期，以及 OpenSandbox Lease 已固定所有权下的 TTL、清理
-  和 generation 实现参数；
+- SDK Checkpoint/Store/压缩的升级策略，以及已固定 TTL/generation/fence 后的孤儿 Lease 清理；
 - Browser、MCP、Tool、网络和下载策略；
 - 首批平台 Research Skills 及其版本治理；
-- OpenSandbox 的最终部署参数、镜像 digest、TTL 与资源默认值；
+- OpenSandbox derived image 发布 digest、Server 部署和已固定 TTL/资源参数的真实强制效果；
 - Phase 5 `execute` Spike 通过后，哪些能力可以进入用户可见产品和审批矩阵。
 
 Agent 产品形态和核心映射不再属于推迟项：ADR-0005 已固定 Project-scoped 持续研究对话、
 `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1`，以及每轮 ContextSnapshot 和
 PolicySnapshot。正常 Turn 只向同一 Thread 追加新消息、由 `create_deep_agent` 原生维护模型工作上下文也
-已固定；精确压缩阈值、OpenSandbox Backend 组装细节和损坏重建协议仍由 Spike 决定。其余决定应基于 Phase 5 的真实实验
+已固定；精确压缩阈值仍由后续实验决定。OpenSandbox Backend 组装和损坏重建协议已由 7.1 固定，其余
+决定应基于 Phase 5 的真实实验
 和测试，而不是在尚未实现基础链路时猜测。Sandbox Provider、Session 级短 TTL Lease、固定依赖的
 Sandbox `execute`、默认禁网和 Slice 7 顺序已由 ADR-0007 固定，不再属于推迟项；精确版本和部署参数
 仍必须在新增依赖前单独核对。

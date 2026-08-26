@@ -248,7 +248,7 @@ class _ExistingRunningRuntime(FakeResearchAgentRuntime):
     def __init__(self, session_id: str, turn_run_id: str) -> None:
         super().__init__()
         self.execute_calls = 0
-        self._reconciliation = RuntimeTurnReconciliation(
+        self._existing_reconciliation = RuntimeTurnReconciliation(
             turn_run_id=turn_run_id,
             state=RuntimeExecutionState.RUNNING,
             session_binding=RuntimeSessionBinding(
@@ -270,8 +270,8 @@ class _ExistingRunningRuntime(FakeResearchAgentRuntime):
         )
 
     async def reconcile_turn(self, turn_run_id):
-        assert turn_run_id == self._reconciliation.turn_run_id
-        return self._reconciliation
+        assert turn_run_id == self._existing_reconciliation.turn_run_id
+        return self._existing_reconciliation
 
     def execute_turn(self, request):
         self.execute_calls += 1
@@ -360,6 +360,13 @@ async def test_executor_calls_runtime_after_read_transaction_and_commits_result_
     )
     before_execution = tracked.closed_transactions
     runtime = _AssertingRuntime(tracked)
+    published: list[dict[str, object]] = []
+
+    class _Publisher:
+        async def publish_for_success(self, **kwargs):
+            published.append(kwargs)
+            return True
+
     executor = AgentTurnExecutor(
         session_factory=tracked,
         run_repo_factory=SqlalchemyRunRepository,
@@ -368,6 +375,8 @@ async def test_executor_calls_runtime_after_read_transaction_and_commits_result_
         evidence_repo_factory=SqlalchemyEvidenceRepository,
         claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=runtime,
+        workspace_snapshot_publisher_factory=lambda session: _Publisher(),
+        workspace_snapshot_required=True,
     )
     dispatcher = RunDispatcher(
         tracked,
@@ -398,13 +407,22 @@ async def test_executor_calls_runtime_after_read_transaction_and_commits_result_
     messages = await service.list_messages(scenario.actor, agent_session.session_id)
     assert view.run.status.value == "succeeded"
     assert [message.role.value for message in messages] == ["user", "assistant"]
-    assert messages[-1].claim_set_id is None
+    assert messages[-1].claim_set_id is not None
     assert len(view.candidates) == 1
     async with scenario.factory() as session:
         events = await SqlalchemyEventRepository(session).list_by_run(submitted.run_id)
     assert [event.event_type for event in events].count("agent_artifact_staged") == 1
     succeeded = next(event for event in events if event.event_type == "agent_turn_succeeded")
     assert succeeded.payload["candidate_count"] == 1
+    assert published == [
+        {
+            "owner_id": scenario.actor.owner_id,
+            "project_id": scenario.project.project_id,
+            "session_id": agent_session.session_id,
+            "turn_run_id": submitted.run_id,
+            "required": True,
+        }
+    ]
 
 
 @pytest.mark.asyncio

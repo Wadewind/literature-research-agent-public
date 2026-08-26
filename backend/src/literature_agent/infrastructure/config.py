@@ -53,6 +53,11 @@ _DEFAULT_RESEARCH_RUNTIME_BACKEND = "fake"
 _DEFAULT_RESEARCH_MODEL_BASE_URL = "https://api.deepseek.com"
 _DEFAULT_RESEARCH_MODEL = "deepseek-v4-flash"
 _DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS = 2048
+_DEFAULT_RESEARCH_SANDBOX_DOMAIN = "127.0.0.1:8080"
+_DEFAULT_RESEARCH_SANDBOX_PROTOCOL = "http"
+_DEFAULT_RESEARCH_SANDBOX_IMAGE = (
+    "agent-service/research-agent-sandbox:phase5-7.1"
+)
 # arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。
 _DEFAULT_ARXIV_BACKEND = "fake"
 _DEFAULT_WORKER_METRICS_PORT = 8001
@@ -115,6 +120,10 @@ class Settings:
     research_model_max_output_tokens: int = field(
         default=_DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS
     )
+    research_sandbox_domain: str = field(default=_DEFAULT_RESEARCH_SANDBOX_DOMAIN)
+    research_sandbox_protocol: str = field(default=_DEFAULT_RESEARCH_SANDBOX_PROTOCOL)
+    research_sandbox_api_key: str | None = field(default=None, repr=False)
+    research_sandbox_image: str = field(default=_DEFAULT_RESEARCH_SANDBOX_IMAGE)
     arxiv_backend: str = field(default=_DEFAULT_ARXIV_BACKEND)
     worker_metrics_port: int = field(default=_DEFAULT_WORKER_METRICS_PORT)
 
@@ -223,6 +232,10 @@ class Settings:
         research_model_api_key: str | None = None
         research_model = _DEFAULT_RESEARCH_MODEL
         research_model_max_output_tokens = _DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS
+        research_sandbox_domain = _DEFAULT_RESEARCH_SANDBOX_DOMAIN
+        research_sandbox_protocol = _DEFAULT_RESEARCH_SANDBOX_PROTOCOL
+        research_sandbox_api_key: str | None = None
+        research_sandbox_image = _DEFAULT_RESEARCH_SANDBOX_IMAGE
         if research_runtime_backend == "deep_agents":
             research_model_api_key = os.getenv("AGENT_RESEARCH_MODEL_API_KEY") or None
             research_model_base_url = os.getenv(
@@ -252,6 +265,22 @@ class Settings:
                 raise ValueError(
                     "AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须为正整数"
                 )
+            research_sandbox_domain = os.getenv(
+                "AGENT_RESEARCH_SANDBOX_DOMAIN", _DEFAULT_RESEARCH_SANDBOX_DOMAIN
+            )
+            research_sandbox_protocol = os.getenv(
+                "AGENT_RESEARCH_SANDBOX_PROTOCOL", _DEFAULT_RESEARCH_SANDBOX_PROTOCOL
+            )
+            if research_sandbox_protocol not in {"http", "https"}:
+                raise ValueError("AGENT_RESEARCH_SANDBOX_PROTOCOL 必须为 http 或 https")
+            research_sandbox_api_key = (
+                os.getenv("AGENT_RESEARCH_SANDBOX_API_KEY") or None
+            )
+            research_sandbox_image = os.getenv(
+                "AGENT_RESEARCH_SANDBOX_IMAGE", _DEFAULT_RESEARCH_SANDBOX_IMAGE
+            )
+            if not research_sandbox_domain.strip() or not research_sandbox_image.strip():
+                raise ValueError("Research Sandbox domain/image 不能为空")
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -298,6 +327,10 @@ class Settings:
             research_model_api_key=research_model_api_key,
             research_model=research_model,
             research_model_max_output_tokens=research_model_max_output_tokens,
+            research_sandbox_domain=research_sandbox_domain,
+            research_sandbox_protocol=research_sandbox_protocol,
+            research_sandbox_api_key=research_sandbox_api_key,
+            research_sandbox_image=research_sandbox_image,
             arxiv_backend=os.getenv("AGENT_ARXIV_BACKEND", _DEFAULT_ARXIV_BACKEND),
             worker_metrics_port=worker_metrics_port,
         )

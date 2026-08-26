@@ -16,11 +16,12 @@ Context 之后增加一个独立的 Runtime 部署与崩溃恢复门槛，详见
 RuntimeExecution lease/fencing 控制同一 Execution 的跨进程恢复，并显式采用同步 checkpoint
 durability；切片 6 已完成实现与真实 OS 进程验收。
 2026-08-26 又由 ADR-0007 选择 OpenSandbox 作为 Slice 7 的远程可执行 Workspace，并决定在每个
-AgentSession/SDK Thread 专属的短 TTL Lease 中向模型开放 Sandbox `execute`。这是待实现、待验证的
-Slice 7 契约，不表示当前 Worker 已接入 OpenSandbox 或已经通过隔离/网络/资源安全验证。
+AgentSession/SDK Thread 专属的短 TTL Lease 中向模型开放 Sandbox `execute`。
 切片 7.0“Real Deep Agent Runtime Enablement”已完成实现：生产 Worker
 默认继续使用 Fake，只有显式选择 `deep_agents` 才装配固定 DeepSeek 模型、持久 Checkpointer、Project
-Context 与 RuntimeExecution control；本切片没有调用真实 Provider，也没有进入 OpenSandbox 等 7.1 能力。
+Context 与 RuntimeExecution control。切片 7.1“OpenSandbox/Lease/WorkspaceSnapshot”已于 2026-08-26
+完成实现与离线/临时 PostgreSQL 验证；尚未运行真实 OpenSandbox Smoke，不能宣称远端隔离、资源限制或
+镜像运行已经验证。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -477,8 +478,9 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    - **7.0 Real Deep Agent Runtime Enablement（已完成）**：接入固定 Provider/
      `BaseChatModel` factory、Secret/费用边界和 Worker `fake | deep_agents` 显式配置；默认保持 Fake；
      真实模式复用既有持久 Checkpointer、Project Context 与 RuntimeExecution control；
-   - **7.1 OpenSandbox/Lease/WorkspaceSnapshot**：验证 Session 级短 TTL Lease、可执行默认 Backend、
-     隔离文件与命令、物理 Sandbox 生命周期、Snapshot 取回和逻辑 Workspace 重建；
+   - **7.1 OpenSandbox/Lease/WorkspaceSnapshot（已完成实现）**：验证 Session 级短 TTL Lease、可执行默认
+     Backend、隔离文件与命令、物理 Sandbox 生命周期、Snapshot 取回和逻辑 Workspace 重建；真实
+     OpenSandbox Smoke 仍须显式 opt-in；
    - **7.2 Browser/下载**：验证同一 Sandbox Chromium/CDP、受控导航、统一 egress、下载与来源/文件边界；
    - **7.3 MCP**：验证固定、平台维护的只读 `search_arxiv_metadata` MCP、Catalog、Schema/hash 和
      interceptor；
@@ -709,6 +711,65 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - 代码与边界详见
   [`real-deep-agent-runtime-enablement.md`](../modules/real-deep-agent-runtime-enablement.md)。
 
+切片 7.1 实现证据（2026-08-26）：
+
+- 服务端固定 `agent-policy.project-research-workspace.v1`：Sandbox 开启、网络和审批关闭，主模型预算 8、
+  统一 Tool 预算 12；允许 Project Tool、文件工具与 `execute`，Browser/MCP/Skill/子 Agent 关闭；
+- 精确新增 `opensandbox==0.1.15`，解析只新增该包且未升级其他包；把已锁定的
+  `psycopg-pool==3.3.1` 提升为 direct dependency。上游没有官方 OpenSandbox/Deep Agents Adapter，
+  本项目通过 infrastructure 内薄 `BaseSandbox` Adapter 隔离 SDK；
+- 每个 Session 最多一个 active Lease，滑动 TTL 10 分钟、generation 最长 60 分钟、1 CPU/2 GiB、命令
+  60 秒、inline 输出 64 KiB、网络 default-deny；generation/fencing CAS 阻止旧执行推进 Snapshot，失败或
+  取消标记 DIRTY，下一 Turn 轮换并恢复最近 stable Snapshot；Lease 记录当前 holder Turn，同一 Turn 重试
+  保留 fence，新 Turn 才递增；已知 Execution 在 acquire 前离线对账，pre-event duplicate 不污染 winner；
+- 跨 Turn 复用 active 物理 Sandbox 以业务发布的 `STABLE` 为门槛：上一 holder 的 Snapshot 必须通过
+  owner/Project/Session/Turn scope 校验，并且就是 Session 当前 latest `STABLE`；缺失、仅 `STAGED` 或非
+  latest 时轮换 generation，只恢复 latest `STABLE`。同 Turn checkpoint/finalization retry 仍可复用当前
+  Lease，业务取消、引用校验失败和事务回滚的物理文件不能进入下一 Turn；
+- generation 轮换遵循 create/restore → Lease fencing CAS → best-effort destroy old：CAS loser 只销毁自己的
+  候选 Sandbox，不能误销毁被并发续租的旧实例；winner 的旧实例回收失败不撤销新 Lease，由 Provider TTL
+  兜底；
+- `WorkspaceSnapshot` 仅接受 `/workspace` 普通文件，限制 128 文件、单文件 10 MiB、总计 50 MiB，并
+  校验规范路径、类型、排序、size、内容 SHA-256 与 Manifest hash；元数据在 PostgreSQL，内容寻址 blob
+  复用 Storage；正常目录会跳过，嵌套恢复先创建父目录，同步 Provider 文件 I/O 从事件循环卸载；下载前
+  校验声明上限、下载后校验完整响应集合；重复完成/唯一约束竞态返回相同 Turn 的既有 Snapshot；
+- 真实 Deep adapter 在形成 Runtime 成功终态前调用内部 Workspace finalizer，只取回文件、写入内容寻址
+  blob 并登记不可见的 `STAGED` Snapshot；随后才执行 `RuntimeExecution.succeed` 并发出 `COMPLETED`。
+  `STAGED` 不等于可恢复的稳定版本；只有 AgentTurnExecutor 写入 assistant/evidence/candidate/event、将业务
+  Run CAS 为 `SUCCEEDED` 并释放活动 Turn 的同一短事务，才会在校验 scope 与 RuntimeExecution 成功后将其
+  发布为 `STABLE`。Fake Runtime 不要求 Snapshot，Deep 模式缺少 `STAGED` 则整个业务成功事务回滚；
+- 临时 Snapshot 捕获失败保留同 Turn Lease 并沿已成功 checkpoint 重试，永久 Manifest 失败 fail-closed/
+  置 DIRTY；Runtime success 响应丢失时离线重放后由业务事务发布既有 `STAGED`，不重建 Sandbox，也不重复
+  模型/Tool。取消、引用校验或业务 CAS 失败留下的 `STAGED` 对 latest/restore 不可见；
+- Worker 使用 `AsyncConnectionPool(min_size=1,max_size=4)`，每次 Runtime operation 创建独立
+  `AsyncPostgresSaver` 与 graph。可执行 Backend 自动包装为
+  `CompositeBackend(default=OpenSandboxBackend, routes={internal: StateBackend})`；正常文件工具与
+  `execute` 落到同一 Sandbox，conversation history/large results 不进入 `/workspace` Manifest；
+- Deep Agents `after_model` middleware 在 Tool node 前一次性预留全部 Tool calls。Project Tool、内置文件
+  Tool 和 `execute` 共用 `max_tool_calls`，Project effect 计数不回灌全局额度；因此 graph revision 升为
+  `deep-agent-graph.v3`；测试证明额度 2 可各执行一次 Project/execute，额度 1 时 execute 副作用为零；
+- 真实 `create_deep_agent` + 共享内存 checkpoint 测试证明 Sandbox 关闭后，使用新 Saver 和离线
+  `StateBackend` graph 仍可 collect/reconcile，且不 acquire Sandbox；
+- 定向 Lease/Workspace/OpenSandbox/Worker/checkpoint 离线回归为 `51 passed in 1.83s`；Deep Adapter
+  统一预算扩大回归为 `35 passed in 1.90s`；临时 PostgreSQL Repository 与迁移往返为
+  `5 passed in 8.44s`；`ruff check` 通过，`pyright` 为 0 errors；
+- 主审并发与文件完整性加固后的定向回归为 `24 passed in 1.35s`，完整非集成回归为
+  `1001 passed, 4 skipped in 707.51s`，临时 PostgreSQL Repository/迁移复验为
+  `5 passed in 10.75s`；本切片范围 Ruff 通过，修改文件 Pyright 为 0 errors；
+- Snapshot finalizer 顺序与失败恢复定向回归为 `61 passed in 2.86s`；加固后的完整非集成回归为
+  `1007 passed, 4 skipped in 556.65s`，RuntimeExecution control/Workspace Repository PostgreSQL 子集为
+  `2 passed in 7.17s`；
+- 两阶段 Snapshot 发布边界加固后的相关定向回归为 `101 passed in 56.90s`，PostgreSQL migration/
+  repository 为 `5 passed in 8.47s`，完整非集成回归为
+  `1009 passed, 4 skipped in 557.41s`；
+- 跨 Turn `STABLE` 复用门槛与 Lease 续租/轮换 CAS 回收顺序的最终定向回归为
+  `19 passed in 1.02s`，最终完整非集成回归为 `1013 passed, 4 skipped in 596.88s`；
+- 固定镜像 recipe 使用已核实的 `opensandbox/chrome` index digest，构建时预装固定 Python 数据分析依赖；
+  OpenSandbox server 保持外部显式前提，不加入普通 compose，Worker 不获得 Docker Socket；
+- 本切片没有运行真实 OpenSandbox Smoke，因此上述 Provider 参数的**装配与离线契约**已验证，但镜像构建、
+  远端默认禁网、CPU/内存、宿主/Secret 不可见、TTL 销毁与丢失恢复尚不是实测安全结论；详见
+  [`agent-sandbox-workspace.md`](../modules/agent-sandbox-workspace.md)。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -735,9 +796,11 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 1. 固定 Browser 测试域名和首个平台 Research Skill 的精确内容；
 2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
    逐命令审批；
-3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact；
-4. OpenSandbox 精确版本、固定镜像 digest、TTL/资源默认值。真实 Provider Adapter 已在 7.0 固定为
-   `langchain-deepseek==1.1.0` 与 `deepseek-v4-flash`。
+3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
+
+OpenSandbox Python SDK 已在 7.1 固定为 `opensandbox==0.1.15`；固定 base image digest、10 分钟 TTL、
+60 分钟 generation、1 CPU/2 GiB、60 秒命令与 64 KiB inline 输出已经实现。derived image 的发布 digest
+和真实 OpenSandbox Smoke 结果仍需在部署验证时记录。
 
 切片 6 的部署、数据库和恢复决策已由 ADR-0006 固化：ARQ Worker 内运行、当前 PostgreSQL/checkpoint
 schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runtime/Graph revision 才自动恢复。
@@ -750,8 +813,9 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - Sandbox 不能自动消除 Prompt Injection 或网络外泄，平台策略与 Secret 隔离仍不可缺少；
 - Session 级并发首版采用单活动 Turn，不提供分支、排队或多人协作；
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
-- ADR-0007 已选择 OpenSandbox 并允许隔离 Sandbox `execute`，但在 7.1/7.2 实际完成前，不宣称 Lease、
-  默认禁网、统一 egress、资源限制、WorkspaceSnapshot 重建、Browser/CDP 或 Artifact 取回已验证；
+- 7.1 已用离线 Adapter/真实 PostgreSQL 验证 Lease、fence、默认禁网配置和 WorkspaceSnapshot 重建契约，
+  但未运行真实 OpenSandbox Smoke；不得据此宣称远端隔离、资源限制或宿主/Secret 不可见已实测。Browser/
+  CDP、统一固定 egress、下载与 Artifact 取回仍属于 7.2；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
 - Worker 生产默认仍使用 Fake Runtime，但切片 7.0 已增加显式 `deep_agents` 模式并装配真实 Provider、
   持久 Checkpointer、Project Context 与 RuntimeExecution control；本切片只证明无 Tool、单 Turn 的真实
@@ -762,14 +826,11 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
   RUNNING 并发拒绝、temporary 同 effect 重试与平台 `max_tool_calls` 预算；但 Tool 外部效果完成后、
   ToolExecution 成功记录提交前的崩溃窗口仍不宣称 Exactly Once，orphan RUNNING 当前 fail-safe 拒绝
   自动重放，需按未来具体外部 Tool 设计幂等、查询或补偿；
-- 切片 7.0 已对主 Agent Loop 强制 checkpoint 持久的逐 Turn `max_model_calls`；该值不覆盖
-  `SummarizationMiddleware` 最多 3 次内部 Provider 尝试，也不消除已在途 Provider 请求的不确定窗口。
-  其他 Deep Agents 内置/自定义 Tool 的统一动态预算尚未实现；
-- Slice 1 现有固定 Policy 仍为 `max_model_calls=1`、`max_tool_calls=0`、空 Tool allowlist；7.1 开始前必须
-  实现并验证服务端固定 Capability Profile（至少允许两次主模型调用，并授权 Project Tool 与 Tool 预算），
-  不能把 7.0 的 Provider 装配描述为已完成真实 Project Context 研究回路；
-- 当前 Worker 复用一个 singleton `AsyncPostgresSaver` 和单 `AsyncConnection`。Saver 实例锁保证同进程
-  协程正确性，但 checkpoint I/O 串行且有单连接故障面；7.1 再验证 pool + per-execution factory；
+- 切片 7.1 已对 Project、文件和 `execute` Tool 强制 checkpoint 持久的统一逐 Turn `max_tool_calls`，但
+  `max_model_calls` 仍不覆盖 `SummarizationMiddleware` 最多 3 次内部 Provider 尝试，也不消除已在途
+  Provider/Tool 请求的不确定窗口；
+- Worker 已改为 1..4 连接的 checkpoint pool，并为每个 Runtime operation 创建独立 Saver/graph；这解决
+  singleton Saver 的全局实例锁串行，不代表数据库容量、性能或故障切换已完成生产评测；
 - Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界
   聚合；它没有读取 Phase 3 Strategy dimensions 后重跑完整 Matrix validator；
 - 切片 3 的取消证明平台协调层停止消费 Fake 流、调用 Runtime cancel 并拒绝业务结果；尚未证明真实模型、

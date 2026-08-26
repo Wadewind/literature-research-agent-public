@@ -6,6 +6,11 @@ Phase 5 切片 7.0 把此前只能由测试显式依赖注入构造的 `DeepAgen
 同时保证默认开发、测试和演示仍使用离线 `FakeResearchAgentRuntime`。模块只解决真实 Provider 与既有恢复
 基础设施的生产组合，不接 OpenSandbox、Browser、MCP、Skill 或 UI。
 
+> 后续状态：Slice 7.1 已用固定 Capability Profile、OpenSandbox/WorkspaceSnapshot 和
+> `AsyncConnectionPool` + per-operation Saver/graph 替代本模块记录的单连接/无 Sandbox 限制；本页其余内容
+> 保留为 7.0 当时的实现证据。详见
+> [`agent-sandbox-workspace.md`](agent-sandbox-workspace.md)。
+
 ## 边界和执行流程
 
 ```text

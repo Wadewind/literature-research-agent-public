@@ -304,6 +304,11 @@ class FakeResearchAgentRuntime:
         )
 
     def _response_for(self, request: RuntimeTurnRequest) -> str:
+        if {
+            "search_project_chunks",
+            "read_review_evidence_matrix",
+        } & set(request.policy_snapshot.allowed_tool_names):
+            return "当前授权上下文证据不足。"
         digest = hashlib.sha256(
             (
                 f"{request.session_id}:{request.turn_run_id}:"

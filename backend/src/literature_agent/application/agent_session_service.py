@@ -49,7 +49,7 @@ from literature_agent.domain.research_agent import (
     create_agent_session,
     create_agent_turn_run,
     create_context_snapshot,
-    create_policy_snapshot,
+    create_project_research_workspace_policy_snapshot,
 )
 from literature_agent.domain.review import ReviewOutputType
 from literature_agent.domain.run import Run, RunStatus, RunType, create_run
@@ -246,13 +246,11 @@ class AgentSessionService[TSession: Session]:
                 project_index_refs=tuple(refs),
                 review_output_id=review_output_id,
             )
-            policy = create_policy_snapshot(
+            policy = create_project_research_workspace_policy_snapshot(
                 owner_id=actor.owner_id,
                 project_id=project.project_id,
                 session_id=session_id,
                 turn_run_id=run.run_id,
-                max_model_calls=1,
-                max_tool_calls=0,
             )
             turn = create_agent_turn_run(
                 turn_run_id=run.run_id,

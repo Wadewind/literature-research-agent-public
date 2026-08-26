@@ -46,6 +46,10 @@ def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypa
     monkeypatch.setenv("AGENT_RESEARCH_MODEL_API_KEY", "agent-secret-value")
     monkeypatch.setenv("AGENT_RESEARCH_MODEL", "deepseek-v4-flash")
     monkeypatch.setenv("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "1536")
+    monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_DOMAIN", "sandbox.example:443")
+    monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_PROTOCOL", "https")
+    monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_API_KEY", "sandbox-secret-value")
+    monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_IMAGE", "research-sandbox:fixed")
     monkeypatch.setenv("AGENT_CHAT_API_KEY", "review-secret-value")
 
     settings = Settings.from_env()
@@ -55,7 +59,12 @@ def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypa
     assert settings.research_model_api_key == "agent-secret-value"
     assert settings.research_model == "deepseek-v4-flash"
     assert settings.research_model_max_output_tokens == 1536
+    assert settings.research_sandbox_domain == "sandbox.example:443"
+    assert settings.research_sandbox_protocol == "https"
+    assert settings.research_sandbox_api_key == "sandbox-secret-value"
+    assert settings.research_sandbox_image == "research-sandbox:fixed"
     assert "agent-secret-value" not in repr(settings)
+    assert "sandbox-secret-value" not in repr(settings)
     assert "review-secret-value" not in repr(settings)
 
 
@@ -86,6 +95,7 @@ def test_research_agent_real_mode_does_not_borrow_chat_key(monkeypatch) -> None:
         ("AGENT_RESEARCH_MODEL", "deepseek-chat"),
         ("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "0"),
         ("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "invalid"),
+        ("AGENT_RESEARCH_SANDBOX_PROTOCOL", "ftp"),
     ],
 )
 def test_research_agent_real_mode_rejects_unbounded_or_drifted_model_settings(

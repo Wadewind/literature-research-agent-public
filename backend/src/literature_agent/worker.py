@@ -13,7 +13,7 @@ import hashlib
 import logging
 import os
 import socket
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import (
     AbstractAsyncContextManager,
     AsyncExitStack,
@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
 from arq.worker import func, run_worker
+from deepagents.backends import BackendProtocol
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -45,6 +46,7 @@ from literature_agent.application.ports.embedding_model import EmbeddingModel
 from literature_agent.application.ports.event_notifier import EventNotifier
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntime,
+    RuntimeTurnRequest,
 )
 from literature_agent.application.project_research_context_service import (
     ProjectResearchContextService,
@@ -84,6 +86,12 @@ from literature_agent.infrastructure.agent.deepseek_research_model import (
 )
 from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
     FakeResearchAgentRuntime,
+)
+from literature_agent.infrastructure.agent.opensandbox_backend import OpenSandboxProvider
+from literature_agent.infrastructure.agent.sandbox_workspace import SandboxWorkspaceManager
+from literature_agent.infrastructure.agent.sandboxed_research_agent_runtime import (
+    CheckpointExecutionFactory,
+    SandboxedResearchAgentRuntime,
 )
 from literature_agent.infrastructure.arxiv import HttpxArxivGateway
 from literature_agent.infrastructure.config import Settings
@@ -166,6 +174,10 @@ from literature_agent.infrastructure.persistence.run_repository import (
 from literature_agent.infrastructure.persistence.runtime_execution_repository import (
     SqlalchemyRuntimeExecutionRepository,
 )
+from literature_agent.infrastructure.persistence.sandbox_workspace_repository import (
+    SqlalchemySandboxWorkspaceRepository,
+    SqlalchemyWorkspaceSnapshotPublisher,
+)
 from literature_agent.infrastructure.persistence.tool_execution_repository import (
     SqlalchemyToolExecutionRepository,
 )
@@ -174,7 +186,10 @@ from literature_agent.infrastructure.queue.valkey_event_notifier import (
     ValkeyEventNotifier,
 )
 from literature_agent.infrastructure.storage.local_storage import LocalFileStorage
-from literature_agent.infrastructure.workflow.postgres_checkpoint import PostgresCheckpointStore
+from literature_agent.infrastructure.workflow.postgres_checkpoint import (
+    PostgresCheckpointPool,
+    PostgresCheckpointStore,
+)
 from literature_agent.metrics import (
     metrics,
     start_worker_metrics_server,
@@ -315,7 +330,8 @@ def _build_research_agent_runtime(
     session_factory: Callable[[], AbstractAsyncContextManager[Any]],
     retriever: Retriever,
     event_notifier: EventNotifier,
-    checkpointer: BaseCheckpointSaver[str] | None,
+    checkpoint_factory: CheckpointExecutionFactory | None,
+    workspace_manager: SandboxWorkspaceManager | None,
     runtime_owner_id: str,
     model: BaseChatModel | None = None,
 ) -> ResearchAgentRuntime:
@@ -326,8 +342,8 @@ def _build_research_agent_runtime(
         raise ValueError(
             f"未知 research_runtime_backend: {settings.research_runtime_backend}"
         )
-    if checkpointer is None:
-        raise ValueError("deep_agents 模式缺少持久 LangGraph Checkpointer")
+    if checkpoint_factory is None or workspace_manager is None:
+        raise ValueError("deep_agents 模式缺少 Checkpoint pool 或 Sandbox Workspace")
     if settings.research_model_api_key is None:
         raise ValueError("deep_agents 模式必须设置 AGENT_RESEARCH_MODEL_API_KEY")
     if model is None:
@@ -359,12 +375,25 @@ def _build_research_agent_runtime(
         chunk_repo_factory=SqlalchemyChunkRepository,
         event_notifier=event_notifier,
     )
-    return DeepAgentsResearchAgentRuntime(
-        model=model,
-        checkpointer=checkpointer,
-        project_context=project_context,
-        execution_control=execution_control,
-        runtime_owner_id=runtime_owner_id,
+    def runtime_factory(
+        checkpointer: BaseCheckpointSaver[str],
+        backend: BackendProtocol,
+        before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None,
+    ) -> ResearchAgentRuntime:
+        return DeepAgentsResearchAgentRuntime(
+            model=model,
+            checkpointer=checkpointer,
+            backend=backend,
+            project_context=project_context,
+            execution_control=execution_control,
+            runtime_owner_id=runtime_owner_id,
+            before_succeed=before_succeed,
+        )
+
+    return SandboxedResearchAgentRuntime(
+        checkpoint_factory=checkpoint_factory,
+        runtime_factory=runtime_factory,
+        workspace_manager=workspace_manager,
     )
 
 
@@ -377,14 +406,15 @@ async def _open_research_agent_runtime(
     event_notifier: EventNotifier,
     runtime_owner_id: str,
 ):
-    """持有真实模型与单连接 Checkpointer 的 Worker 生命周期。"""
+    """持有真实模型、Checkpoint pool 与 Sandbox 配置的 Worker 生命周期。"""
     if settings.research_runtime_backend == "fake":
         yield _build_research_agent_runtime(
             settings,
             session_factory=session_factory,
             retriever=retriever,
             event_notifier=event_notifier,
-            checkpointer=None,
+            checkpoint_factory=None,
+            workspace_manager=None,
             runtime_owner_id=runtime_owner_id,
         )
         return
@@ -402,14 +432,27 @@ async def _open_research_agent_runtime(
         timeout_seconds=settings.model_timeout_seconds,
         max_retries=settings.model_max_retries,
     )
+    workspace_manager = SandboxWorkspaceManager(
+        repository=SqlalchemySandboxWorkspaceRepository(session_factory),
+        provider=OpenSandboxProvider(
+            domain=settings.research_sandbox_domain,
+            protocol=settings.research_sandbox_protocol,
+            api_key=settings.research_sandbox_api_key,
+        ),
+        storage=LocalFileStorage(settings.storage_root),
+        image_ref=settings.research_sandbox_image,
+    )
     try:
-        async with PostgresCheckpointStore(settings.database_url).open() as checkpointer:
+        async with PostgresCheckpointPool(
+            settings.database_url, min_size=1, max_size=4
+        ).open() as checkpoint_factory:
             yield _build_research_agent_runtime(
                 settings,
                 session_factory=session_factory,
                 retriever=retriever,
                 event_notifier=event_notifier,
-                checkpointer=checkpointer,
+                checkpoint_factory=checkpoint_factory,
+                workspace_manager=workspace_manager,
                 runtime_owner_id=runtime_owner_id,
                 model=model,
             )
@@ -725,6 +768,8 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         claim_set_repo_factory=SqlalchemyClaimSetRepository,
         runtime=research_agent_runtime,
         event_notifier=event_notifier,
+        workspace_snapshot_publisher_factory=SqlalchemyWorkspaceSnapshotPublisher,
+        workspace_snapshot_required=settings.research_runtime_backend == "deep_agents",
     )
     agent_turn_lifecycle = AgentTurnLifecycleService(
         session_factory,

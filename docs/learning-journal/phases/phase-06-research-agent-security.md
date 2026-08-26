@@ -8,6 +8,8 @@
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute`、
 WorkspaceSnapshot、同 Sandbox Browser、固定 MCP 和平台 Skill 的最小能力验证提前到 Phase 5 Slice 7。
 本阶段不重复实现这些 Spike，而是在其实际证据基础上完成 Registry、审批、安全专项、UI 和运维强化。
+其中 Slice 7.1 已完成 OpenSandbox/Lease/WorkspaceSnapshot 的实现与离线/临时 PostgreSQL 验证；真实
+OpenSandbox Smoke、Browser、MCP 和 Skill 仍未完成。
 
 进入条件：Phase 5 已完成并通过 ADR 确认 Deep Agents 的版本策略、部署拓扑、`ResearchAgentRuntime` 契约、MCP 模式、Sandbox Provider、重试所有权和升级方法；Phase 5 的安全、取消、断连和重复副作用验证没有未解决的阻塞项。
 
@@ -458,8 +460,8 @@ Phase 5 Slice 7 先分别提供 OpenSandbox、Browser、固定 MCP 和 Skill 的
 
 ## 实现前仍需确定
 
-1. ADR-0007 已选 OpenSandbox；仍需由 Phase 5 证据确定最终部署模式、固定镜像 digest、TTL、资源和清理
-   默认值；
+1. ADR-0007 已选 OpenSandbox，7.1 已固定 SDK、base image digest、TTL 和 CPU/内存/命令/输出参数；仍需
+   真实 Smoke 确定 derived image 发布 digest、Server 部署、孤儿清理和这些限制的实际强制效果；
 2. 首版允许的域名类别、搜索 Provider 和 MCP Server；
 3. Approval 风险矩阵及允许编辑的参数；
 4. Budget 默认值、费用数据不可得时的替代限制和告警阈值；

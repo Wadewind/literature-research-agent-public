@@ -8,7 +8,9 @@ from testcontainers.community.postgres import PostgresContainer
 from literature_agent.infrastructure.persistence.models import (
     AgentContextSnapshotORM,
     AgentRuntimeExecutionORM,
+    AgentSandboxLeaseORM,
     AgentTurnRunORM,
+    AgentWorkspaceSnapshotORM,
 )
 
 
@@ -49,6 +51,29 @@ def test_runtime_execution_references_turn_session_and_current_attempt() -> None
         "lease_expires_at",
         "last_checkpoint_id",
     } <= set(AgentRuntimeExecutionORM.__table__.columns.keys())
+
+
+def test_sandbox_workspace_tables_reference_business_scope() -> None:
+    """Lease/Snapshot 是平台事实，但物理 Sandbox 标识不进入业务 Port。"""
+    lease_targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentSandboxLeaseORM.__table__.foreign_keys
+    }
+    snapshot_targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentWorkspaceSnapshotORM.__table__.foreign_keys
+    }
+
+    assert lease_targets == {
+        "agent_sessions.session_id",
+        "agent_turn_runs.turn_run_id",
+        "projects.project_id",
+    }
+    assert snapshot_targets == {
+        "agent_sessions.session_id",
+        "agent_turn_runs.turn_run_id",
+        "projects.project_id",
+    }
 
 
 def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:

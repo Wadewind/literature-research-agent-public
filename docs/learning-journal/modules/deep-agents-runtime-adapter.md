@@ -160,14 +160,12 @@ checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确�
   `runtime_turn_not_interrupted`；
 - 成功、失败、取消及 orphan RUNNING 已有持久 RuntimeExecution 和第二 OS 进程恢复证据；只允许相同
   Runtime/Graph/SDK revision 自动恢复，跨版本迁移尚未实现；
-- 没有真实 Provider Smoke、Usage 账单闭环、流式 token、统一 Tool 动态预算、MCP、Browser、Sandbox、
-  Skill、正式 Artifact 或 WorkspaceSnapshot；两个 Project Tool 已由平台按稳定 effect 强制
-  `max_tool_calls`，主 Agent Loop 已强制 checkpoint 持久的 `max_model_calls`，但 summarization 内部调用
-  与 Provider 在途窗口不在该预算内；
-- Slice 1 固定 Policy 仍只有一次主模型调用且无 Tool；7.1 前需要服务端固定 Capability Profile 才能
-  实际启用多调用与 Project Tool 回路；
-- Worker 当前单 `AsyncConnection` + singleton Saver 的实例锁保证协程正确性，但 checkpoint I/O 串行且
-  有单连接故障面；pool + per-execution Saver/graph factory 留到 7.1；
+- 没有真实 Provider/OpenSandbox Smoke、Usage 账单闭环、流式 token、MCP、Browser、Skill 或正式
+  Artifact。7.1 已用固定 Capability Profile 和 checkpoint State 对 Project/文件/execute Tool 强制统一
+  `max_tool_calls`，主 Agent Loop 已强制 `max_model_calls`，但 summarization 内部调用与 Provider 在途窗口
+  不在模型预算内；
+- Worker 已使用 checkpoint pool，并为每次 Runtime operation 创建独立 Saver/graph；完成后的 collect/
+  reconcile 不依赖活 Sandbox。实际数据库容量与故障切换未做生产评测；
 - Project Tool 成功后的重放、并发和 temporary retry 已有持久 effect 证据；Tool 外部调用完成后、
   ToolExecution 成功记录提交前的崩溃窗口仍没有 Exactly Once 证据，orphan RUNNING 当前 fail-safe 拒绝
   自动重放，需随具体外部 Tool 设计幂等/查询/补偿；
@@ -185,5 +183,6 @@ checkpoint ID 只作为 opaque Binding 返回。正常第二轮只追加新 Huma
 summarization，并证明旧历史进入 StateBackend 的 conversation_history 文件后第二轮仍能完成。成功响应
 丢失时，新连接/新 Adapter 用 PostgreSQL metadata 反查同一 Turn 并重复收集结果，模型和 Tool 不会再
 执行；这不覆盖 Tool 执行后 checkpoint 提交前的崩溃窗口。
-同时通过 Harness Profile、文件工具 allowlist 和 Tool 执行 wrapper 关闭 task/execute 与未授权工具。
+同时通过 Harness Profile、固定 Capability Profile 和 Tool middleware 关闭 task/未授权工具；`execute`
+只在 Session 专属 OpenSandbox Backend 存在且本轮策略授权时可见，并与 Project/文件 Tool 共用统一预算。
 PostgreSQL 仍拥有业务 Run、权限、Event 和 Artifact，SDK 成功从不直接等于业务提交成功。”

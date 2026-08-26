@@ -17,6 +17,19 @@ _AGENT_CANDIDATE_MEDIA_TYPE_MAX_LENGTH = 255
 _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
 _AGENT_CANDIDATE_MAX_SIZE_BYTES = 1_000_000
 
+PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v1"
+PROJECT_RESEARCH_WORKSPACE_TOOLS = (
+    "search_project_chunks",
+    "read_review_evidence_matrix",
+    "ls",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "grep",
+    "execute",
+)
+
 
 class AgentSessionStatus(StrEnum):
     """AgentSession 生命周期；Session 本身不是后台 Run。"""
@@ -520,6 +533,26 @@ def create_policy_snapshot(
         max_tool_calls=max_tool_calls,
         snapshot_hash=_canonical_hash(hash_payload),
         created_at=datetime.now(UTC),
+    )
+
+
+def create_project_research_workspace_policy_snapshot(
+    *, owner_id: str, project_id: str, session_id: str, turn_run_id: str
+) -> PolicySnapshot:
+    """由服务端选择 Slice 7.1 唯一固定的可执行研究能力档案。"""
+    return create_policy_snapshot(
+        owner_id=owner_id,
+        project_id=project_id,
+        session_id=session_id,
+        turn_run_id=turn_run_id,
+        policy_version=PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION,
+        allowed_tool_names=PROJECT_RESEARCH_WORKSPACE_TOOLS,
+        allowed_skill_names=(),
+        network_enabled=False,
+        sandbox_enabled=True,
+        approval_required=False,
+        max_model_calls=8,
+        max_tool_calls=12,
     )
 
 
