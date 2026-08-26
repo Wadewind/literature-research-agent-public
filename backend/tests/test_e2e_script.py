@@ -11,5 +11,9 @@ def test_e2e_harness_selects_every_fake_adapter_and_drops_provider_keys() -> Non
     assert 'export AGENT_EMBEDDING_BACKEND="fake"' in script
     assert 'export AGENT_CHAT_BACKEND="fake"' in script
     assert 'export AGENT_ARXIV_BACKEND="fake"' in script
-    assert "unset AGENT_EMBEDDING_API_KEY AGENT_CHAT_API_KEY" in script
+    assert 'export AGENT_RESEARCH_RUNTIME_BACKEND="fake"' in script
+    assert (
+        "unset AGENT_EMBEDDING_API_KEY AGENT_CHAT_API_KEY "
+        "AGENT_RESEARCH_MODEL_API_KEY" in script
+    )
     assert ".env" not in script

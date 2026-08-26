@@ -28,6 +28,78 @@ def test_arxiv_backend_defaults_offline_and_requires_explicit_real(monkeypatch) 
     assert Settings.from_env().arxiv_backend == "httpx"
 
 
+def test_research_agent_runtime_defaults_offline(monkeypatch) -> None:
+    """未显式启用时 Research Agent 必须保持 Fake 且不读取 Provider Secret。"""
+    monkeypatch.delenv("AGENT_RESEARCH_RUNTIME_BACKEND", raising=False)
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_API_KEY", "not-read-in-fake-mode")
+
+    settings = Settings.from_env()
+
+    assert settings.research_runtime_backend == "fake"
+    assert settings.research_model_api_key is None
+
+
+def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypatch) -> None:
+    """真实 Agent Provider 配置不得复用 RAG/Review Chat 配置或泄漏 Key。"""
+    monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", "deep_agents")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_BASE_URL", "https://agent.example/v1")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_API_KEY", "agent-secret-value")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "1536")
+    monkeypatch.setenv("AGENT_CHAT_API_KEY", "review-secret-value")
+
+    settings = Settings.from_env()
+
+    assert settings.research_runtime_backend == "deep_agents"
+    assert settings.research_model_base_url == "https://agent.example/v1"
+    assert settings.research_model_api_key == "agent-secret-value"
+    assert settings.research_model == "deepseek-v4-flash"
+    assert settings.research_model_max_output_tokens == 1536
+    assert "agent-secret-value" not in repr(settings)
+    assert "review-secret-value" not in repr(settings)
+
+
+@pytest.mark.parametrize("backend", ["unknown", "DEEP_AGENTS"])
+def test_research_agent_runtime_rejects_unknown_backend(monkeypatch, backend: str) -> None:
+    """拼写错误或大小写漂移不能静默回退。"""
+    monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", backend)
+
+    with pytest.raises(ValueError, match="AGENT_RESEARCH_RUNTIME_BACKEND"):
+        Settings.from_env()
+
+
+def test_research_agent_real_mode_does_not_borrow_chat_key(monkeypatch) -> None:
+    """共享 Settings 不借用 Chat Key；缺 Key 由持有 Secret 的 Worker fail-fast。"""
+    monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", "deep_agents")
+    monkeypatch.delenv("AGENT_RESEARCH_MODEL_API_KEY", raising=False)
+    monkeypatch.setenv("AGENT_CHAT_API_KEY", "must-not-be-reused")
+
+    settings = Settings.from_env()
+
+    assert settings.research_runtime_backend == "deep_agents"
+    assert settings.research_model_api_key is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("AGENT_RESEARCH_MODEL", "deepseek-chat"),
+        ("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "0"),
+        ("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "invalid"),
+    ],
+)
+def test_research_agent_real_mode_rejects_unbounded_or_drifted_model_settings(
+    monkeypatch, name: str, value: str
+) -> None:
+    """真实模式必须固定模型并拒绝无效输出上限。"""
+    monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", "deep_agents")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_API_KEY", "agent-secret")
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=name):
+        Settings.from_env()
+
+
 def test_worker_metrics_port_defaults_and_can_be_disabled(monkeypatch) -> None:
     """Worker Metrics 默认使用本地 8001，显式 0 时关闭。"""
     monkeypatch.delenv("AGENT_WORKER_METRICS_PORT", raising=False)

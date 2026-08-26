@@ -109,6 +109,13 @@ AGENT_CHAT_MODEL=deepseek-v4-flash
 AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false
 
 AGENT_ARXIV_BACKEND=httpx
+
+# 可选：显式启用真实 Research Agent；不设置时即使 --real 也继续使用 Fake Runtime。
+AGENT_RESEARCH_RUNTIME_BACKEND=deep_agents
+AGENT_RESEARCH_MODEL_BASE_URL=https://api.deepseek.com
+AGENT_RESEARCH_MODEL_API_KEY=...
+AGENT_RESEARCH_MODEL=deepseek-v4-flash
+AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048
 ```
 
 - Embedding Base URL 是 API 根路径；Adapter 会自行追加 `/embeddings`。
@@ -116,6 +123,9 @@ AGENT_ARXIV_BACKEND=httpx
 - Docling 主路径失败时只对结构性 PDF 错误降级到 pypdf；OCR 默认关闭。
 - Docling 首次运行需要下载模型。缓存准备后可在 `.env` 设置 `HF_HUB_OFFLINE=1`；缓存缺失时不要设置。
 - 若真实模式检测到 SOCKS 代理但虚拟环境未安装 `socksio`，一键脚本会明确告警，并仅为本次启动清除无法使用的 SOCKS 代理变量；不会修改系统设置。若网络必须经过 SOCKS，需要显式安装并锁定 `socksio`。手动启动 Worker 时则需自行处理代理环境。
+- Research Agent Provider 与 RAG/Review Chat 配置分离；模型固定为 `deepseek-v4-flash` 且 thinking 固定
+  关闭。`scripts/dev.sh --real` 不会自动启用真实 Agent，只有配置文件显式选择 `deep_agents` 才会产生
+  Agent 模型调用；专用 Key 只保留在 Worker 环境中。
 
 真实 Provider 只在 Worker 内调用。API 与 Worker 必须使用同一 `AGENT_STORAGE_ROOT`；推荐都从 `backend/` 目录启动。
 
@@ -138,6 +148,7 @@ AGENT_PARSER_BACKEND=fake \
 AGENT_EMBEDDING_BACKEND=fake \
 AGENT_CHAT_BACKEND=fake \
 AGENT_ARXIV_BACKEND=fake \
+AGENT_RESEARCH_RUNTIME_BACKEND=fake \
 .venv/bin/python -m literature_agent.worker
 
 # 终端 4：Web

@@ -57,6 +57,7 @@
   `runtime_version_incompatible`，不自动迁移 checkpoint。
 - 本门槛只验证显式 DI 构造的真实 Deep Adapter；生产 Worker 仍固定 Fake，当前没有环境变量可启用的
   Deep Worker 模式。Provider/`BaseChatModel` factory、Secret/费用与 Worker runtime 配置移入切片 7.0。
+  这是切片 6 验收时的事实；切片 7.0 随后已完成显式 Deep Worker enablement，默认仍为 Fake。
 
 ## 切片 6 的决策选项
 

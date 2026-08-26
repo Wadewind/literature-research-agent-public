@@ -49,8 +49,10 @@ Playwright 又从浏览器验证同一核心旅程、取消、归档和刷新恢
 Runtime、两轮离线业务闭环、取消恢复对账、受限 Deep Agents Adapter 及
 [Project Research Context](modules/project-research-context.md) 已完成开发验证；Runtime 部署与崩溃恢复门槛
 也已闭合，详见 [Agent Runtime Execution 恢复控制](modules/agent-runtime-execution-recovery.md)和
-[恢复缺口台账](reports/phase-05-runtime-recovery-gap-log.md)。生产 Worker 当前仍固定 Fake；下一步必须先
-完成切片 7.0 的真实 Provider/model factory、Secret/费用和 Worker runtime 显式配置。ADR-0007 已选择
+[恢复缺口台账](reports/phase-05-runtime-recovery-gap-log.md)。切片 7.0 的
+[真实 Deep Agent Runtime Enablement](modules/real-deep-agent-runtime-enablement.md)已完成实现：
+生产 Worker 默认仍为 Fake，显式真实模式才装配固定 Provider、持久 Checkpointer、Project Context 和
+RuntimeExecution control。ADR-0007 已选择
 [OpenSandbox 可执行研究 Workspace](decisions/0007-use-opensandbox-executable-workspace.md)，后续按
 OpenSandbox/Lease/WorkspaceSnapshot → 同 Sandbox Browser/下载 → 固定平台 MCP → 平台 Skill → Agent
-Chat UI 的顺序推进。上述均是待验证计划，不是已经通过的隔离或安全能力。
+Chat UI 的顺序推进。这些后续能力仍是待验证计划，不是已经通过的隔离或安全能力。

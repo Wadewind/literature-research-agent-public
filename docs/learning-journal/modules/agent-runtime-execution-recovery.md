@@ -135,10 +135,13 @@ consumer 被取消，middleware 阻止失权后的新模型/Tool。已经发出�
 
 ## 已知限制
 
-- 切片 6 只验证显式 DI 构造的真实 Deep Adapter；生产 Worker 仍固定装配 Fake Runtime，不存在环境变量
-  可启用的真实 Deep Worker 模式；
-- Provider/`BaseChatModel` factory、Secret/费用与 Worker `fake | deep_agents` 配置属于切片 7.0；本切片
-  不用空开关或测试 Fake 伪造可运行生产模式；
+- 切片 6 当时只验证显式 DI 构造的真实 Deep Adapter；切片 7.0 已新增 Worker `fake | deep_agents`
+  显式配置、固定 Provider factory 与 Secret/主模型费用边界，默认仍为 Fake；
+- 真实模式复用本模块的 RuntimeExecution control 与持久 Checkpointer，但 Worker 当前只持有单
+  `AsyncConnection` + singleton Saver。Saver 实例锁保证协程正确性但串行 checkpoint I/O，且仍有
+  单连接故障面；pool + per-execution Saver/graph factory 留到 7.1；
+- Slice 7.0 新增 checkpoint 私有预算 State 后将 graph revision 升为 `deep-agent-graph.v2`；旧 v1
+  RuntimeExecution 和 Checkpoint 均按本模块兼容契约返回 `runtime_version_incompatible`，不自动迁移；
 - 本切片不接真实 Provider、MCP、Browser、Sandbox 或 Skill；
 - 未确认的 Provider/Tool 外部调用可能重试；Project Tool orphan RUNNING 不自动猜测并重放；
 - 当前版本只支持完全相同 revision 自动恢复，没有 checkpoint migration 或运维审批流程；

@@ -115,17 +115,18 @@ else
     export AGENT_EMBEDDING_BACKEND="fake"
     export AGENT_CHAT_BACKEND="fake"
     export AGENT_ARXIV_BACKEND="fake"
+    export AGENT_RESEARCH_RUNTIME_BACKEND="fake"
 fi
 
 printf '启动模式: %s\n' "${MODE}"
 printf '启动 PostgreSQL 与 Valkey...\n'
-env -u AGENT_EMBEDDING_API_KEY -u AGENT_CHAT_API_KEY \
+env -u AGENT_EMBEDDING_API_KEY -u AGENT_CHAT_API_KEY -u AGENT_RESEARCH_MODEL_API_KEY \
     docker compose -f "${COMPOSE_FILE}" up -d --wait postgres valkey
 
 printf '执行数据库迁移...\n'
 (
     cd "${BACKEND_DIR}"
-    env -u AGENT_EMBEDDING_API_KEY -u AGENT_CHAT_API_KEY \
+    env -u AGENT_EMBEDDING_API_KEY -u AGENT_CHAT_API_KEY -u AGENT_RESEARCH_MODEL_API_KEY \
         .venv/bin/alembic upgrade head
 )
 
@@ -158,7 +159,7 @@ fi
 
 # Provider Key 只需要进入 Worker。Worker 已继承当前环境，父进程随后立即移除 Key，
 # 避免 API 与前端进程无必要地持有真实凭据。
-unset AGENT_EMBEDDING_API_KEY AGENT_CHAT_API_KEY
+unset AGENT_EMBEDDING_API_KEY AGENT_CHAT_API_KEY AGENT_RESEARCH_MODEL_API_KEY
 
 printf '启动 API: http://127.0.0.1:8000\n'
 printf 'API Metrics: http://127.0.0.1:8000/metrics\n'

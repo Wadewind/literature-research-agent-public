@@ -20,9 +20,9 @@ RuntimeTurnRequest（只含本轮新消息 + Context/Policy Snapshot）
        → 最终 checkpoint_id 写入 SDK-neutral RuntimeTurnBinding
 ```
 
-Adapter 由分层/集成测试显式 DI 构造，生产 Worker 仍固定装配 `FakeResearchAgentRuntime`；当前没有
-环境变量可启用真实 Deep Worker 模式。Provider/`BaseChatModel` factory、Secret/费用和 Worker runtime
-配置属于切片 7.0。切片 6 已由 ADR-0006 决定 Runtime 位于 ARQ Worker 进程内，并以独立
+切片 7.0 已把 Adapter 接入生产 Worker composition root：默认仍装配 `FakeResearchAgentRuntime`，只有
+显式 `AGENT_RESEARCH_RUNTIME_BACKEND=deep_agents` 才创建固定 `ChatDeepSeek` 与持久 Checkpointer。
+Provider/SDK 类型没有进入业务 Port。切片 6 已由 ADR-0006 决定 Runtime 位于 ARQ Worker 进程内，并以独立
 `RuntimeExecution` lease/fencing 闭合跨进程恢复控制；实现与真实进程证据见
 [`agent-runtime-execution-recovery.md`](agent-runtime-execution-recovery.md)。
 
@@ -70,6 +70,13 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
 - 未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；
 - Runtime Event 只产生 `bound/started/assistant_delta/completed`，不输出模型思考、Tool 原始结果或 Graph
   State。
+
+切片 7.0 增加逐 Turn 主 Agent Loop 模型预算：middleware 在主模型 node 前预留
+`PolicySnapshot.max_model_calls` 并把私有计数写入 checkpoint；额度耗尽在 Provider 前永久失败，已确认
+checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确定窗口，也不覆盖
+`SummarizationMiddleware._summary_model.with_retry()` 最多 3 次内部 Provider 尝试，因此不是完整费用
+硬上限。预算 State 只保留当前 `turn_run_id` 与计数，新 Turn 覆盖旧值；因此 graph revision 已从 v1
+升为 `deep-agent-graph.v2`，旧 v1 RuntimeExecution/Checkpoint fail-closed。
 
 ## 失败、重复和取消
 
@@ -127,6 +134,11 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
 `STARTED` 后、模型调用前出现 selector 假性等待；同一命令在已批准非沙箱环境正常通过，因此该现象仍
 只记录为开发工具环境限制。
 
+切片 7.0 补充验证（2026-08-26）：Adapter 完全离线套件为
+`32 passed in 1.80s`，增加 Provider 前零额度拒绝、Tool checkpoint 失败后恢复不返还主调用额度，以及
+异步图包装安全错误的分类；配置/factory/Worker/Adapter 合并为 `64 passed in 2.40s`，其中锁定
+`ChatDeepSeek` 完成离线构造和关闭，但未调用真实 Provider。
+
 受控命令沙箱内运行 Deep Agents 异步链时曾出现 selector 假性等待；相同完全离线命令在沙箱外会正常
 给出断言失败或通过结果。该现象只描述开发工具环境，不是产品 Sandbox 的能力或安全验证。
 
@@ -142,15 +154,20 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
 
 ## 已知限制
 
-- 生产 Worker 仍固定使用 Fake Runtime，真实 Adapter 只完成显式 DI 的受限恢复 Spike；可运行 Deep 模式
-  等待切片 7.0 的 Provider/model factory 与显式 Worker 配置；
+- 生产 Worker 默认仍使用 Fake Runtime；切片 7.0 已提供显式 Deep 模式并装配固定 Provider、Project
+  Context、RuntimeExecution control 与持久 Checkpointer，但尚未执行真实 Provider Smoke；
 - `resume_turn` 保留五方法 Port 语义，但本切片没有配置 Deep Agents HITL Interrupt，调用会明确返回
   `runtime_turn_not_interrupted`；
 - 成功、失败、取消及 orphan RUNNING 已有持久 RuntimeExecution 和第二 OS 进程恢复证据；只允许相同
   Runtime/Graph/SDK revision 自动恢复，跨版本迁移尚未实现；
-- 没有真实模型、Usage、流式 token、统一模型/Tool 动态预算、MCP、Browser、Sandbox、Skill、正式
-  Artifact 或 WorkspaceSnapshot；两个 Project Tool 已由平台按稳定 effect 强制 `max_tool_calls`，但
-  Adapter 的其他内置/自定义 Tool 与 `max_model_calls` 尚未统一计数；
+- 没有真实 Provider Smoke、Usage 账单闭环、流式 token、统一 Tool 动态预算、MCP、Browser、Sandbox、
+  Skill、正式 Artifact 或 WorkspaceSnapshot；两个 Project Tool 已由平台按稳定 effect 强制
+  `max_tool_calls`，主 Agent Loop 已强制 checkpoint 持久的 `max_model_calls`，但 summarization 内部调用
+  与 Provider 在途窗口不在该预算内；
+- Slice 1 固定 Policy 仍只有一次主模型调用且无 Tool；7.1 前需要服务端固定 Capability Profile 才能
+  实际启用多调用与 Project Tool 回路；
+- Worker 当前单 `AsyncConnection` + singleton Saver 的实例锁保证协程正确性，但 checkpoint I/O 串行且
+  有单连接故障面；pool + per-execution Saver/graph factory 留到 7.1；
 - Project Tool 成功后的重放、并发和 temporary retry 已有持久 effect 证据；Tool 外部调用完成后、
   ToolExecution 成功记录提交前的崩溃窗口仍没有 Exactly Once 证据，orphan RUNNING 当前 fail-safe 拒绝
   自动重放，需随具体外部 Tool 设计幂等/查询/补偿；

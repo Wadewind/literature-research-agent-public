@@ -161,13 +161,15 @@ Phase 5 Spec：
 
 ## 已知限制
 
-- 生产 Worker 仍使用 Fake Runtime，生产策略 `max_tool_calls=0`；本切片证明可组装能力，不代表已开放；
+- 本切片完成时生产 Worker 仍使用 Fake Runtime；切片 7.0 随后已支持显式 Deep 模式，但 Slice 1 固定
+  Policy 仍是 `max_tool_calls=0`，因此不代表真实 Project Tool 回路已开放；
 - orphan RUNNING、Tool 外部效果后/记录前窗口、第二 OS 进程接管、失败/取消 Runtime 终态持久对账留给
   切片 6；
 - Matrix Reader 不重跑依赖 Strategy dimensions 的完整 Phase 3 validator，只验证持久聚合闭包；
 - Matrix 返回的是稳定、有界的部分聚合，不是完整 Matrix 导出接口；
 - 没有接 MCP、Browser、Sandbox、网络、Skill、WorkspaceSnapshot 或正式 Artifact；
-- `max_model_calls` 和非 Project Tool 的统一预算尚未实现。
+- 切片 7.0 已实现 checkpoint 持久的主 Agent Loop `max_model_calls`；summarization 内部调用、Provider
+  在途窗口和非 Project Tool 的统一预算仍不在该边界内。
 
 ## 60 秒面试说明
 

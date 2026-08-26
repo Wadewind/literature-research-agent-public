@@ -1,19 +1,32 @@
 """Worker 入口配置测试。"""
 
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import pytest
 
+from literature_agent.application.project_research_context_service import (
+    ProjectResearchContextService,
+)
 from literature_agent.application.run_execution_service import ExecutionOutcome
+from literature_agent.application.runtime_execution_control import (
+    RuntimeExecutionControlService,
+)
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
+from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
+    FakeResearchAgentRuntime,
+)
 from literature_agent.infrastructure.config import Settings
 from literature_agent.metrics import metrics
 from literature_agent.observability import get_log_context
 from literature_agent.worker import (
     _build_arxiv_gateway,
     _build_model_stack,
+    _build_research_agent_runtime,
     _dependency_reconcile_loop,
+    _open_research_agent_runtime,
+    _shutdown,
     execute_run,
     make_worker_settings,
 )
@@ -82,6 +95,205 @@ def test_fake_model_stack_uses_offline_tokenizer() -> None:
 
     assert profile.tokenizer == OFFLINE_TOKENIZER
     assert closables == []
+
+
+def test_fake_research_runtime_does_not_construct_provider(monkeypatch) -> None:
+    """默认 Fake 不构造模型、不打开 Checkpointer，也不触网。"""
+    monkeypatch.setattr(
+        "literature_agent.worker.build_deepseek_research_model",
+        lambda **_: (_ for _ in ()).throw(AssertionError("不得构造 Provider")),
+    )
+
+    runtime = _build_research_agent_runtime(
+        Settings(research_runtime_backend="fake"),
+        session_factory=lambda: None,  # type: ignore[arg-type]
+        retriever=object(),  # type: ignore[arg-type]
+        event_notifier=object(),  # type: ignore[arg-type]
+        checkpointer=None,
+        runtime_owner_id="worker-1",
+    )
+
+    assert isinstance(runtime, FakeResearchAgentRuntime)
+
+
+async def test_open_fake_research_runtime_does_not_open_provider_resources(
+    monkeypatch,
+) -> None:
+    """Fake 生命周期不得构造 Provider 或连接 Agent Checkpointer。"""
+    monkeypatch.setattr(
+        "literature_agent.worker.build_deepseek_research_model",
+        lambda **_: (_ for _ in ()).throw(AssertionError("不得构造 Provider")),
+    )
+
+    class ForbiddenCheckpointStore:
+        def __init__(self, *_: object, **__: object) -> None:
+            raise AssertionError("不得创建 Agent Checkpointer")
+
+    monkeypatch.setattr(
+        "literature_agent.worker.PostgresCheckpointStore", ForbiddenCheckpointStore
+    )
+
+    async with _open_research_agent_runtime(
+        Settings(research_runtime_backend="fake"),
+        session_factory=lambda: None,  # type: ignore[arg-type]
+        retriever=object(),  # type: ignore[arg-type]
+        event_notifier=object(),  # type: ignore[arg-type]
+        runtime_owner_id="worker-1",
+    ) as runtime:
+        assert isinstance(runtime, FakeResearchAgentRuntime)
+
+
+def test_deep_research_runtime_uses_production_context_and_control(monkeypatch) -> None:
+    """Deep 模式必须装配持久恢复控制、Project context 与真实 Adapter。"""
+    captured: dict[str, object] = {}
+    model = object()
+    checkpointer = object()
+
+    def build_model(**kwargs: object) -> object:
+        captured["model_kwargs"] = kwargs
+        return model
+
+    monkeypatch.setattr(
+        "literature_agent.worker.build_deepseek_research_model", build_model
+    )
+
+    class StubRuntime:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "literature_agent.worker.DeepAgentsResearchAgentRuntime", StubRuntime
+    )
+    settings = Settings(
+        research_runtime_backend="deep_agents",
+        research_model_api_key="agent-secret",
+    )
+
+    runtime = _build_research_agent_runtime(
+        settings,
+        session_factory=lambda: None,  # type: ignore[arg-type]
+        retriever=object(),  # type: ignore[arg-type]
+        event_notifier=object(),  # type: ignore[arg-type]
+        checkpointer=checkpointer,  # type: ignore[arg-type]
+        runtime_owner_id="worker-1",
+    )
+
+    assert isinstance(runtime, StubRuntime)
+    assert captured["checkpointer"] is checkpointer
+    assert captured["model"] is model
+    assert isinstance(captured["execution_control"], RuntimeExecutionControlService)
+    assert isinstance(captured["project_context"], ProjectResearchContextService)
+    assert captured["runtime_owner_id"] == "worker-1"
+    assert captured["model_kwargs"] == {
+        "base_url": "https://api.deepseek.com",
+        "api_key": "agent-secret",
+        "model": "deepseek-v4-flash",
+        "max_output_tokens": 2048,
+        "timeout_seconds": 60.0,
+        "max_retries": 2,
+    }
+
+
+def test_unknown_research_runtime_fails_closed() -> None:
+    """直接构造 Settings 也不能使未知 Runtime 静默回退。"""
+    with pytest.raises(ValueError, match="research_runtime_backend"):
+        _build_research_agent_runtime(
+            Settings(research_runtime_backend="unknown"),
+            session_factory=lambda: None,  # type: ignore[arg-type]
+            retriever=object(),  # type: ignore[arg-type]
+            event_notifier=object(),  # type: ignore[arg-type]
+            checkpointer=None,
+            runtime_owner_id="worker-1",
+        )
+
+
+async def test_open_deep_runtime_requires_key_before_opening_resources(
+    monkeypatch,
+) -> None:
+    """真实 Worker 缺专用 Key 时必须在模型或 Checkpointer I/O 前 fail-fast。"""
+    monkeypatch.setattr(
+        "literature_agent.worker.build_deepseek_research_model",
+        lambda **_: (_ for _ in ()).throw(AssertionError("不得构造 Provider")),
+    )
+
+    class ForbiddenCheckpointStore:
+        def __init__(self, *_: object, **__: object) -> None:
+            raise AssertionError("不得创建 Agent Checkpointer")
+
+    monkeypatch.setattr(
+        "literature_agent.worker.PostgresCheckpointStore", ForbiddenCheckpointStore
+    )
+
+    with pytest.raises(ValueError, match="AGENT_RESEARCH_MODEL_API_KEY") as exc_info:
+        async with _open_research_agent_runtime(
+            Settings(
+                research_runtime_backend="deep_agents",
+                research_model_api_key=None,
+            ),
+            session_factory=lambda: None,  # type: ignore[arg-type]
+            retriever=object(),  # type: ignore[arg-type]
+            event_notifier=object(),  # type: ignore[arg-type]
+            runtime_owner_id="worker-1",
+        ):
+            raise AssertionError("缺 Key 不得进入 Runtime 生命周期")
+
+    assert "must-not-leak" not in str(exc_info.value)
+
+
+async def test_open_deep_runtime_owns_checkpoint_and_model_lifecycle(monkeypatch) -> None:
+    """Worker 资源上下文关闭时必须释放模型与持久 Checkpointer。"""
+    events: list[str] = []
+    checkpointer = object()
+    runtime = object()
+
+    class StubStore:
+        def __init__(self, database_url: str) -> None:
+            assert database_url == "postgresql+psycopg://agent:agent@db/agent"
+
+        @asynccontextmanager
+        async def open(self):
+            events.append("checkpoint_open")
+            try:
+                yield checkpointer
+            finally:
+                events.append("checkpoint_close")
+
+    model = object()
+    monkeypatch.setattr("literature_agent.worker.PostgresCheckpointStore", StubStore)
+    monkeypatch.setattr(
+        "literature_agent.worker.build_deepseek_research_model", lambda **_: model
+    )
+    close_model = AsyncMock(side_effect=lambda _: events.append("model_close"))
+    monkeypatch.setattr("literature_agent.worker.aclose_deepseek_research_model", close_model)
+    monkeypatch.setattr(
+        "literature_agent.worker._build_research_agent_runtime", lambda *_, **__: runtime
+    )
+
+    async with _open_research_agent_runtime(
+        Settings(
+            database_url="postgresql+psycopg://agent:agent@db/agent",
+            research_runtime_backend="deep_agents",
+            research_model_api_key="secret",
+        ),
+        session_factory=lambda: None,  # type: ignore[arg-type]
+        retriever=object(),  # type: ignore[arg-type]
+        event_notifier=object(),  # type: ignore[arg-type]
+        runtime_owner_id="worker-1",
+    ) as opened:
+        assert opened is runtime
+        assert events == ["checkpoint_open"]
+
+    close_model.assert_awaited_once_with(model)
+    assert events == ["checkpoint_open", "checkpoint_close", "model_close"]
+
+
+async def test_shutdown_closes_research_runtime_resources() -> None:
+    """Worker shutdown 必须释放长期 Checkpointer/Provider 资源。"""
+    resources = AsyncMock()
+
+    await _shutdown({"agent_runtime_resources": resources})
+
+    resources.aclose.assert_awaited_once_with()
 
 
 async def test_execute_run_builds_bounded_worker_context_without_job_payload() -> None:

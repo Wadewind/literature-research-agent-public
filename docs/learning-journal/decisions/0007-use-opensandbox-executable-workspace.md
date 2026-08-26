@@ -11,6 +11,10 @@ Phase 5 切片 1–6 已建立 `AgentSession`、逐轮 `AgentTurnRun`、`Researc
 `StateBackend`，生产 Worker 仍固定为 Fake Runtime，尚未接入真实模型、Sandbox、Browser、MCP、Skill
 或 `WorkspaceSnapshot`。
 
+上述是本 ADR 作出时的基线。切片 7.0 随后已经完成真实 Runtime enablement 的实现，默认仍为 Fake，
+显式 `deep_agents` 模式才装配真实模型与持久 Checkpointer；OpenSandbox、Browser、MCP、Skill 和
+`WorkspaceSnapshot` 仍未在 7.0 接入或验证。
+
 后续能力 Spike 需要允许 Research Agent 在隔离环境中执行 Python 数据处理、生成图表，并让文件工具、
 代码执行和浏览器下载操作同一个 Session Workspace。仅把 Sandbox 当作受限文件后端、同时隐藏
 `execute`，会削弱 Deep Agents 完整 Harness 的价值，并迫使平台重新包装一套脚本执行能力。
@@ -125,6 +129,26 @@ Slice 7 调整为五个独立、可回退提交：
 4. 7.3 固定平台 MCP；
 5. 7.4 平台 Research Skill。
 
+### Slice 7.0 已固定的 Provider 与费用边界
+
+- 精确使用 `langchain-deepseek==1.1.0`；解析后的新增传递依赖为
+  `langchain-openai==1.6.0`、`openai==3.3.1`，不升级既有版本；
+- Worker 通过独立的 Agent 配置选择 `fake | deep_agents`，默认 Fake 不读取 Provider Key、不构造模型、
+  不打开 Agent Checkpointer；真实模式缺少专用 Key 时启动前 fail-fast；
+- 真实模型固定 `deepseek-v4-flash`、thinking 关闭、输出 token 上限，复用通用 timeout/retry；模型 SDK
+  类型只存在于 infrastructure，Worker 业务执行仍只依赖 `ResearchAgentRuntime`；
+- `PolicySnapshot.max_model_calls` 只定义为逐 Turn 的主 Agent Loop 调用预算，在主模型 node 前预留并随
+  checkpoint 持久化。它不覆盖 Provider 已在途的不确定窗口，也不覆盖
+  `SummarizationMiddleware._summary_model.with_retry()` 最多 3 次内部 Provider 尝试，因此当前不是完整
+  Provider 费用硬上限；不为此禁用 Deep Agents 原生压缩。Checkpoint 只保存当前 Turn ID 与预留计数，
+  新 Turn 覆盖旧值，避免长期 Session 按 Turn 无界增长；新增 State 将 graph revision 固定为
+  `deep-agent-graph.v2`，旧 v1 状态拒绝自动恢复；
+- 切片 7.0 继续使用单 `AsyncConnection` 与 singleton `AsyncPostgresSaver`。本地版本的 Saver 实例锁保证
+  协程正确性，但 checkpoint I/O 串行且有单连接故障面；pool 与 per-execution Saver/graph factory 留到
+  7.1 验证；
+- Slice 1 的固定 Policy 仍是单主模型调用且无 Tool。7.0 只启用无 Tool 单 Turn 的真实路径；7.1 前需要
+  增加并验证服务端固定 Capability Profile，不能据此宣称真实 Project Tool 研究回路已完成。
+
 这会把 OpenSandbox `execute`、Session 级 Lease、最小网络/资源边界和 WorkspaceSnapshot 从原 Phase 6
 计划提前到 Phase 5 Spike。Phase 6 仍负责完整 Registry、用户从已审核 Catalog 中选择、OAuth/
 Credential Vault、复杂审批中心、更广网络策略、Prompt Injection/恶意文件专项测试、Agent Chat/noVNC
@@ -170,6 +194,8 @@ Injection 后果；网络策略必须覆盖全部 Sandbox 进程；需要处理 
 本 ADR 记录已接受的计划，不表示以下能力已经实现或验证。每个 Slice 必须分别形成测试和真实 Smoke
 证据：
 
+- 7.0：配置/factory/Worker 生命周期和主模型预算可由离线测试验证；真实 Provider Smoke 必须显式
+  opt-in、单 Turn、有界且不触发 summarization。当前实现未使用真实 Key 或发出真实请求；
 - 7.1：owner/Session 隔离、稳定 Lease/generation、跨 Turn 复用、TTL/销毁/reconcile、Sandbox 丢失后
   Snapshot 重建、宿主/Secret 不可见、默认禁网、资源/输出限制、取消后不启动新命令；
 - 7.2：Browser/CDP 与文件工具指向同一 Sandbox，导航/redirect/egress/下载边界、文件取回和 endpoint

@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v6
+> 状态：Proposed v7
 >
 > 日期：2026-08-26
 >
@@ -25,6 +25,11 @@
 > v6 变更：ADR-0007 选择 OpenSandbox 作为可执行研究 Workspace；Slice 7 在每个 AgentSession/SDK
 > Thread 专属的短 TTL Sandbox Lease 中开放 `execute`，并将能力顺序调整为真实 Runtime → OpenSandbox/
 > WorkspaceSnapshot → Browser → MCP → Skill。宿主执行、用户自定义配置和默认开放网络仍然禁止。
+>
+> v7 变更：Slice 7.0 完成显式真实 Runtime enablement；默认 Fake，真实模式固定 ChatDeepSeek、持久
+> Checkpointer、Project Context 和 RuntimeExecution control。`max_model_calls` 只覆盖 checkpoint 持久的
+> 主 Agent Loop，不覆盖 summarization 内部重试或 Provider 在途窗口；预算 State 只保留当前 Turn，graph
+> revision 升为 `deep-agent-graph.v2` 并拒绝恢复旧 v1；7.1 前仍需固定 Capability Profile。
 
 ## 1. 文档用途
 
@@ -1487,11 +1492,18 @@ ContextSnapshot 精确下推 PaperVersion/ChunkSet，验证指定 Matrix 的 Out
 已确认 Step。Checkpoint 必须匹配 Turn/Session/Execution/request hash/runtime+graph revision。证据和非声明边界见
 [`phase-05-runtime-recovery-gap-log.md`](../learning-journal/reports/phase-05-runtime-recovery-gap-log.md)。
 
-切片 6 只通过显式依赖注入构造真实 Deep Adapter；生产 Worker 继续固定 Fake，当前不存在环境变量可启用
-的真实 Deep Worker 模式。切片 7 必须先完成 **7.0 Real Deep Agent Runtime Enablement**，决定并接入
-Provider/`BaseChatModel` factory、Secret/费用和 Worker `fake | deep_agents` 显式配置，然后按 ADR-0007
-依次验证 OpenSandbox/Lease/WorkspaceSnapshot、同 Sandbox Browser/下载、固定平台 MCP 和平台 Skill。
-本项目不以空开关或测试 Fake 伪造生产模式。
+切片 6 当时只通过显式依赖注入构造真实 Deep Adapter。切片 7.0 随后已完成 Real Deep Agent Runtime
+Enablement 的实现：生产 Worker 默认保持 Fake，只有显式 `deep_agents` 才使用
+`langchain-deepseek==1.1.0` 构造固定关闭 thinking 的 `deepseek-v4-flash`，并装配既有持久
+Checkpointer、Project Context 与 RuntimeExecution control；真实模式缺少专用 Key 时启动前失败。
+本切片尚未执行真实 Provider Smoke。后续继续按 ADR-0007 依次验证 OpenSandbox/Lease/
+WorkspaceSnapshot、同 Sandbox Browser/下载、固定平台 MCP 和平台 Skill。
+
+`PolicySnapshot.max_model_calls` 在 7.0 精确定义为逐 Turn 主 Agent Loop 模型调用预算：调用前预留计数并
+随同步 checkpoint 持久化，已确认 checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确定窗口，
+也不覆盖 `SummarizationMiddleware._summary_model.with_retry()` 最多 3 次内部 Provider 尝试，所以当前
+不是完整费用硬上限。Slice 1 固定 Policy 仍为一次主调用、无 Tool；7.1 前必须实现并验证服务端固定
+Capability Profile，才能宣称真实 Project Tool 回路可用。
 
 #### 需要学习和验证
 
@@ -1530,7 +1542,9 @@ Project Research Context
 
 恢复门槛已根据 Project Tool 的调用记录和副作用边界决定 ARQ Worker 内运行，并固定 lease/recovery
 owner。验收测试实际启动第二个 OS 进程，沿用同一 Execution/Checkpoint 恢复且不重新追加用户输入；
-同进程新 Adapter 仅作为较低层测试。切片 7.0 完成前不得把显式 DI Spike 描述为可运行生产 Deep 模式。
+同进程新 Adapter 仅作为较低层测试。切片 7.0 已提供可显式启用的 Worker Deep 模式，但在真实 Provider
+Smoke、Capability Profile 和后续 Sandbox/Tool 门槛通过前，只能称为真实 Runtime enablement，不能描述
+为完整 Research Agent 生产能力。
 
 #### 最小垂直切片
 

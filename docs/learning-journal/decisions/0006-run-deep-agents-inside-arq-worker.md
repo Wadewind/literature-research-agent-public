@@ -54,6 +54,9 @@ AgentTurnRun 1
   形成持久终态；
 - 自动恢复只允许相同 runtime contract、graph revision、Deep Agents 与 LangGraph revision；不兼容时
   fail-closed 为 `runtime_version_incompatible`，Phase 5 不实现跨版本 checkpoint 迁移；
+- Slice 7.0 因新增 checkpoint 私有预算 State 与 model middleware，将 graph revision 从
+  `deep-agent-graph.v1` 升为 `deep-agent-graph.v2`；旧 v1 RuntimeExecution 或 Checkpoint 必须
+  fail-closed，不能按新 State schema 自动恢复；
 - 继续使用当前 PostgreSQL 数据库和 checkpoint schema，不增加独立数据库或 schema。
 
 ## Effectively Once 边界
@@ -72,7 +75,8 @@ Provider 已收到请求但响应、ToolExecution 或 checkpoint 尚未持久化
 到独立 Runtime Deployment。
 
 切片 6 的“ARQ Worker 内运行”是部署拓扑决定与可执行恢复证据，不等于 Worker 已有真实 Provider 接线。
-切片 7.0 完成前，生产路径仍只能运行 Fake Runtime。
+切片 7.0 完成前，生产路径仍只能运行 Fake Runtime。后续 7.0 已按本 ADR 的前置要求增加显式
+`fake | deep_agents` 组合，默认 Fake 不变；Provider 与费用边界见 ADR-0007 和 Phase 5 Spec。
 
 ## 被否决的方案
 

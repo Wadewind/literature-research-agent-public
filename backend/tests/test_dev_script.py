@@ -12,3 +12,14 @@ def test_worker_metrics_disabled_output_does_not_publish_port_zero_url() -> None
     assert "http://127.0.0.1:%s/metrics" in script
     assert "http://127.0.0.1:0/metrics" not in script
     assert script.index("Worker Metrics: 已禁用") < script.index("http://127.0.0.1:%s/metrics")
+
+
+def test_dev_script_keeps_research_agent_fake_by_default_and_worker_only_secret() -> None:
+    """Fake 模式必须显式离线，真实 Agent Key 只能进入 Worker。"""
+    script = (Path(__file__).parents[2] / "scripts" / "dev.sh").read_text()
+
+    assert 'export AGENT_RESEARCH_RUNTIME_BACKEND="fake"' in script
+    assert (
+        "unset AGENT_EMBEDDING_API_KEY AGENT_CHAT_API_KEY "
+        "AGENT_RESEARCH_MODEL_API_KEY" in script
+    )

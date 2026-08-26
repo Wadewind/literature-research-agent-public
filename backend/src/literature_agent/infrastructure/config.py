@@ -48,6 +48,11 @@ _DEFAULT_RETRIEVAL_TOKEN_BUDGET = 3000
 _DEFAULT_CHAT_BACKEND = "fake"
 _DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED = True
 _DEFAULT_ANSWER_MAX_OUTPUT_TOKENS = 2048
+# Research Agent Provider 与 RAG/Review Chat 独立；默认 Fake 保持离线零费用。
+_DEFAULT_RESEARCH_RUNTIME_BACKEND = "fake"
+_DEFAULT_RESEARCH_MODEL_BASE_URL = "https://api.deepseek.com"
+_DEFAULT_RESEARCH_MODEL = "deepseek-v4-flash"
+_DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS = 2048
 # arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。
 _DEFAULT_ARXIV_BACKEND = "fake"
 _DEFAULT_WORKER_METRICS_PORT = 8001
@@ -83,11 +88,11 @@ class Settings:
     outbox_max_attempts: int = field(default=_DEFAULT_OUTBOX_MAX_ATTEMPTS)
     outbox_dispatch_batch_size: int = field(default=_DEFAULT_OUTBOX_DISPATCH_BATCH_SIZE)
     embedding_base_url: str = field(default=_DEFAULT_EMBEDDING_BASE_URL)
-    embedding_api_key: str | None = field(default=None)
+    embedding_api_key: str | None = field(default=None, repr=False)
     embedding_model: str = field(default=_DEFAULT_EMBEDDING_MODEL)
     embedding_dimensions: int = field(default=_DEFAULT_EMBEDDING_DIMENSIONS)
     chat_base_url: str = field(default=_DEFAULT_CHAT_BASE_URL)
-    chat_api_key: str | None = field(default=None)
+    chat_api_key: str | None = field(default=None, repr=False)
     chat_model: str = field(default=_DEFAULT_CHAT_MODEL)
     model_timeout_seconds: float = field(default=_DEFAULT_MODEL_TIMEOUT_SECONDS)
     model_max_retries: int = field(default=_DEFAULT_MODEL_MAX_RETRIES)
@@ -103,6 +108,13 @@ class Settings:
         default=_DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED
     )
     answer_max_output_tokens: int = field(default=_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS)
+    research_runtime_backend: str = field(default=_DEFAULT_RESEARCH_RUNTIME_BACKEND)
+    research_model_base_url: str = field(default=_DEFAULT_RESEARCH_MODEL_BASE_URL)
+    research_model_api_key: str | None = field(default=None, repr=False)
+    research_model: str = field(default=_DEFAULT_RESEARCH_MODEL)
+    research_model_max_output_tokens: int = field(
+        default=_DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS
+    )
     arxiv_backend: str = field(default=_DEFAULT_ARXIV_BACKEND)
     worker_metrics_port: int = field(default=_DEFAULT_WORKER_METRICS_PORT)
 
@@ -200,6 +212,46 @@ class Settings:
             raise ValueError("AGENT_WORKER_METRICS_PORT 必须为 0..65535 的整数") from exc
         if not 0 <= worker_metrics_port <= 65535:
             raise ValueError("AGENT_WORKER_METRICS_PORT 必须为 0..65535 的整数")
+        research_runtime_backend = os.getenv(
+            "AGENT_RESEARCH_RUNTIME_BACKEND", _DEFAULT_RESEARCH_RUNTIME_BACKEND
+        )
+        if research_runtime_backend not in {"fake", "deep_agents"}:
+            raise ValueError(
+                "AGENT_RESEARCH_RUNTIME_BACKEND 必须为 fake 或 deep_agents"
+            )
+        research_model_base_url = _DEFAULT_RESEARCH_MODEL_BASE_URL
+        research_model_api_key: str | None = None
+        research_model = _DEFAULT_RESEARCH_MODEL
+        research_model_max_output_tokens = _DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS
+        if research_runtime_backend == "deep_agents":
+            research_model_api_key = os.getenv("AGENT_RESEARCH_MODEL_API_KEY") or None
+            research_model_base_url = os.getenv(
+                "AGENT_RESEARCH_MODEL_BASE_URL", _DEFAULT_RESEARCH_MODEL_BASE_URL
+            )
+            research_model = os.getenv(
+                "AGENT_RESEARCH_MODEL", _DEFAULT_RESEARCH_MODEL
+            )
+            if research_model != _DEFAULT_RESEARCH_MODEL:
+                raise ValueError(
+                    "AGENT_RESEARCH_MODEL 当前只允许 deepseek-v4-flash"
+                )
+            raw_research_output = os.getenv(
+                "AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS"
+            )
+            try:
+                research_model_max_output_tokens = (
+                    int(raw_research_output)
+                    if raw_research_output
+                    else _DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须为正整数"
+                ) from exc
+            if research_model_max_output_tokens <= 0:
+                raise ValueError(
+                    "AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须为正整数"
+                )
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
@@ -241,6 +293,11 @@ class Settings:
             ).lower()
             in {"1", "true", "yes"},
             answer_max_output_tokens=answer_max_output_tokens,
+            research_runtime_backend=research_runtime_backend,
+            research_model_base_url=research_model_base_url,
+            research_model_api_key=research_model_api_key,
+            research_model=research_model,
+            research_model_max_output_tokens=research_model_max_output_tokens,
             arxiv_backend=os.getenv("AGENT_ARXIV_BACKEND", _DEFAULT_ARXIV_BACKEND),
             worker_metrics_port=worker_metrics_port,
         )

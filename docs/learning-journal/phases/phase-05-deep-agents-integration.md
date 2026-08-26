@@ -18,6 +18,9 @@ durability；切片 6 已完成实现与真实 OS 进程验收。
 2026-08-26 又由 ADR-0007 选择 OpenSandbox 作为 Slice 7 的远程可执行 Workspace，并决定在每个
 AgentSession/SDK Thread 专属的短 TTL Lease 中向模型开放 Sandbox `execute`。这是待实现、待验证的
 Slice 7 契约，不表示当前 Worker 已接入 OpenSandbox 或已经通过隔离/网络/资源安全验证。
+切片 7.0“Real Deep Agent Runtime Enablement”已完成实现：生产 Worker
+默认继续使用 Fake，只有显式选择 `deep_agents` 才装配固定 DeepSeek 模型、持久 Checkpointer、Project
+Context 与 RuntimeExecution control；本切片没有调用真实 Provider，也没有进入 OpenSandbox 等 7.1 能力。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -471,8 +474,9 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    用第二个真实 OS 进程验证恢复后不重复已持久确认的模型或 Tool 调用。该切片不顺便建设通用分布式调度器，
    也不把 Tool 已产生外部副作用但 checkpoint 尚未提交的窗口伪称为已解决；
 7. **能力 Spike**：只有切片 6 门槛通过后才开始，且不捆绑验收：
-   - **7.0 Real Deep Agent Runtime Enablement**：先决定并接入 Provider/`BaseChatModel` factory、Secret/
-     费用策略和 Worker `fake | deep_agents` 显式配置；默认必须保持 Fake；
+   - **7.0 Real Deep Agent Runtime Enablement（已完成）**：接入固定 Provider/
+     `BaseChatModel` factory、Secret/费用边界和 Worker `fake | deep_agents` 显式配置；默认保持 Fake；
+     真实模式复用既有持久 Checkpointer、Project Context 与 RuntimeExecution control；
    - **7.1 OpenSandbox/Lease/WorkspaceSnapshot**：验证 Session 级短 TTL Lease、可执行默认 Backend、
      隔离文件与命令、物理 Sandbox 生命周期、Snapshot 取回和逻辑 Workspace 重建；
    - **7.2 Browser/下载**：验证同一 Sandbox Chromium/CDP、受控导航、统一 egress、下载与来源/文件边界；
@@ -658,6 +662,53 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - 模块细节见
   [`agent-runtime-execution-recovery.md`](../modules/agent-runtime-execution-recovery.md)。
 
+切片 7.0 实现证据（2026-08-26）：
+
+- 精确新增 `langchain-deepseek==1.1.0`；锁文件新增 `langchain-openai==1.6.0` 与 `openai==3.3.1`，
+  既有依赖没有版本升级。`ChatDeepSeek` 固定使用 `deepseek-v4-flash`、
+  `extra_body={"thinking":{"type":"disabled"}}`、Provider 输出 token 上限及通用 timeout/retry；
+- `AGENT_RESEARCH_RUNTIME_BACKEND` 默认 `fake`。Fake 模式不读取 Agent Provider Key，也不构造模型或打开
+  Checkpointer；显式 `deep_agents` 模式缺少专用 Key、模型漂移、输出上限非法或 backend 未知时启动前
+  fail-closed，Secret 字段 `repr=False`；缺 Key 校验位于 Worker composition，使启动脚本可在 Worker fork
+  后移除专用 Key，API、迁移和基础设施进程不持有 Agent Provider Secret；
+- Worker 真实模式在一个资源生命周期内持有 `ChatDeepSeek` 和现有单 `AsyncConnection`/
+  `AsyncPostgresSaver`，并装配生产 `ProjectResearchContextService`、`RuntimeExecutionControlService` 与
+  `DeepAgentsResearchAgentRuntime`；关闭时释放 Checkpointer connection 与模型 HTTP client，异步模型
+  client 关闭失败也不会跳过同步 client 清理；
+- `PolicySnapshot.max_model_calls` 精确定义为当前 Turn 的**主 Agent Loop 模型调用预算**。中间件在主模型
+  node 前把预留计数写入 LangGraph checkpoint，额度耗尽在 Provider 前永久失败；Tool node 失败后恢复的
+  离线测试证明不会重新获得额度。Checkpoint 仅保留当前 Turn ID 与计数，新 Turn 覆盖旧值，避免长期
+  Session 状态按 Turn 增长；因此 graph revision 升为 `deep-agent-graph.v2`，旧 v1 RuntimeExecution 与
+  Checkpoint 均 fail-closed。Provider 已在途但 checkpoint/响应不确定的窗口不宣称 Exactly Once；
+- Deep Agents `SummarizationMiddleware` 内部通过 `_summary_model.with_retry()` 发起的压缩请求不经过上述
+  主循环预算，当前最多可能额外尝试 3 次 Provider，因此 7.0 尚不是覆盖所有 Provider 请求的费用硬上限；
+  本切片不禁用原生压缩，真实 Smoke 约束为单 Turn 且不得触发 summarization；
+- 本地 `langgraph-checkpoint-postgres==3.1.1` 源码确认 singleton saver 有实例级异步锁，可保证协程正确性，
+  但所有 checkpoint I/O 串行且存在单连接故障面；pool + per-execution Saver/graph factory 留到 7.1；
+- 首组 TDD 红灯：模型 factory 模块不存在导致 `ModuleNotFoundError`，Worker helper 不存在导致
+  `ImportError`；预算恢复测试也先暴露 Provider 在途失败会恢复同一 graph task 的窗口，随后改用已确认
+  checkpoint 后 Tool 失败的场景精确验证逻辑预算；
+- 最终核心合并定向测试为 `64 passed in 2.40s`，覆盖配置、Provider factory/清理、锁定
+  `ChatDeepSeek` 的离线真实构造、Worker 装配/生命周期、
+  Deep Adapter 权限/恢复/预算；普通测试完全离线，未使用真实 Key、网络或付费 Provider；
+- 加入 `dev.sh`/浏览器 E2E Fake 与 Secret 隔离静态契约后的合并测试为 `67 passed in 2.48s`；
+- 受影响 Application/Runtime control/Fake/Deep Adapter/Worker 回归为 `83 passed in 63.13s`；本地
+  Testcontainers PostgreSQL Checkpoint、RuntimeExecution 与真实双 OS 进程恢复为
+  `3 passed in 16.57s`；最终完整非集成回归为 `822 passed, 4 skipped in 75.44s`；
+- `uv lock --check` 成功解析 228 个包，完整 `ruff check src tests` 通过，`pyright src` 为
+  `0 errors, 0 warnings, 0 informations`；
+- 主审补强 graph v1 拒绝、跨 Turn 常数空间预算和关闭失败清理测试；首轮因测试把第二 Turn 的一次模型
+  调用误写为两次、并把 `AsyncMock` 异常挂在 client 而非 `close` 方法，实际为
+  `2 failed, 48 passed in 2.10s`；修正测试装配后最终受影响定向回归为 `50 passed in 1.97s`；
+- 主智能体独立验证：配置/factory/Deep Adapter/Runtime control/Worker/dev/e2e 定向回归
+  `75 passed in 2.63s`；PostgreSQL Checkpoint、RuntimeExecution control 与真实双 OS 进程恢复
+  `3 passed in 15.90s`；完整非集成回归 `824 passed, 4 skipped in 74.95s`；
+- 主智能体独立执行 `ruff check src tests` 通过，`pyright src` 为
+  `0 errors, 0 warnings`，`uv lock --check` 输出 `Resolved 228 packages`，
+  `bash -n scripts/dev.sh web/e2e/run.sh` 与 `git diff --check` 均通过；
+- 代码与边界详见
+  [`real-deep-agent-runtime-enablement.md`](../modules/real-deep-agent-runtime-enablement.md)。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -685,7 +736,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
    逐命令审批；
 3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact；
-4. OpenSandbox 精确版本、固定镜像 digest、TTL/资源默认值，以及真实 Provider Adapter 的精确依赖版本。
+4. OpenSandbox 精确版本、固定镜像 digest、TTL/资源默认值。真实 Provider Adapter 已在 7.0 固定为
+   `langchain-deepseek==1.1.0` 与 `deepseek-v4-flash`。
 
 切片 6 的部署、数据库和恢复决策已由 ADR-0006 固化：ARQ Worker 内运行、当前 PostgreSQL/checkpoint
 schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runtime/Graph revision 才自动恢复。
@@ -701,17 +753,23 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - ADR-0007 已选择 OpenSandbox 并允许隔离 Sandbox `execute`，但在 7.1/7.2 实际完成前，不宣称 Lease、
   默认禁网、统一 egress、资源限制、WorkspaceSnapshot 重建、Browser/CDP 或 Artifact 取回已验证；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
-- Worker 生产默认仍使用 Fake Runtime；ADR-0006 已决定 Deep Agents 在 ARQ Worker 内运行，真实 Adapter
-  只由显式 DI 测试装配验证；当前不存在环境变量可启用的真实 Deep Worker 模式。Provider/model factory、
-  Secret/费用和 Worker `fake | deep_agents` 配置是切片 7.0，不在切片 6 伪造；
+- Worker 生产默认仍使用 Fake Runtime，但切片 7.0 已增加显式 `deep_agents` 模式并装配真实 Provider、
+  持久 Checkpointer、Project Context 与 RuntimeExecution control；本切片只证明无 Tool、单 Turn 的真实
+  Runtime enablement，未执行真实 Provider Smoke，也未证明完整 Project Tool 回路；
 - 成功/失败/取消/orphan RUNNING 已可借 RuntimeExecution 和 PostgreSQL Checkpoint 跨 OS 进程对账；
   该结论要求相同 Runtime/Graph/SDK revision，不扩张为跨版本迁移或公网生产 SLA；
 - 切片 5 已用稳定 effect ID、唯一约束、条件状态更新和持久调用记录证明成功 Project Tool replay、
   RUNNING 并发拒绝、temporary 同 effect 重试与平台 `max_tool_calls` 预算；但 Tool 外部效果完成后、
   ToolExecution 成功记录提交前的崩溃窗口仍不宣称 Exactly Once，orphan RUNNING 当前 fail-safe 拒绝
   自动重放，需按未来具体外部 Tool 设计幂等、查询或补偿；
-- 切片 5 只对两个平台 Project Tool 强制 `max_tool_calls`；`max_model_calls` 和其他 Deep Agents 内置/
-  自定义 Tool 的统一动态预算尚未实现；
+- 切片 7.0 已对主 Agent Loop 强制 checkpoint 持久的逐 Turn `max_model_calls`；该值不覆盖
+  `SummarizationMiddleware` 最多 3 次内部 Provider 尝试，也不消除已在途 Provider 请求的不确定窗口。
+  其他 Deep Agents 内置/自定义 Tool 的统一动态预算尚未实现；
+- Slice 1 现有固定 Policy 仍为 `max_model_calls=1`、`max_tool_calls=0`、空 Tool allowlist；7.1 开始前必须
+  实现并验证服务端固定 Capability Profile（至少允许两次主模型调用，并授权 Project Tool 与 Tool 预算），
+  不能把 7.0 的 Provider 装配描述为已完成真实 Project Context 研究回路；
+- 当前 Worker 复用一个 singleton `AsyncPostgresSaver` 和单 `AsyncConnection`。Saver 实例锁保证同进程
+  协程正确性，但 checkpoint I/O 串行且有单连接故障面；7.1 再验证 pool + per-execution factory；
 - Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界
   聚合；它没有读取 Phase 3 Strategy dimensions 后重跑完整 Matrix validator；
 - 切片 3 的取消证明平台协调层停止消费 Fake 流、调用 Runtime cancel 并拒绝业务结果；尚未证明真实模型、

@@ -10,7 +10,7 @@ import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Annotated, Any, NotRequired, cast
 from uuid import uuid4
 
 from deepagents import (
@@ -24,8 +24,10 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import (
     AgentMiddleware,
+    AgentState,
     ModelRequest,
     ModelResponse,
+    PrivateStateAttr,
     ToolCallRequest,
 )
 from langchain.tools import ToolRuntime
@@ -93,7 +95,15 @@ class _TurnContext:
 
     turn_run_id: str
     allowed_tool_names: frozenset[str]
+    max_model_calls: int
     runtime_permit: RuntimeExecutionPermit | None = None
+
+
+class _ModelCallBudgetState(AgentState[Any]):
+    """随 SDK Thread checkpoint 持久化的逐 Turn 主模型调用预留。"""
+
+    agent_model_budget_turn_run_id: NotRequired[Annotated[str, PrivateStateAttr]]
+    agent_model_budget_reserved_calls: NotRequired[Annotated[int, PrivateStateAttr]]
 
 
 @dataclass(slots=True)
@@ -198,6 +208,50 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
             )
 
 
+class _RuntimeModelCallBudgetMiddleware(
+    AgentMiddleware[_ModelCallBudgetState, _TurnContext, Any]
+):
+    """在主 Agent model node 前预留逐 Turn 额度并随 Checkpoint 恢复。"""
+
+    state_schema = _ModelCallBudgetState
+
+    @staticmethod
+    def _reserve(
+        state: _ModelCallBudgetState,
+        context: _TurnContext,
+    ) -> dict[str, Any]:
+        budget_turn_run_id = state.get("agent_model_budget_turn_run_id")
+        used = (
+            state.get("agent_model_budget_reserved_calls", 0)
+            if budget_turn_run_id == context.turn_run_id
+            else 0
+        )
+        if used >= context.max_model_calls:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_model_call_limit_exceeded",
+                "Runtime 主模型调用预算已耗尽",
+            )
+        return {
+            "agent_model_budget_turn_run_id": context.turn_run_id,
+            "agent_model_budget_reserved_calls": used + 1,
+        }
+
+    def before_model(
+        self,
+        state: _ModelCallBudgetState,
+        runtime: Any,
+    ) -> dict[str, Any]:
+        return self._reserve(state, cast(_TurnContext, runtime.context))
+
+    async def abefore_model(
+        self,
+        state: _ModelCallBudgetState,
+        runtime: Any,
+    ) -> dict[str, Any]:
+        return self._reserve(state, cast(_TurnContext, runtime.context))
+
+
 class DeepAgentsResearchAgentRuntime:
     """用原生 ``create_deep_agent`` 实现五方法业务 Port 的受限 Spike。"""
 
@@ -259,6 +313,7 @@ class DeepAgentsResearchAgentRuntime:
                 (
                     filesystem,
                     summarization,
+                    _RuntimeModelCallBudgetMiddleware(),
                     _RuntimeToolPolicyMiddleware(
                         registered_tool_names=registered_tool_names,
                         execution_control=execution_control,
@@ -356,6 +411,7 @@ class DeepAgentsResearchAgentRuntime:
         context = _TurnContext(
             turn_run_id=request.turn_run_id,
             allowed_tool_names=frozenset(request.policy_snapshot.allowed_tool_names),
+            max_model_calls=request.policy_snapshot.max_model_calls,
             runtime_permit=permit,
         )
         stream: AsyncIterator[Any] | None = None
@@ -410,6 +466,10 @@ class DeepAgentsResearchAgentRuntime:
             raise
         except Exception as exc:
             local.state = RuntimeExecutionState.FAILED
+            nested = _nested_runtime_error(exc)
+            if nested is not None:
+                await self._record_runtime_error(permit, nested)
+                raise nested from exc
             normalized = _runtime_error(
                 RuntimeErrorKind.TEMPORARY,
                 "runtime_execution_failed",
@@ -561,6 +621,7 @@ class DeepAgentsResearchAgentRuntime:
             allowed_tool_names=frozenset(
                 turn_request.policy_snapshot.allowed_tool_names
             ),
+            max_model_calls=turn_request.policy_snapshot.max_model_calls,
             runtime_permit=permit,
         )
         stream: AsyncIterator[Any] | None = None
@@ -596,6 +657,10 @@ class DeepAgentsResearchAgentRuntime:
             raise
         except Exception as exc:
             local.state = RuntimeExecutionState.FAILED
+            nested = _nested_runtime_error(exc)
+            if nested is not None:
+                await self._record_runtime_error(permit, nested)
+                raise nested from exc
             normalized = _runtime_error(
                 RuntimeErrorKind.TEMPORARY,
                 "runtime_execution_failed",
@@ -1330,6 +1395,21 @@ def _runtime_error(
     kind: RuntimeErrorKind, code: str, safe_message: str
 ) -> ResearchAgentRuntimeError:
     return ResearchAgentRuntimeError(kind=kind, code=code, safe_message=safe_message)
+
+
+def _nested_runtime_error(exc: BaseException) -> ResearchAgentRuntimeError | None:
+    """从异步图包装的 ExceptionGroup 中提取项目安全错误。"""
+    if isinstance(exc, ResearchAgentRuntimeError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for nested in exc.exceptions:
+            runtime_error = _nested_runtime_error(nested)
+            if runtime_error is not None:
+                return runtime_error
+    chained = exc.__cause__ or exc.__context__
+    if chained is not None and chained is not exc:
+        return _nested_runtime_error(chained)
+    return None
 
 
 def _control_error(error: RuntimeExecutionControlError) -> ResearchAgentRuntimeError:

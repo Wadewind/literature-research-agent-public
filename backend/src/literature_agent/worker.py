@@ -14,12 +14,19 @@ import logging
 import os
 import socket
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager, suppress
-from typing import Any
+from contextlib import (
+    AbstractAsyncContextManager,
+    AsyncExitStack,
+    asynccontextmanager,
+    suppress,
+)
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
 from arq.worker import func, run_worker
+from langchain_core.language_models import BaseChatModel
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from literature_agent.application.agent_turn_executor import AgentTurnExecutor
 from literature_agent.application.agent_turn_lifecycle_service import (
@@ -35,6 +42,13 @@ from literature_agent.application.ports.arxiv_gateway import ArxivGateway
 from literature_agent.application.ports.chat_model import ChatModel
 from literature_agent.application.ports.document_parser import DocumentParser
 from literature_agent.application.ports.embedding_model import EmbeddingModel
+from literature_agent.application.ports.event_notifier import EventNotifier
+from literature_agent.application.ports.research_agent_runtime import (
+    ResearchAgentRuntime,
+)
+from literature_agent.application.project_research_context_service import (
+    ProjectResearchContextService,
+)
 from literature_agent.application.rag_answer_executor import RagAnswerExecutor
 from literature_agent.application.retriever import Retriever
 from literature_agent.application.review_dependency_service import (
@@ -53,11 +67,21 @@ from literature_agent.application.review_section_service import ReviewSectionSer
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.application.run_reconcile_service import RunReconcileService
+from literature_agent.application.runtime_execution_control import (
+    RuntimeExecutionControlService,
+)
 from literature_agent.application.waiting_run_resume_service import WaitingRunResumeService
 from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
+from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
+    DeepAgentsResearchAgentRuntime,
+)
+from literature_agent.infrastructure.agent.deepseek_research_model import (
+    aclose_deepseek_research_model,
+    build_deepseek_research_model,
+)
 from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
     FakeResearchAgentRuntime,
 )
@@ -138,6 +162,12 @@ from literature_agent.infrastructure.persistence.review_repository import (
 )
 from literature_agent.infrastructure.persistence.run_repository import (
     SqlalchemyRunRepository,
+)
+from literature_agent.infrastructure.persistence.runtime_execution_repository import (
+    SqlalchemyRuntimeExecutionRepository,
+)
+from literature_agent.infrastructure.persistence.tool_execution_repository import (
+    SqlalchemyToolExecutionRepository,
 )
 from literature_agent.infrastructure.queue.arq_run_queue import ArqRunQueue
 from literature_agent.infrastructure.queue.valkey_event_notifier import (
@@ -277,6 +307,114 @@ def _build_arxiv_gateway(settings: Settings) -> tuple[ArxivGateway, list[Any]]:
         gateway = HttpxArxivGateway(max_file_bytes=settings.max_upload_size_bytes)
         return gateway, [gateway]
     raise ValueError(f"未知 arxiv_backend: {settings.arxiv_backend}")
+
+
+def _build_research_agent_runtime(
+    settings: Settings,
+    *,
+    session_factory: Callable[[], AbstractAsyncContextManager[Any]],
+    retriever: Retriever,
+    event_notifier: EventNotifier,
+    checkpointer: BaseCheckpointSaver[str] | None,
+    runtime_owner_id: str,
+    model: BaseChatModel | None = None,
+) -> ResearchAgentRuntime:
+    """按显式 Worker 配置装配 SDK-neutral Research Agent Runtime。"""
+    if settings.research_runtime_backend == "fake":
+        return FakeResearchAgentRuntime()
+    if settings.research_runtime_backend != "deep_agents":
+        raise ValueError(
+            f"未知 research_runtime_backend: {settings.research_runtime_backend}"
+        )
+    if checkpointer is None:
+        raise ValueError("deep_agents 模式缺少持久 LangGraph Checkpointer")
+    if settings.research_model_api_key is None:
+        raise ValueError("deep_agents 模式必须设置 AGENT_RESEARCH_MODEL_API_KEY")
+    if model is None:
+        model = build_deepseek_research_model(
+            base_url=settings.research_model_base_url,
+            api_key=settings.research_model_api_key,
+            model=settings.research_model,
+            max_output_tokens=settings.research_model_max_output_tokens,
+            timeout_seconds=settings.model_timeout_seconds,
+            max_retries=settings.model_max_retries,
+        )
+    execution_control = RuntimeExecutionControlService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        attempt_repo_factory=SqlalchemyAttemptRepository,
+        execution_repo_factory=SqlalchemyRuntimeExecutionRepository,
+        lease_seconds=settings.worker_lease_seconds,
+    )
+    project_context = ProjectResearchContextService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        review_repo_factory=SqlalchemyReviewRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        tool_execution_repo_factory=SqlalchemyToolExecutionRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        retriever=cast(Any, retriever),
+        chunk_repo_factory=SqlalchemyChunkRepository,
+        event_notifier=event_notifier,
+    )
+    return DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=checkpointer,
+        project_context=project_context,
+        execution_control=execution_control,
+        runtime_owner_id=runtime_owner_id,
+    )
+
+
+@asynccontextmanager
+async def _open_research_agent_runtime(
+    settings: Settings,
+    *,
+    session_factory: Callable[[], AbstractAsyncContextManager[Any]],
+    retriever: Retriever,
+    event_notifier: EventNotifier,
+    runtime_owner_id: str,
+):
+    """持有真实模型与单连接 Checkpointer 的 Worker 生命周期。"""
+    if settings.research_runtime_backend == "fake":
+        yield _build_research_agent_runtime(
+            settings,
+            session_factory=session_factory,
+            retriever=retriever,
+            event_notifier=event_notifier,
+            checkpointer=None,
+            runtime_owner_id=runtime_owner_id,
+        )
+        return
+    if settings.research_runtime_backend != "deep_agents":
+        raise ValueError(
+            f"未知 research_runtime_backend: {settings.research_runtime_backend}"
+        )
+    if settings.research_model_api_key is None:
+        raise ValueError("deep_agents 模式必须设置 AGENT_RESEARCH_MODEL_API_KEY")
+    model = build_deepseek_research_model(
+        base_url=settings.research_model_base_url,
+        api_key=settings.research_model_api_key,
+        model=settings.research_model,
+        max_output_tokens=settings.research_model_max_output_tokens,
+        timeout_seconds=settings.model_timeout_seconds,
+        max_retries=settings.model_max_retries,
+    )
+    try:
+        async with PostgresCheckpointStore(settings.database_url).open() as checkpointer:
+            yield _build_research_agent_runtime(
+                settings,
+                session_factory=session_factory,
+                retriever=retriever,
+                event_notifier=event_notifier,
+                checkpointer=checkpointer,
+                runtime_owner_id=runtime_owner_id,
+                model=model,
+            )
+    finally:
+        await aclose_deepseek_research_model(model)
 
 
 async def execute_run(ctx: dict[str, Any], run_id: str) -> str:
@@ -562,7 +700,22 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         export_service=export_service,
         checkpoint_store=PostgresCheckpointStore(settings.database_url),
     )
-    # Phase 5 切片 2：仅验证离线业务包装，尚未接入 Deep Agents Adapter。
+    agent_runtime_resources = AsyncExitStack()
+    try:
+        research_agent_runtime = await agent_runtime_resources.enter_async_context(
+            _open_research_agent_runtime(
+                settings,
+                session_factory=session_factory,
+                retriever=retriever,
+                event_notifier=event_notifier,
+                runtime_owner_id=f"agent-runtime:{worker_id}",
+            )
+        )
+    except BaseException:
+        await agent_runtime_resources.aclose()
+        raise
+    ctx["agent_runtime_resources"] = agent_runtime_resources
+    ctx["research_agent_runtime"] = research_agent_runtime
     agent_turn_executor = AgentTurnExecutor(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -570,7 +723,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         event_repo_factory=SqlalchemyEventRepository,
         evidence_repo_factory=SqlalchemyEvidenceRepository,
         claim_set_repo_factory=SqlalchemyClaimSetRepository,
-        runtime=FakeResearchAgentRuntime(),
+        runtime=research_agent_runtime,
         event_notifier=event_notifier,
     )
     agent_turn_lifecycle = AgentTurnLifecycleService(
@@ -655,6 +808,11 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+    agent_runtime_resources: AsyncExitStack | None = ctx.pop(
+        "agent_runtime_resources", None
+    )
+    if agent_runtime_resources is not None:
+        await agent_runtime_resources.aclose()
     # 模型 Adapter 的 HTTP 客户端随进程退出前显式关闭
     for adapter in ctx.get("model_adapters", []):
         await adapter.aclose()
