@@ -2,6 +2,9 @@
 
 本目录记录文献综述 Agent 系统各阶段的设计、实验、实现证据和复盘。学习完成的标准不是“看过资料”，而是能够解释状态归属、正常流程、失败行为、测试方法和方案限制。
 
+跨阶段的当前运行配置入口、版本化 Profile/Catalog 与用户配置边界统一记录在
+[项目配置参考](../configuration-reference.md)；阶段文档继续保留各切片完成当时的历史决定和验证证据。
+
 ## 目录
 
 ```text
@@ -62,4 +65,5 @@ OpenSandbox/Lease/WorkspaceSnapshot 推进；ADR-0008 又将剩余顺序固定�
 回路验证，详见 [Agent Playwright/Search MCP](modules/agent-mcp-browser-search.md)。7.4 已完成
 [Agent Native Skills](modules/agent-native-skills.md)：平台/owner 声明式 Skill 采用不可变版本、首 Turn 后
 Session manifest 锁定和 `/skills/` 只读虚拟 Backend，并直接复用 Deep Agents SkillsMiddleware。真实
-OpenSandbox proxy/Provider 组合 Smoke 仍待验证。
+OpenSandbox proxy 的本地功能 Smoke 已于 2026-08-28 通过；真实 Provider、公共网络与生产安全验证仍待
+完成。

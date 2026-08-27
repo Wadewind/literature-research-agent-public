@@ -9,8 +9,8 @@ Phase 5 Research Agent Extension 正在按独立切片验证：业务 Session/Tu
 Checkpoint/压缩、Project Context、跨进程恢复、OpenSandbox Workspace、固定 MCP Catalog 已完成受限
 验证；Native Skills 已支持平台固定 Skill 和 owner-scoped 声明式版本。Skill Profile 只在 Session 首个
 Turn 前配置，`/skills/` 为 Sandbox `execute` 不可见的只读虚拟 Backend，Skill 不能扩大 Tool/MCP/网络
-权限。生产默认仍使用 Fake Runtime；真实 Provider/OpenSandbox proxy、公共网络与 Phase 6 安全治理尚未
-完成。
+权限。生产默认仍使用 Fake Runtime；真实 OpenSandbox proxy 的本地功能 Smoke 已通过，但真实 Provider、
+公共网络与 Phase 6 生产安全治理尚未完成。
 
 ## 仓库布局
 
@@ -44,6 +44,8 @@ chmod 600 .env
 ```
 
 `.env` 已被 Git 忽略，不会自动提交。应用本身不使用 dotenv；一键脚本会读取它，手动启动时需自行 `source`。
+完整的环境变量、版本化 Review Profile、MCP/Skill Catalog，以及“部署者配置、用户选择、平台固化”边界
+见 [配置参考](docs/configuration-reference.md)。
 
 ## 一键启动
 
@@ -98,7 +100,8 @@ AGENT_ENV_FILE=/path/to/provider.env ./scripts/dev.sh --real
 
 ## 真实 Parser 与 Provider
 
-真实模式的关键配置如下，完整模板见 `.env.example`：
+真实模式的关键配置如下，完整模板见 `.env.example`，字段语义与修改影响见
+[配置参考](docs/configuration-reference.md)：
 
 ```bash
 AGENT_PARSER_BACKEND=docling
