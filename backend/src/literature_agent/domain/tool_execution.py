@@ -120,9 +120,13 @@ def canonical_tool_args(arguments: Any) -> str:
 
 
 def create_tool_execution(
-    *, turn_run_id: str, tool_name: str, arguments: dict
+    *,
+    turn_run_id: str,
+    tool_name: str,
+    arguments: dict,
+    invocation_id: str | None = None,
 ) -> ToolExecution:
-    """为稳定 Turn/Tool/参数创建唯一 effect。"""
+    """为 Project 参数或 MCP 逻辑 invocation 创建稳定 effect。"""
     if not turn_run_id or not tool_name or len(tool_name) > 100:
         raise ValueError("Tool effect 作用域或名称非法")
     if not isinstance(arguments, dict):
@@ -133,10 +137,25 @@ def create_tool_execution(
         raise ValueError("Tool 参数必须是有限 JSON") from exc
     if len(serialized) > TOOL_ARGUMENTS_MAX_CHARS:
         raise ValueError("Tool 参数超过安全大小限制")
-    args_hash = hashlib.sha256(serialized.encode()).hexdigest()
-    effect_hash = hashlib.sha256(
-        f"{turn_run_id}:{tool_name}:{args_hash}".encode()
-    ).hexdigest()
+    if invocation_id is not None:
+        if (
+            not isinstance(invocation_id, str)
+            or not invocation_id.strip()
+            or len(invocation_id) > 255
+        ):
+            raise ValueError("Tool invocation ID 非法")
+        args_material = canonical_tool_args(
+            {"invocation_id": invocation_id, "arguments": arguments}
+        )
+        args_hash = hashlib.sha256(args_material.encode()).hexdigest()
+        effect_hash = hashlib.sha256(
+            f"{turn_run_id}:invocation:{invocation_id}".encode()
+        ).hexdigest()
+    else:
+        args_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        effect_hash = hashlib.sha256(
+            f"{turn_run_id}:{tool_name}:{args_hash}".encode()
+        ).hexdigest()
     now = datetime.now(UTC)
     return ToolExecution(
         effect_id=f"tool-effect-{effect_hash}",

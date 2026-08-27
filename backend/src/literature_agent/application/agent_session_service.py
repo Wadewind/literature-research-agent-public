@@ -16,6 +16,7 @@ from literature_agent.application.ports.idempotency_repository import (
     IdempotencyRecord,
     IdempotencyRepository,
 )
+from literature_agent.application.ports.mcp_profile_repository import McpProfileRepository
 from literature_agent.application.ports.outbox_repository import OutboxRepository
 from literature_agent.application.ports.paper_repository import PaperRepository
 from literature_agent.application.ports.project_paper_repository import ProjectPaperRepository
@@ -31,10 +32,12 @@ from literature_agent.domain.exceptions import (
     AgentSessionNotFoundError,
     AgentTurnNotFoundError,
     IdempotencyConflictError,
+    McpProfileInvalidError,
     ProjectArchivedError,
     ProjectNotFoundError,
     ProjectNotIndexedError,
 )
+from literature_agent.domain.mcp_configuration import McpCatalog
 from literature_agent.domain.queue_outbox import create_outbox_entry
 from literature_agent.domain.research_agent import (
     AgentArtifactCandidate,
@@ -90,6 +93,8 @@ class AgentSessionService[TSession: Session]:
         run_repo_factory: Callable[[TSession], RunRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
         outbox_repo_factory: Callable[[TSession], OutboxRepository],
+        mcp_profile_repo_factory: Callable[[TSession], McpProfileRepository] | None = None,
+        mcp_catalog: McpCatalog | None = None,
         event_notifier: EventNotifier | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -103,6 +108,8 @@ class AgentSessionService[TSession: Session]:
         self._run_repo_factory = run_repo_factory
         self._event_repo_factory = event_repo_factory
         self._outbox_repo_factory = outbox_repo_factory
+        self._mcp_profile_repo_factory = mcp_profile_repo_factory
+        self._mcp_catalog = mcp_catalog or McpCatalog()
         self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def create_session(
@@ -246,11 +253,23 @@ class AgentSessionService[TSession: Session]:
                 project_index_refs=tuple(refs),
                 review_output_id=review_output_id,
             )
+            profile = (
+                await self._mcp_profile_repo_factory(session).get_scoped(
+                    session_id, actor.owner_id
+                )
+                if self._mcp_profile_repo_factory is not None
+                else None
+            )
+            try:
+                mcp_refs = self._mcp_catalog.resolve_profile(profile)
+            except ValueError as exc:
+                raise McpProfileInvalidError(str(exc)) from exc
             policy = create_project_research_workspace_policy_snapshot(
                 owner_id=actor.owner_id,
                 project_id=project.project_id,
                 session_id=session_id,
                 turn_run_id=run.run_id,
+                mcp_refs=mcp_refs,
             )
             turn = create_agent_turn_run(
                 turn_run_id=run.run_id,
@@ -299,6 +318,7 @@ class AgentSessionService[TSession: Session]:
                         "message_id": user_message.message_id,
                         "review_output_id": review_output_id,
                         "project_index_count": len(refs),
+                        "mcp_catalog_count": len(mcp_refs),
                     },
                 )
             )

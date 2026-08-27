@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.agent_repository import AgentRepository
 from literature_agent.domain.exceptions import RunConcurrentModificationError
+from literature_agent.domain.mcp_configuration import McpPolicyRef, McpPolicyToolRef
 from literature_agent.domain.research_agent import (
     AgentArtifactCandidate,
     AgentArtifactCandidateStatus,
@@ -244,6 +245,23 @@ class SqlalchemyAgentRepository(AgentRepository):
                 turn_run_id=value.turn_run_id,
                 allowed_tool_names=list(value.allowed_tool_names),
                 allowed_skill_names=list(value.allowed_skill_names),
+                mcp_refs=[
+                    {
+                        "profile_id": ref.profile_id,
+                        "profile_revision": ref.profile_revision,
+                        "catalog_id": ref.catalog_id,
+                        "version": ref.version,
+                        "config_hash": ref.config_hash,
+                        "tools": [
+                            {
+                                "name": tool.name,
+                                "input_schema_hash": tool.input_schema_hash,
+                            }
+                            for tool in ref.tools
+                        ],
+                    }
+                    for ref in value.mcp_refs
+                ],
                 network_enabled=value.network_enabled,
                 sandbox_enabled=value.sandbox_enabled,
                 approval_required=value.approval_required,
@@ -461,6 +479,17 @@ def _policy(row: AgentPolicySnapshotORM) -> PolicySnapshot:
         row.turn_run_id,
         tuple(row.allowed_tool_names),
         tuple(row.allowed_skill_names),
+        tuple(
+            McpPolicyRef(
+                profile_id=ref["profile_id"],
+                profile_revision=ref["profile_revision"],
+                catalog_id=ref["catalog_id"],
+                version=ref["version"],
+                config_hash=ref["config_hash"],
+                tools=tuple(McpPolicyToolRef(**tool) for tool in ref["tools"]),
+            )
+            for ref in row.mcp_refs
+        ),
         row.network_enabled,
         row.sandbox_enabled,
         row.approval_required,

@@ -106,9 +106,10 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
   宿主/Secret 不可见或远端销毁补偿已在真实环境验证。
 - OpenSandbox Python SDK 与自定义 Adapter 仍是 alpha Spike；没有孤儿 Lease 定时清理器、磁盘/PID
   运行时测量、公开部署或生产 SLA。
-- MCP 配置、Playwright/Search MCP、noVNC/公共下载和 Native Skills 属于后续切片或 Phase 6，本切片
-  没有实现；ADR-0008 已把 7.2–7.4 顺序调整为 MCP Configuration Foundation → Playwright/Search MCP
-  → Native Skills，并把公共网络与统一 egress 后移到 Phase 6。
+- 7.2 已实现 MCP 配置与显式 client 生命周期基础：execute/resume 的 MCP session 包围 graph，并在
+  Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。生产 Catalog 仍为空，
+  Playwright/Search MCP、noVNC/公共下载和 Native Skills 属于 7.3/7.4 或 Phase 6；公共网络与统一 egress
+  仍后移到 Phase 6。
 - `max_model_calls` 仍不覆盖 SummarizationMiddleware 内部重试或已在途 Provider 不确定窗口。
 
 ## 代码入口

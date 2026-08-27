@@ -214,6 +214,18 @@ class AgentTurnNotFoundError(Exception):
         super().__init__(f"AgentTurnRun {run_id} 不存在")
 
 
+class McpProfileRevisionConflictError(Exception):
+    """Session MCP Profile revision 已变化，拒绝覆盖更新。"""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(f"AgentSession {session_id} 的 MCP Profile revision 已变化")
+
+
+class McpProfileInvalidError(ValueError):
+    """MCP 选择不属于平台 Catalog 或安全参数不合法。"""
+
+
 class ProjectNotIndexedError(Exception):
     """提问范围内没有任何 ready ChunkSet，快速失败。"""
 

@@ -2,11 +2,16 @@
 
 import os
 import subprocess
+import sys
+from typing import cast
 
+from sqlalchemy import Table
 from testcontainers.community.postgres import PostgresContainer
 
 from literature_agent.infrastructure.persistence.models import (
     AgentContextSnapshotORM,
+    AgentMcpProfileORM,
+    AgentPolicySnapshotORM,
     AgentRuntimeExecutionORM,
     AgentSandboxLeaseORM,
     AgentTurnRunORM,
@@ -17,11 +22,14 @@ from literature_agent.infrastructure.persistence.models import (
 def test_agent_turn_foreign_keys_close_the_business_fact_graph() -> None:
     """Turn 与 Snapshot 的业务引用必须由明确命名 FK 约束。"""
     turn_fks = {
-        foreign_key.constraint.name for foreign_key in AgentTurnRunORM.__table__.foreign_keys
+        foreign_key.constraint.name
+        for foreign_key in AgentTurnRunORM.__table__.foreign_keys
+        if foreign_key.constraint is not None
     }
     context_fks = {
         foreign_key.constraint.name
         for foreign_key in AgentContextSnapshotORM.__table__.foreign_keys
+        if foreign_key.constraint is not None
     }
     assert {
         "fk_agent_turn_runs_user_message",
@@ -76,6 +84,40 @@ def test_sandbox_workspace_tables_reference_business_scope() -> None:
     }
 
 
+def test_mcp_profile_and_policy_snapshot_remain_sdk_neutral() -> None:
+    """MCP Profile 隔离到 Session，逐 Turn Policy 只保存冻结引用。"""
+    targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentMcpProfileORM.__table__.foreign_keys
+    }
+    assert targets == {"agent_sessions.session_id"}
+    assert {
+        "profile_id",
+        "session_id",
+        "owner_id",
+        "revision",
+        "selections",
+        "config_hash",
+    } <= set(AgentMcpProfileORM.__table__.columns.keys())
+    assert "mcp_refs" in AgentPolicySnapshotORM.__table__.columns
+    profile_table = cast(Table, AgentMcpProfileORM.__table__)
+    assert {column.name for column in profile_table.primary_key.columns} == {
+        "profile_id",
+        "revision",
+    }
+    assert {
+        constraint.name for constraint in profile_table.constraints
+    } >= {"uq_agent_mcp_profiles_session_revision"}
+    assert {
+        "url",
+        "endpoint",
+        "transport",
+        "command",
+        "env",
+        "secret",
+    }.isdisjoint(AgentMcpProfileORM.__table__.columns.keys())
+
+
 def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
     """在临时 PostgreSQL 上验证 head → -1 → head 与 schema check。"""
     with PostgresContainer("pgvector/pgvector:pg18") as postgres:
@@ -84,10 +126,10 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         )
         env = {**os.environ, "DATABASE_URL": url}
         for args in (
-            ("alembic", "upgrade", "head"),
-            ("alembic", "downgrade", "-1"),
-            ("alembic", "upgrade", "head"),
-            ("alembic", "check"),
+            (sys.executable, "-m", "alembic", "upgrade", "head"),
+            (sys.executable, "-m", "alembic", "downgrade", "-1"),
+            (sys.executable, "-m", "alembic", "upgrade", "head"),
+            (sys.executable, "-m", "alembic", "check"),
         ):
             result = subprocess.run(args, env=env, capture_output=True, text=True)
             assert result.returncode == 0, result.stdout + result.stderr

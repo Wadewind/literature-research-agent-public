@@ -2,6 +2,8 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -14,6 +16,7 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.sandbox import BaseSandbox
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 
 from literature_agent.application.ports.research_agent_runtime import (
@@ -27,6 +30,7 @@ from literature_agent.application.ports.research_agent_runtime import (
     RuntimeTurnRequest,
     RuntimeTurnResult,
 )
+from literature_agent.domain.mcp_configuration import McpPolicyRef, McpPolicyToolRef
 from literature_agent.domain.research_agent import (
     RuntimeSessionBinding,
     RuntimeTurnBinding,
@@ -70,6 +74,28 @@ def _request() -> RuntimeTurnRequest:
         user_message_content="分析项目证据",
         context_snapshot=context,
         policy_snapshot=policy,
+    )
+
+
+def _mcp_request() -> RuntimeTurnRequest:
+    request = _request()
+    ref = McpPolicyRef(
+        profile_id="profile-1",
+        profile_revision=1,
+        catalog_id="fixture-search",
+        version="1.0.0",
+        config_hash="a" * 64,
+        tools=(McpPolicyToolRef("fixture-search_search", "b" * 64),),
+    )
+    return replace(
+        request,
+        policy_snapshot=create_project_research_workspace_policy_snapshot(
+            owner_id="owner-1",
+            project_id="project-1",
+            session_id="session-1",
+            turn_run_id="turn-1",
+            mcp_refs=(ref,),
+        ),
     )
 
 
@@ -552,3 +578,132 @@ async def test_pre_event_checkpoint_finalizer_invalid_marks_acquired_lease_dirty
 
     assert failure.value.code == "runtime_workspace_snapshot_invalid"
     assert workspace.dirty_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_wraps_runtime_execution_and_closes_before_sandbox() -> None:
+    workspace = _WorkspaceManager()
+    known = {"value": False}
+    lifecycle: list[str] = []
+
+    @tool
+    def fixture_search_search(query: str) -> str:
+        """确定性测试工具。"""
+        return query
+
+    class _Loader:
+        @asynccontextmanager
+        async def open(self, request, lease):
+            assert request.turn_run_id == "turn-1"
+            assert lease.backend is workspace.backend
+            lifecycle.append("mcp-open")
+            try:
+                yield (fixture_search_search,)
+            finally:
+                assert workspace.backend.closed is False
+                lifecycle.append("mcp-close")
+
+    def runtime_factory(saver, backend, before_succeed):
+        del saver, before_succeed
+        return _Runtime(backend, known=known)
+
+    def runtime_with_tools_factory(saver, backend, before_succeed, tools):
+        del saver, before_succeed
+        assert [item.name for item in tools] == ["fixture_search_search"]
+        lifecycle.append("runtime-created")
+        return _Runtime(backend, known=known)
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=runtime_factory,
+        runtime_with_tools_factory=runtime_with_tools_factory,
+        mcp_tool_loader=_Loader(),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    events = [event async for event in runtime.execute_turn(_mcp_request())]
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert lifecycle == ["mcp-open", "runtime-created", "mcp-close"]
+    assert workspace.backend.closed is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_and_sandbox_close_when_runtime_factory_fails() -> None:
+    workspace = _WorkspaceManager()
+    lifecycle: list[str] = []
+
+    @tool
+    def fixture_search_search(query: str) -> str:
+        """确定性测试工具。"""
+        return query
+
+    class _Loader:
+        @asynccontextmanager
+        async def open(self, request, lease):
+            del request, lease
+            lifecycle.append("mcp-open")
+            try:
+                yield (fixture_search_search,)
+            finally:
+                assert workspace.backend.closed is False
+                lifecycle.append("mcp-close")
+
+    def failed_factory(saver, backend, before_succeed, tools):
+        del saver, backend, before_succeed, tools
+        raise RuntimeError("runtime factory failed")
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=lambda saver, backend, before_succeed: _Runtime(
+            backend, known={"value": False}
+        ),
+        runtime_with_tools_factory=failed_factory,
+        mcp_tool_loader=_Loader(),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="runtime factory failed"):
+        await _collect_events(runtime.execute_turn(_mcp_request()))
+
+    assert lifecycle == ["mcp-open", "mcp-close"]
+    assert workspace.backend.closed is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_close_failure_still_closes_sandbox_connection() -> None:
+    workspace = _WorkspaceManager()
+    known = {"value": False}
+
+    @tool
+    def fixture_search_search(query: str) -> str:
+        """确定性测试工具。"""
+        return query
+
+    class _Loader:
+        @asynccontextmanager
+        async def open(self, request, lease):
+            del request, lease
+            try:
+                yield (fixture_search_search,)
+            finally:
+                raise RuntimeError("mcp close failed")
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=lambda saver, backend, before_succeed: _Runtime(
+            backend, known=known
+        ),
+        runtime_with_tools_factory=(
+            lambda saver, backend, before_succeed, tools: _Runtime(
+                backend, known=known
+            )
+        ),
+        mcp_tool_loader=_Loader(),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="mcp close failed"):
+        await _collect_events(runtime.execute_turn(_mcp_request()))
+
+    assert workspace.backend.closed is True

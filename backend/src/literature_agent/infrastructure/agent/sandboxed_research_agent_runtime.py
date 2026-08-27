@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
 from typing import Protocol
 
 from deepagents.backends import BackendProtocol, StateBackend
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from literature_agent.application.ports.research_agent_runtime import (
@@ -41,6 +43,23 @@ RuntimeFactory = Callable[
     ],
     ResearchAgentRuntime,
 ]
+RuntimeWithToolsFactory = Callable[
+    [
+        BaseCheckpointSaver[str],
+        BackendProtocol,
+        Callable[[RuntimeTurnRequest], Awaitable[None]] | None,
+        tuple[BaseTool, ...],
+    ],
+    ResearchAgentRuntime,
+]
+
+
+class RuntimeMcpToolLoader(Protocol):
+    """仅在 execute/resume 期间打开并关闭 MCP ClientSession。"""
+
+    def open(
+        self, request: RuntimeTurnRequest, lease: SandboxWorkspaceLease
+    ) -> AbstractAsyncContextManager[tuple[BaseTool, ...]]: ...
 
 
 @dataclass(slots=True)
@@ -61,10 +80,14 @@ class SandboxedResearchAgentRuntime:
         checkpoint_factory: CheckpointExecutionFactory,
         runtime_factory: RuntimeFactory,
         workspace_manager: SandboxWorkspaceManager,
+        runtime_with_tools_factory: RuntimeWithToolsFactory | None = None,
+        mcp_tool_loader: RuntimeMcpToolLoader | None = None,
     ) -> None:
         self._checkpoint_factory = checkpoint_factory
         self._runtime_factory = runtime_factory
         self._workspace_manager = workspace_manager
+        self._runtime_with_tools_factory = runtime_with_tools_factory
+        self._mcp_tool_loader = mcp_tool_loader
         self._active: dict[str, _ActiveExecution] = {}
         self._active_lock = asyncio.Lock()
 
@@ -101,32 +124,59 @@ class SandboxedResearchAgentRuntime:
     ) -> AsyncIterator[RuntimeEvent]:
         lease = await self._workspace_manager.acquire(turn_request)
         active_ref: _ActiveExecution | None = None
+        tool_stack = AsyncExitStack()
+        try:
+            if turn_request.policy_snapshot.mcp_refs:
+                if self._mcp_tool_loader is None or self._runtime_with_tools_factory is None:
+                    raise ResearchAgentRuntimeError(
+                        kind=RuntimeErrorKind.PERMANENT,
+                        code="runtime_mcp_unavailable",
+                        safe_message="本轮 MCP 能力未装配",
+                    )
+                mcp_tools = await tool_stack.enter_async_context(
+                    self._mcp_tool_loader.open(turn_request, lease)
+                )
+            else:
+                mcp_tools = ()
+        except BaseException:
+            await _close_runtime_resources(tool_stack, lease.backend)
+            raise
 
         async def finalize(request: RuntimeTurnRequest) -> None:
             await self._workspace_manager.stage_snapshot(request, lease)
             assert active_ref is not None
             active_ref.workspace_staged = True
 
-        runtime = self._new_runtime(lease.backend, before_succeed=finalize)
+        try:
+            runtime = self._new_runtime(
+                lease.backend, before_succeed=finalize, tools=mcp_tools
+            )
+        except BaseException:
+            await _close_runtime_resources(tool_stack, lease.backend)
+            raise
         active = _ActiveExecution(runtime=runtime, lease=lease)
         active_ref = active
+        duplicate = False
         async with self._active_lock:
             if turn_request.turn_run_id in self._active:
-                await _close_backend(lease.backend)
-                raise ResearchAgentRuntimeError(
-                    kind=RuntimeErrorKind.TEMPORARY,
-                    code="runtime_turn_already_active",
-                    safe_message="同一 Runtime Turn 已在执行",
-                )
-            self._active[turn_request.turn_run_id] = active
+                duplicate = True
+            else:
+                self._active[turn_request.turn_run_id] = active
+        if duplicate:
+            await _close_runtime_resources(tool_stack, lease.backend)
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.TEMPORARY,
+                code="runtime_turn_already_active",
+                safe_message="同一 Runtime Turn 已在执行",
+            )
 
         snapshot_committed = False
-        stream = (
-            runtime.execute_turn(turn_request)
-            if resume is None
-            else runtime.resume_turn(resume)
-        )
         try:
+            stream = (
+                runtime.execute_turn(turn_request)
+                if resume is None
+                else runtime.resume_turn(resume)
+            )
             async for event in stream:
                 active.runtime_entered = True
                 if event.kind is RuntimeEventKind.COMPLETED:
@@ -163,7 +213,7 @@ class SandboxedResearchAgentRuntime:
         finally:
             async with self._active_lock:
                 self._active.pop(turn_request.turn_run_id, None)
-            await _close_backend(lease.backend)
+            await _close_runtime_resources(tool_stack, lease.backend)
 
     async def cancel_turn(self, turn_run_id: str) -> RuntimeTurnReconciliation:
         async with self._active_lock:
@@ -199,7 +249,16 @@ class SandboxedResearchAgentRuntime:
         backend: BackendProtocol,
         *,
         before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None = None,
+        tools: tuple[BaseTool, ...] = (),
     ) -> ResearchAgentRuntime:
+        if tools:
+            assert self._runtime_with_tools_factory is not None
+            return self._runtime_with_tools_factory(
+                self._checkpoint_factory.create_saver(),
+                backend,
+                before_succeed,
+                tools,
+            )
         return self._runtime_factory(
             self._checkpoint_factory.create_saver(),
             backend,
@@ -211,3 +270,11 @@ async def _close_backend(backend: object) -> None:
     close = getattr(backend, "close", None)
     if callable(close):
         await asyncio.to_thread(close)
+
+
+async def _close_runtime_resources(tool_stack: AsyncExitStack, backend: object) -> None:
+    """MCP 关闭失败也必须尝试释放当前 Sandbox 连接。"""
+    try:
+        await tool_stack.aclose()
+    finally:
+        await _close_backend(backend)

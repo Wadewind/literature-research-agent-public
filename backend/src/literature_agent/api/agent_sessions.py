@@ -8,16 +8,24 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
 from literature_agent.application.agent_session_service import AgentSessionService
+from literature_agent.application.mcp_configuration_service import (
+    McpConfigurationService,
+    McpProfileView,
+)
 from literature_agent.domain.exceptions import (
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
     AgentSessionNotFoundError,
     AgentTurnNotFoundError,
     IdempotencyConflictError,
+    McpProfileInvalidError,
+    McpProfileRevisionConflictError,
     ProjectArchivedError,
     ProjectNotFoundError,
     ProjectNotIndexedError,
 )
+from literature_agent.domain.mcp_configuration import McpProfileSelection
+from literature_agent.infrastructure.agent.mcp_catalog import PLATFORM_MCP_CATALOG
 from literature_agent.infrastructure.persistence.agent_repository import SqlalchemyAgentRepository
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
@@ -25,6 +33,9 @@ from literature_agent.infrastructure.persistence.chunk_set_repository import (
 from literature_agent.infrastructure.persistence.event_repository import SqlalchemyEventRepository
 from literature_agent.infrastructure.persistence.idempotency_repository import (
     SqlalchemyIdempotencyRepository,
+)
+from literature_agent.infrastructure.persistence.mcp_profile_repository import (
+    SqlalchemyMcpProfileRepository,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import SqlalchemyOutboxRepository
 from literature_agent.infrastructure.persistence.paper_repository import SqlalchemyPaperRepository
@@ -106,6 +117,34 @@ class TurnResponse(BaseModel):
     candidates: list[CandidateResponse]
 
 
+class McpProfileSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    catalog_id: str = Field(min_length=1, max_length=63)
+    version: str = Field(min_length=1, max_length=50)
+    parameters: dict[str, str] = Field(default_factory=dict)
+
+
+class McpProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=0)
+    selections: list[McpProfileSelectionRequest] = Field(default_factory=list, max_length=8)
+
+
+class McpProfileResponse(BaseModel):
+    session_id: str
+    revision: int
+    config_hash: str
+    selections: list[McpProfileSelectionRequest]
+
+
+class McpCatalogEntryResponse(BaseModel):
+    catalog_id: str
+    version: str
+    display_name: str
+    parameters: list[dict[str, object]]
+    tools: list[dict[str, str]]
+
+
 async def get_agent_session_service(request: Request) -> AgentSessionService:
     state = request.app.state.app_state
     return AgentSessionService(
@@ -120,11 +159,28 @@ async def get_agent_session_service(request: Request) -> AgentSessionService:
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
+        mcp_profile_repo_factory=SqlalchemyMcpProfileRepository,
+        mcp_catalog=PLATFORM_MCP_CATALOG,
         event_notifier=state.event_notifier,
     )
 
 
 ServiceDep = Annotated[AgentSessionService, Depends(get_agent_session_service)]
+
+
+async def get_mcp_configuration_service(request: Request) -> McpConfigurationService:
+    state = request.app.state.app_state
+    return McpConfigurationService(
+        session_factory=state.session_factory,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        profile_repo_factory=SqlalchemyMcpProfileRepository,
+        catalog=PLATFORM_MCP_CATALOG,
+    )
+
+
+McpServiceDep = Annotated[
+    McpConfigurationService, Depends(get_mcp_configuration_service)
+]
 
 
 def _session(value) -> SessionResponse:
@@ -167,7 +223,95 @@ def _translate(exc: Exception) -> HTTPException:
         return HTTPException(409, "project_not_indexed")
     if isinstance(exc, IdempotencyConflictError):
         return HTTPException(409, "idempotency_conflict")
+    if isinstance(exc, McpProfileRevisionConflictError):
+        return HTTPException(409, "mcp_profile_revision_conflict")
+    if isinstance(exc, McpProfileInvalidError):
+        return HTTPException(422, "mcp_profile_invalid")
     raise exc
+
+
+def _mcp_profile(value: McpProfileView) -> McpProfileResponse:
+    return McpProfileResponse(
+        session_id=value.session_id,
+        revision=value.revision,
+        config_hash=value.config_hash,
+        selections=[
+            McpProfileSelectionRequest(
+                catalog_id=item.catalog_id,
+                version=item.version,
+                parameters=dict(item.parameters),
+            )
+            for item in value.selections
+        ],
+    )
+
+
+@router.get("/agent-mcp-catalog", response_model=list[McpCatalogEntryResponse])
+async def list_mcp_catalog(service: McpServiceDep) -> list[McpCatalogEntryResponse]:
+    return [
+        McpCatalogEntryResponse(
+            catalog_id=entry.catalog_id,
+            version=entry.version,
+            display_name=entry.display_name,
+            parameters=[
+                {
+                    "name": item.name,
+                    "required": item.required,
+                    "max_length": item.max_length,
+                }
+                for item in entry.parameters
+            ],
+            tools=[
+                {"name": item.name, "input_schema_hash": item.input_schema_hash}
+                for item in entry.tools
+            ],
+        )
+        for entry in service.list_catalog()
+    ]
+
+
+@router.get(
+    "/agent-sessions/{session_id}/mcp-profile", response_model=McpProfileResponse
+)
+async def get_mcp_profile(
+    session_id: str, actor: ActorDep, service: McpServiceDep
+) -> McpProfileResponse:
+    try:
+        return _mcp_profile(await service.get_profile(actor, session_id))
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.put(
+    "/agent-sessions/{session_id}/mcp-profile", response_model=McpProfileResponse
+)
+async def update_mcp_profile(
+    session_id: str,
+    body: McpProfileUpdateRequest,
+    actor: ActorDep,
+    service: McpServiceDep,
+) -> McpProfileResponse:
+    try:
+        selections = tuple(
+            McpProfileSelection(
+                catalog_id=item.catalog_id,
+                version=item.version,
+                parameters=tuple(sorted(item.parameters.items())),
+            )
+            for item in body.selections
+        )
+        return _mcp_profile(
+            await service.update_profile(
+                actor,
+                session_id,
+                expected_revision=body.expected_revision,
+                selections=selections,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(422, "mcp_profile_invalid") from exc
+    except Exception as exc:
+        raise _translate(exc) from exc
 
 
 @router.post(

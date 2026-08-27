@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from literature_agent.application.agent_session_service import AgentSessionService
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.chunk import create_chunk_set
+from literature_agent.domain.mcp_configuration import McpCatalog
 from literature_agent.domain.paper import create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.parse_revision import create_parse_revision
@@ -31,6 +32,9 @@ from literature_agent.infrastructure.persistence.event_repository import (
 )
 from literature_agent.infrastructure.persistence.idempotency_repository import (
     SqlalchemyIdempotencyRepository,
+)
+from literature_agent.infrastructure.persistence.mcp_profile_repository import (
+    SqlalchemyMcpProfileRepository,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
@@ -124,7 +128,9 @@ async def seed_agent_scenario(db_engine, *, owner_id: str = "agent-owner") -> Ag
     return AgentScenario(factory, actor, project, matrix, chunk_set.chunk_set_id)
 
 
-def make_agent_service(session_factory) -> AgentSessionService:
+def make_agent_service(
+    session_factory, *, mcp_catalog: McpCatalog | None = None
+) -> AgentSessionService:
     """用真实 Repository 组装 AgentSessionService。"""
     return AgentSessionService(
         session_factory=session_factory,
@@ -138,4 +144,6 @@ def make_agent_service(session_factory) -> AgentSessionService:
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
+        mcp_profile_repo_factory=SqlalchemyMcpProfileRepository,
+        mcp_catalog=mcp_catalog,
     )

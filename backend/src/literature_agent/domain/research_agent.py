@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from literature_agent.domain.mcp_configuration import McpPolicyRef
+
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _AGENT_TITLE_MAX_LENGTH = 200
 _AGENT_MESSAGE_MAX_LENGTH = 16_000
@@ -232,6 +234,7 @@ class PolicySnapshot:
     turn_run_id: str
     allowed_tool_names: tuple[str, ...]
     allowed_skill_names: tuple[str, ...]
+    mcp_refs: tuple[McpPolicyRef, ...]
     network_enabled: bool
     sandbox_enabled: bool
     approval_required: bool
@@ -487,6 +490,7 @@ def create_policy_snapshot(
     policy_version: str = "agent-policy.v1",
     allowed_tool_names: tuple[str, ...] = (),
     allowed_skill_names: tuple[str, ...] = (),
+    mcp_refs: tuple[McpPolicyRef, ...] = (),
     network_enabled: bool = False,
     sandbox_enabled: bool = False,
     approval_required: bool = True,
@@ -503,6 +507,10 @@ def create_policy_snapshot(
         raise ValueError("调用预算不能小于 0")
     _reject_duplicate_names(allowed_tool_names, "Tool")
     _reject_duplicate_names(allowed_skill_names, "Skill")
+    mcp_tool_names = tuple(tool.name for ref in mcp_refs for tool in ref.tools)
+    _reject_duplicate_names(mcp_tool_names, "MCP Tool")
+    if not set(mcp_tool_names).issubset(allowed_tool_names):
+        raise ValueError("MCP Tool 必须包含在 Policy Tool allowlist")
     hash_payload = {
         "policy_version": policy_version,
         "owner_id": owner_id,
@@ -511,6 +519,20 @@ def create_policy_snapshot(
         "turn_run_id": turn_run_id,
         "allowed_tool_names": list(allowed_tool_names),
         "allowed_skill_names": list(allowed_skill_names),
+        "mcp_refs": [
+            {
+                "profile_id": ref.profile_id,
+                "profile_revision": ref.profile_revision,
+                "catalog_id": ref.catalog_id,
+                "version": ref.version,
+                "config_hash": ref.config_hash,
+                "tools": [
+                    {"name": tool.name, "input_schema_hash": tool.input_schema_hash}
+                    for tool in ref.tools
+                ],
+            }
+            for ref in mcp_refs
+        ],
         "network_enabled": network_enabled,
         "sandbox_enabled": sandbox_enabled,
         "approval_required": approval_required,
@@ -526,6 +548,7 @@ def create_policy_snapshot(
         turn_run_id=turn_run_id,
         allowed_tool_names=tuple(allowed_tool_names),
         allowed_skill_names=tuple(allowed_skill_names),
+        mcp_refs=tuple(mcp_refs),
         network_enabled=network_enabled,
         sandbox_enabled=sandbox_enabled,
         approval_required=approval_required,
@@ -537,7 +560,12 @@ def create_policy_snapshot(
 
 
 def create_project_research_workspace_policy_snapshot(
-    *, owner_id: str, project_id: str, session_id: str, turn_run_id: str
+    *,
+    owner_id: str,
+    project_id: str,
+    session_id: str,
+    turn_run_id: str,
+    mcp_refs: tuple[McpPolicyRef, ...] = (),
 ) -> PolicySnapshot:
     """由服务端选择 Slice 7.1 唯一固定的可执行研究能力档案。"""
     return create_policy_snapshot(
@@ -545,9 +573,15 @@ def create_project_research_workspace_policy_snapshot(
         project_id=project_id,
         session_id=session_id,
         turn_run_id=turn_run_id,
-        policy_version=PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION,
-        allowed_tool_names=PROJECT_RESEARCH_WORKSPACE_TOOLS,
+        policy_version=(
+            "agent-policy.project-research-workspace-mcp.v1"
+            if mcp_refs
+            else PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION
+        ),
+        allowed_tool_names=PROJECT_RESEARCH_WORKSPACE_TOOLS
+        + tuple(tool.name for ref in mcp_refs for tool in ref.tools),
         allowed_skill_names=(),
+        mcp_refs=mcp_refs,
         network_enabled=False,
         sandbox_enabled=True,
         approval_required=False,

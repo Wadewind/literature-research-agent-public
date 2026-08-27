@@ -67,8 +67,9 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   schema 只能看到 query 或空参数，不能伪造 owner/Project/Snapshot/ReviewOutput/ChunkSet ID；
 - Project Context 的 temporary/permanent/cancelled 安全错误会映射为既有 `RuntimeErrorKind`，最终回答
   Evidence 标记解析为小型 `RuntimeTurnResult.evidence_ids`；Application 仍负责 Citation 授权与事务提交；
-- 本切片未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，ADR-0008
-  决定剩余能力复用 LangChain MCP Adapter、Playwright MCP 与 Deep Agents Native Skills；
+- 切片 4 当时未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，
+  7.2 已在 Adapter 外围接入 LangChain MCP Adapter 的显式 session、Schema 校验和平台 interceptor。
+  Playwright/Search MCP 与 Deep Agents Native Skills 仍分别属于 7.3/7.4；
 - Runtime Event 只产生 `bound/started/assistant_delta/completed`，不输出模型思考、Tool 原始结果或 Graph
   State。
 
@@ -78,6 +79,12 @@ checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确�
 `SummarizationMiddleware._summary_model.with_retry()` 最多 3 次内部 Provider 尝试，因此不是完整费用
 硬上限。预算 State 只保留当前 `turn_run_id` 与计数，新 Turn 覆盖旧值；因此 graph revision 已从 v1
 升为 `deep-agent-graph.v2`，旧 v1 RuntimeExecution/Checkpoint fail-closed。
+
+7.1 把文件/`execute`/Project Tool 纳入统一 Tool 预算后 graph revision 升为 v3；7.2 又允许每个 Turn 从
+不可变 `PolicySnapshot.mcp_refs` 注册经过校验的 MCP Tool，因此当前 revision 为
+`deep-agent-graph.v4`。只有 execute/resume 打开显式 MCP ClientSession；session 包围 graph 执行并在
+结束或异常时先于 Sandbox 关闭，collect/reconcile/cancel 离线路径不加载 MCP。版本或 Schema 漂移均
+fail-closed，而不是沿旧 checkpoint 静默换 Tool。
 
 ## 失败、重复和取消
 
@@ -140,6 +147,12 @@ checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确�
 异步图包装安全错误的分类；配置/factory/Worker/Adapter 合并为 `64 passed in 2.40s`，其中锁定
 `ChatDeepSeek` 完成离线构造和关闭，但未调用真实 Provider。
 
+切片 7.2 补充验证（2026-08-27）：真实 `langchain-mcp-adapters` + 进程内 FastMCP Adapter
+测试最终 `16 passed in 1.34s`，Sandbox/MCP 生命周期测试最终 12 passed；覆盖
+prefixed Tool、Schema 漂移、显式 client 关闭、LangGraph `tool_call_id` 成功重放/冲突、取消/
+缺调用 ID/预算零调用、SDK 生命周期错误脱敏、输出超限、handler 后 fence 丢失不写
+旧 owner 终态，以及 graph 工厂异常清理。生产 Catalog 仍为空，未运行第三方 MCP。
+
 受控命令沙箱内运行 Deep Agents 异步链时曾出现 selector 假性等待；相同完全离线命令在沙箱外会正常
 给出断言失败或通过结果。该现象只描述开发工具环境，不是产品 Sandbox 的能力或安全验证。
 
@@ -161,10 +174,10 @@ checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确�
   `runtime_turn_not_interrupted`；
 - 成功、失败、取消及 orphan RUNNING 已有持久 RuntimeExecution 和第二 OS 进程恢复证据；只允许相同
   Runtime/Graph/SDK revision 自动恢复，跨版本迁移尚未实现；
-- 没有真实 Provider/OpenSandbox Smoke、Usage 账单闭环、流式 token、MCP、Browser、Skill 或正式
-  Artifact。7.1 已用固定 Capability Profile 和 checkpoint State 对 Project/文件/execute Tool 强制统一
+- 没有真实 Provider/OpenSandbox Smoke、Usage 账单闭环、流式 token、真实第三方 MCP、Browser、Skill
+  或正式 Artifact。7.1 已用固定 Capability Profile 和 checkpoint State 对 Project/文件/execute Tool 强制统一
   `max_tool_calls`，主 Agent Loop 已强制 `max_model_calls`，但 summarization 内部调用与 Provider 在途窗口
-  不在模型预算内；7.2–7.4 将按 ADR-0008 分别验证 MCP 配置、Playwright/Search MCP 与 Native Skills；
+  不在模型预算内；7.2 已验证 MCP 配置基础，7.3/7.4 仍需验证 Playwright/Search MCP 与 Native Skills；
 - Worker 已使用 checkpoint pool，并为每次 Runtime operation 创建独立 Saver/graph；完成后的 collect/
   reconcile 不依赖活 Sandbox。实际数据库容量与故障切换未做生产评测；
 - Project Tool 成功后的重放、并发和 temporary retry 已有持久 effect 证据；Tool 外部调用完成后、

@@ -162,6 +162,7 @@ class AgentPolicySnapshotORM(Base):
     turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), unique=True, nullable=False)
     allowed_tool_names: Mapped[list] = mapped_column(JSONB, nullable=False)
     allowed_skill_names: Mapped[list] = mapped_column(JSONB, nullable=False)
+    mcp_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     network_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     sandbox_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -169,6 +170,28 @@ class AgentPolicySnapshotORM(Base):
     max_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AgentMcpProfileORM(Base):
+    """owner/Session 隔离、带 revision 的 MCP Catalog 选择。"""
+
+    __tablename__ = "agent_mcp_profiles"
+    profile_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), nullable=False
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    selections: Mapped[list] = mapped_column(JSONB, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_agent_mcp_profiles_revision"),
+        UniqueConstraint(
+            "session_id", "revision", name="uq_agent_mcp_profiles_session_revision"
+        ),
+    )
 
 
 class AgentRuntimeSessionBindingORM(Base):

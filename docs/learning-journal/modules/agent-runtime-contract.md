@@ -231,6 +231,19 @@ Context/Policy 闭包复核，但这不把 Fake 测试冒充为授权证据。
   Provider/`BaseChatModel` factory、Secret/费用与 Worker runtime 配置属于切片 7.0；
 - 无新 Provider、MCP、Browser、Sandbox、Skill 或依赖。
 
+## 切片 7.2 落地补充
+
+- 五方法 `ResearchAgentRuntime` Port 继续不变；MCP Catalog/Profile/Policy 引用均为 SDK-neutral 数据，
+  LangChain/MCP SDK 类型、endpoint、transport 与 Secret 只允许存在于 infrastructure 私有连接解析边界；
+- `PolicySnapshot.mcp_refs` 冻结 Catalog ID、精确版本、配置哈希、prefixed Tool 名和输入 Schema 哈希，
+  Profile 更新不会改变已创建 Turn，也不会把安全参数原文复制到 Policy/Event；
+- execute/resume 在同一个 Runtime operation 内持有显式 MCP ClientSession，外部 MCP 调用位于
+  ToolExecution begin/succeed 两个短事务之间；collect/reconcile/cancel 的离线路径不连接 MCP；
+- Runtime 成功、MCP 成功、ToolExecution 成功与业务 Turn 成功仍是四个不同事实；稳定 effect、唯一约束、
+  条件更新和 response replay 提供 Effectively Once 防线，但外部副作用与账本提交之间不宣称 Exactly Once；
+- 生产 Catalog 当前为空且 Resolver fail-closed；7.2 的进程内 FastMCP 只验证 Adapter 契约，真实
+  Playwright/Search MCP 与 Native Skills 仍属于 7.3/7.4。
+
 ## 已知限制
 
 - Fake 状态仍不跨进程，不能据此宣称恢复；真实 Deep Adapter 已由切片 6 用 PostgreSQL Checkpoint、
@@ -240,7 +253,8 @@ Context/Policy 闭包复核，但这不把 Fake 测试冒充为授权证据。
 - 生产 Fake 不返回 Evidence；显式启用 Project Tool 的 Deep/Application 测试已持久化 Agent Evidence 与
   Claim/Citation，但生产 Worker 尚未切换；
 - Worker 生产默认尚未切到 Deep Agents；真实 Adapter 已在 ARQ Worker 进程拓扑下完成跨进程恢复 Spike，
-  并可组装两个真实 Project Tool，但 MCP、Browser、Sandbox、WorkspaceSnapshot 与 Skill 仍未接入；
+  并可组装两个真实 Project Tool、OpenSandbox/WorkspaceSnapshot 与 MCP 配置基础；生产 MCP Catalog 仍为空，
+  Browser、真实 Playwright/Search MCP 与 Skill 尚未接入；
 - Fake 状态仍位于进程内；真实恢复结论只适用于显式配置持久 RuntimeExecution + PostgreSQL Checkpointer
   的 Deep Adapter，不反向改变 Fake 语义；
 - 已验证平台能停止消费 Fake 流、事务外传播取消并拒绝结果；尚未验证真实 Deep Agents、模型/Tool 或

@@ -25,6 +25,11 @@ Context 与 RuntimeExecution control。切片 7.1“OpenSandbox/Lease/WorkspaceS
 2026-08-27 由 ADR-0008 将剩余能力 Spike 调整为：先建立 MCP Configuration Foundation，再使用
 Playwright MCP 连接同一 OpenSandbox Chromium 并适配一个现有 Search MCP，最后验证 Deep Agents 原生
 Skills。Phase 5 不再自研 Browser Tool 或 MCP Server；公共网络与统一 egress 安全后移到 Phase 6。
+切片 7.2“MCP Configuration Foundation”已于 2026-08-27 完成实现：固定
+`langchain-mcp-adapters==0.3.2`，建立 SDK-neutral Catalog/Profile、逐 Turn 冻结引用、显式 MCP
+ClientSession 生命周期、Schema/hash 校验与平台 interceptor。生产 Catalog 当前保持为空并 fail-closed；
+真实 Playwright/Search MCP 条目、连接解析和 Sandbox Server 属于 7.3，不能由本切片的进程内 Fake MCP
+测试替代。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -150,15 +155,19 @@ Retriever/Matrix Reader。模型只能提交 query 或空参数；owner、Projec
 ChunkSet 作用域均由稳定 `turn_run_id` 在平台侧反查。
 
 `PolicySnapshot` 最小字段为 `snapshot_id`、`policy_version`、`owner_id`、`project_id`、`session_id`、
-`turn_run_id`、`allowed_tool_names`、`allowed_skill_names`、`network_enabled`、`sandbox_enabled`、
+`turn_run_id`、`allowed_tool_names`、`allowed_skill_names`、`mcp_refs`、`network_enabled`、`sandbox_enabled`、
 `approval_required`、`max_model_calls`、`max_tool_calls`、`snapshot_hash`、`created_at`。首版默认
 Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以构造和持久化策略快照。
 
 上述默认值是当前 Fake/切片 1–6 的已实现事实。Slice 7 由服务端从固定 Capability Profile 与平台安装
 Catalog 构造 `sandbox_enabled`、`network_enabled`、Tool/MCP/Skill allowlist 和预算的不可变 Snapshot；
 用户只能选择当前 owner/Session 可见条目及其声明的安全参数，不能直接切换 Sandbox、网络、`execute`
-或提交原始 MCP 连接。Snapshot 必须引用平台策略/镜像/Catalog/Skill 版本和配置哈希，精确字段和迁移在
-相应 7.x 切片通过失败测试确定，不在本次文档对齐中宣称已经落库。
+或提交原始 MCP 连接。7.2 已将 `mcp_refs` 固化为 Catalog ID、精确版本、配置哈希以及 prefixed Tool
+名称/输入 Schema 哈希；它不保存安全参数原文、endpoint、transport、command、env、Secret 或 SDK
+对象。安全参数只保存在 owner/Session 范围的不可变 `agent_mcp_profiles` revision，Policy 以
+`profile_id/profile_revision` 精确引用，并以 Session 锁、expected revision 与 `(session_id, revision)`
+唯一约束防止并发覆盖。
+Skill 引用字段仍由 7.4 确定。
 
 ### 切片 1 领域字段清单
 
@@ -495,7 +504,7 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    - **7.1 OpenSandbox/Lease/WorkspaceSnapshot（已完成实现）**：验证 Session 级短 TTL Lease、可执行默认
      Backend、隔离文件与命令、物理 Sandbox 生命周期、Snapshot 取回和逻辑 Workspace 重建；真实
      OpenSandbox Smoke 仍须显式 opt-in；
-   - **7.2 MCP Configuration Foundation**：验证平台注册 Catalog/Profile、owner/Session 隔离、版本与
+   - **7.2 MCP Configuration Foundation（已完成实现）**：验证平台注册 Catalog/Profile、owner/Session 隔离、版本与
      配置快照、client 生命周期、Tool namespace、Schema/hash、interceptor、预算/取消/输出限制和 Fake
      MCP；实现前先报告 `langchain-mcp-adapters` 精确版本、传递依赖与锁文件影响；
    - **7.3 Playwright MCP 与 Search MCP Spike**：固定版本 Playwright MCP 在同一 OpenSandbox 中连接
@@ -792,6 +801,51 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   远端默认禁网、CPU/内存、宿主/Secret 不可见、TTL 销毁与丢失恢复尚不是实测安全结论；详见
   [`agent-sandbox-workspace.md`](../modules/agent-sandbox-workspace.md)。
 
+切片 7.2 实现证据（2026-08-27）：
+
+- 精确新增 `langchain-mcp-adapters==0.3.2`；锁文件只新增 `mcp==1.29.1`、
+  `httpx-sse==0.4.3`、`sse-starlette==3.4.8` 三个传递包，既有 Deep Agents、LangChain Core 与
+  LangGraph 版本未升级；
+- 平台静态 `McpCatalog` 只公开 ID、版本、展示名、安全参数声明、Tool 名与 Schema hash；公开 API 只接受
+  Catalog 选择、精确版本和声明参数，Pydantic 与 Domain 双层拒绝额外连接字段以及 URL/endpoint/
+  transport/command/env/Secret 类参数；
+- `agent_mcp_profiles` 以同一 `profile_id` 的不可变 revision、`(session_id, revision)` 唯一约束、owner
+  双重过滤和 expected revision 隔离配置；每个新 Turn 在原有 Session 短事务内解析当前 Profile，将
+  profile/revision、Catalog/版本/config hash/prefixed Tool/schema hash 写入不可变
+  `PolicySnapshot.mcp_refs`，Event 只记录启用条目数量；同一 revision 内 Catalog ID 唯一，不能用两个
+  版本制造相同 prefixed Tool 名，且 prefixed name 在 Catalog 构造时就受 ToolExecution 100 字符上限约束；
+- infrastructure 使用 `MultiServerMCPClient(..., tool_name_prefix=True)`，但不走逐次临时 session 的
+  `get_tools()`；每次 Runtime execute/resume 显式打开 `ClientSession`，验证 `list_tools()` 的完整名称与
+  Schema hash 后加载 Tool，并在 graph 结束或异常时先关闭 MCP session、再关闭 Sandbox。离线
+  reconcile/collect/cancel 不连接 MCP；
+- interceptor 在调用前复核冻结 allowlist、Turn scope、Runtime fence、业务取消和统一 Tool 预算，调用
+  期间施加 30 秒超时与既有 8,000 字符安全结果上限；复用 `ToolExecution` 的稳定 effect/唯一约束/
+  条件更新完成成功 replay、并发拒绝和安全错误记录。外部 MCP 调用位于 begin/succeed 两个短事务之间，
+  Event 不保存参数、结果、endpoint、Secret 或原始 `tool_call_id`。MCP `effect_id` 使用
+  `turn_run_id + tool_call_id` 的 opaque hash，`args_hash` 包含调用 ID 与 canonical 参数；同 ID 改 Tool/
+  参数永久拒绝，不同 ID 的相同参数各执行一次并各占预算。旧 Project Tool 的 args-based effect 不变；
+- Loader 在 resolver/session/list/load 前检查取消，外部 SDK/连接/close 普通异常收敛为无底层 cause 的
+  安全 temporary Runtime 错误；interceptor 在 succeed/fail 前重验 fence，handler 后丢 lease 的旧 owner
+  不写终态。仍不宣称 Exactly Once；
+- 主审加固后，Domain + 真实 `langchain-mcp-adapters` + 进程内 FastMCP 的完全离线测试为
+  `35 passed in 1.23s`，通过真实 LangGraph `ToolNode` 验证 invocation ID 注入、同 ID replay、同参数不同
+  ID 两次调用、缺 ID/加载前取消零连接、五个 SDK 生命周期边界错误脱敏和 handler 后 fence 丢失零失败
+  终态写入；Profile/快照/
+  ToolExecution PostgreSQL 测试为 `4 passed in 13.84s`，单项 MCP API 测试为 `1 passed in 0.49s`，Sandbox/MCP
+  生命周期测试最终为 `12 passed in 1.15s`，包括 MCP 关闭失败时仍尝试释放 Sandbox；迁移在临时 PostgreSQL 完成
+  `head → downgrade -1 → head → check`，该文件最终 `5 passed in 4.79s`；旧 Project Context PostgreSQL
+  回归 `8 passed in 26.43s`，确认其 effect 语义不变；全部主审测试后的 Domain/Adapter/Sandbox/
+  RuntimeExecution/单项 API 合并回归为 `93 passed in 2.78s`；定向 Ruff 通过，定向 Pyright 为 0 errors；
+- 不可变 Profile revision 加固后，Application 与迁移组合为 `8 passed in 15.82s`：rev1 Turn 创建后把
+  Profile 更新为 rev2，重新从数据库读取的 Turn 仍精确引用 rev1；旧 revision 查询必须同时匹配 owner、
+  Session、profile ID 和 revision，错 owner/Session 均不可读；
+- 生产 `PLATFORM_MCP_CATALOG` 当前故意为空，连接解析器会以 `runtime_mcp_catalog_unavailable`
+  fail-closed；因此本切片只证明配置、隔离、冻结、Adapter 与调用边界，不证明真实第三方 MCP、远程网络、
+  Playwright/CDP 或 Search 能力。Graph 创建前还没有本轮 graph permit，重复 Job 可能重复只读 MCP 连接与
+  capability discovery；业务取消会在这些边界前拒绝，Tool effect 由 invocation 账本去重，但 client 创建
+  不宣称 Exactly Once。详见
+  [`agent-mcp-configuration.md`](../modules/agent-mcp-configuration.md)。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -816,8 +870,7 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. 7.2 实现前固定 `langchain-mcp-adapters` 精确版本及锁文件影响；7.3 实现前固定 Playwright MCP、现有
-   Search MCP 的精确版本、运行位置和镜像影响；
+1. 7.3 实现前固定 Playwright MCP、现有 Search MCP 的精确版本、运行位置和镜像影响；
 2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
    逐命令审批；
 3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
@@ -853,6 +906,11 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - 切片 7.1 已对 Project、文件和 `execute` Tool 强制 checkpoint 持久的统一逐 Turn `max_tool_calls`，但
   `max_model_calls` 仍不覆盖 `SummarizationMiddleware` 最多 3 次内部 Provider 尝试，也不消除已在途
   Provider/Tool 请求的不确定窗口；
+- 切片 7.2 已验证 MCP 配置与进程内 Fake MCP 调用基础，但生产 Catalog 为空、Resolver 拒绝所有连接；
+  没有运行真实 MCP Server、公共网络、Playwright/CDP、Search MCP 或付费服务。成功外部调用与
+  ToolExecution 成功提交之间仍有在途不确定窗口，重复时对 orphan RUNNING fail-safe 拒绝而非盲目重放；
+  graph 构造前的只读 session/discovery 尚无 graph RuntimeExecution permit，跨进程重复 Job 可能重复该
+  discovery，但每个边界前会检查业务取消，且不会绕过 Tool invocation effect 去重；
 - Worker 已改为 1..4 连接的 checkpoint pool，并为每个 Runtime operation 创建独立 Saver/graph；这解决
   singleton Saver 的全局实例锁串行，不代表数据库容量、性能或故障切换已完成生产评测；
 - Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界

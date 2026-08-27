@@ -118,6 +118,29 @@ SSRF、预算、取消和审计仍属于平台责任。
 - 未完成 Phase 6 网络与下载安全前，不宣称真实公共浏览、统一 egress、下载安全或任意用户 MCP/Skill
   配置达到生产可用。
 
+## Slice 7.2 落地证据
+
+2026-08-27 已固定 `langchain-mcp-adapters==0.3.2`；锁文件新增的传递包为 `mcp==1.29.1`、
+`httpx-sse==0.4.3` 与 `sse-starlette==3.4.8`，未升级既有 Deep Agents、LangChain Core 或 LangGraph。
+本地锁定源码确认 `MultiServerMCPClient.session()` 可提供显式 session 生命周期，
+`load_mcp_tools(session, ..., tool_name_prefix=True)` 可在同一 session 上加载 Tool；实现因此没有使用会为
+每次加载创建临时 session 的便捷路径。
+
+已实现 owner/Session 范围、不可变 revision/CAS 的 Profile 和逐 Turn `PolicySnapshot.mcp_refs`；后者只
+包含 profile ID/revision、Catalog ID、版本、配置哈希、prefixed Tool 名与输入 Schema 哈希。MCP SDK、连接方式、endpoint、Secret
+与安全参数原文均不进入 Policy、Event 或公开运行契约。Adapter 在 execute/resume 生命周期内打开并关闭
+ClientSession，完整比对 Tool 名称/Schema，并通过平台 interceptor 复核取消、fence、预算、超时、输出与
+`ToolExecution` effect。MCP effect 使用 LangGraph `tool_call_id` 的 opaque hash 识别逻辑调用：同 ID 重投
+回放，同 ID 改 Tool/参数永久拒绝，同参数不同 ID 各执行一次；原始调用 ID、参数和结果正文不进入 Event。
+Loader 在连接解析、建连、能力发现和 Tool 加载前复核业务取消，普通 SDK 异常归一为不保留底层 cause 的
+安全 Runtime 错误；Tool 终态写入前再次校验 RuntimeExecution fence。普通测试使用进程内 FastMCP，未
+连接真实模型、外部 MCP、网站或 Sandbox。
+
+生产 Catalog 当前为空且 Resolver fail-closed；因此 7.2 仅达到配置与 Adapter 基础门槛，不是 7.3
+Playwright/Search MCP、Sandbox 内 MCP Server、公共网络或第三方供应链的通过证据。外部调用已完成而
+`ToolExecution` 成功事实未提交的窗口仍不宣称 Exactly Once。graph 创建前的 session/discovery 尚无
+graph permit，重复 Job 可能重复只读能力发现；取消门槛与 Tool effect 账本不因此放宽。
+
 ## 参考资料
 
 - [Deep Agents Tools](https://docs.langchain.com/oss/python/deepagents/tools)

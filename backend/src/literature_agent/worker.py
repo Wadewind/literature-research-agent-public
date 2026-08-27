@@ -37,6 +37,7 @@ from literature_agent.application.arxiv_import_service import ArxivProjectImport
 from literature_agent.application.evidence_service import EvidenceService
 from literature_agent.application.indexing_executor import IndexingExecutor
 from literature_agent.application.ingestion_executor import IngestionExecutor
+from literature_agent.application.mcp_tool_execution_service import McpToolExecutionService
 from literature_agent.application.model_gateway import ModelGateway
 from literature_agent.application.outbox_dispatch_service import OutboxDispatchService
 from literature_agent.application.ports.arxiv_gateway import ArxivGateway
@@ -86,6 +87,10 @@ from literature_agent.infrastructure.agent.deepseek_research_model import (
 )
 from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
     FakeResearchAgentRuntime,
+)
+from literature_agent.infrastructure.agent.mcp_tools import (
+    LangchainMcpToolLoader,
+    RejectingMcpConnectionResolver,
 )
 from literature_agent.infrastructure.agent.opensandbox_backend import OpenSandboxProvider
 from literature_agent.infrastructure.agent.sandbox_workspace import SandboxWorkspaceManager
@@ -390,10 +395,43 @@ def _build_research_agent_runtime(
             before_succeed=before_succeed,
         )
 
+    def runtime_with_tools_factory(
+        checkpointer: BaseCheckpointSaver[str],
+        backend: BackendProtocol,
+        before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None,
+        tools: tuple[Any, ...],
+    ) -> ResearchAgentRuntime:
+        return DeepAgentsResearchAgentRuntime(
+            model=model,
+            checkpointer=checkpointer,
+            backend=backend,
+            tools=tools,
+            project_context=project_context,
+            execution_control=execution_control,
+            runtime_owner_id=runtime_owner_id,
+            before_succeed=before_succeed,
+        )
+
+    mcp_guard = McpToolExecutionService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        tool_execution_repo_factory=SqlalchemyToolExecutionRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        event_notifier=event_notifier,
+    )
+    mcp_loader = LangchainMcpToolLoader(
+        connection_resolver=RejectingMcpConnectionResolver(),
+        guard=mcp_guard,
+        execution_control=execution_control,
+    )
+
     return SandboxedResearchAgentRuntime(
         checkpoint_factory=checkpoint_factory,
         runtime_factory=runtime_factory,
         workspace_manager=workspace_manager,
+        runtime_with_tools_factory=runtime_with_tools_factory,
+        mcp_tool_loader=mcp_loader,
     )
 
 
