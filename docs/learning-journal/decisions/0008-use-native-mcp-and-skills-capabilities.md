@@ -136,10 +136,35 @@ Loader 在连接解析、建连、能力发现和 Tool 加载前复核业务取�
 安全 Runtime 错误；Tool 终态写入前再次校验 RuntimeExecution fence。普通测试使用进程内 FastMCP，未
 连接真实模型、外部 MCP、网站或 Sandbox。
 
-生产 Catalog 当前为空且 Resolver fail-closed；因此 7.2 仅达到配置与 Adapter 基础门槛，不是 7.3
+7.2 完成时生产 Catalog 为空且 Resolver fail-closed；因此 7.2 仅达到配置与 Adapter 基础门槛，不是 7.3
 Playwright/Search MCP、Sandbox 内 MCP Server、公共网络或第三方供应链的通过证据。外部调用已完成而
 `ToolExecution` 成功事实未提交的窗口仍不宣称 Exactly Once。graph 创建前的 session/discovery 尚无
 graph permit，重复 Job 可能重复只读能力发现；取消门槛与 Tool effect 账本不因此放宽。
+
+## Slice 7.3 落地证据
+
+2026-08-27 已固定 `@playwright/mcp==0.0.79` 与无 extras 的
+`arxiv-mcp-server==0.6.2`。Node 包使用独立 `package-lock.json`，Python 包使用适配
+Python 3.13/Debian 13 的独立 hash lock；根 Python 项目依赖和锁文件不变。两个 Server 只由派生镜像内
+固定 recipe 在当前 Session Sandbox 惰性启动，Worker 不创建宿主 stdio 子进程。
+
+真实 package discovery 分别得到 24 个 Playwright Tool 和 14 个 arXiv Tool；动态发现不直接成为信任
+输入。生产 Catalog 固定审核后的 17 个 Playwright 非代码 Tool，以及 arXiv 的 `search_papers`、
+`get_abstract`。Loader 必须遍历 `tools/list` 全部分页，只验证并转换 Catalog 允许子集；允许 Tool
+缺失或 Schema/hash 漂移时 fail-closed，Server 新增的未登记 Tool 不进入 `create_deep_agent`。
+
+Playwright MCP 连接 Sandbox 内 `127.0.0.1:9222` Chromium，输出固定到
+`/workspace/downloads`。启动 recipe 不使用 `--allowed-hosts '*'`。由于 OpenSandbox 只有在端口监听后
+才能返回 endpoint，Worker 先以仅 loopback allowlist bootstrap，再从当前 generation 的 opaque endpoint
+提取精确 authority，并在同一脚本锁内只允许 bootstrap 一次性重启/收敛到 exact allowlist；相同
+authority 重试幂等，之后 authority 变化则 fail-closed。resolver 不跨 generation 缓存 endpoint、header、
+client 或 Server 连接，并把 Provider/recipe 原始异常收敛为不含连接与 Secret 的 Runtime 错误。
+
+已在 `--network none` 派生 Docker 容器中运行真实 Server，完成完整 discovery、同 Chromium 合成页面
+navigate/click 和 Workspace 下载；没有调用公网 arXiv。由于开发机没有运行 OpenSandbox server，真实
+opaque endpoint/header、代理是否保留推导出的 Host 仍未验证，已提供默认跳过的显式 Smoke。故 7.3
+结论为“镜像内能力与平台装配受限通过”，不是 OpenSandbox 代理链路、公共浏览、真实 arXiv 搜索或下载
+安全通过。
 
 ## 参考资料
 

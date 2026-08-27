@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import pytest
 from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import WriteEntry
 
@@ -62,6 +63,17 @@ class _Sandbox:
         self.commands = _Commands()
         self.files = _Files()
 
+    def get_endpoint(self, port: int):
+        assert port == 8931
+        return type(
+            "Endpoint",
+            (),
+            {
+                "endpoint": "http://sandbox-proxy.invalid/private",
+                "headers": {"X-Sandbox-Route": "opaque"},
+            },
+        )()
+
 
 def test_execute_is_workspace_scoped_timed_and_output_bounded() -> None:
     sandbox = _Sandbox()
@@ -82,9 +94,7 @@ def test_upload_and_download_only_accept_workspace_paths() -> None:
     sandbox = _Sandbox()
     backend = OpenSandboxBackend(sandbox)
 
-    uploaded = backend.upload_files(
-        [("/workspace/note.md", b"note"), ("/etc/passwd", b"bad")]
-    )
+    uploaded = backend.upload_files([("/workspace/note.md", b"note"), ("/etc/passwd", b"bad")])
     downloaded = backend.download_files(["/workspace/note.md", "/etc/passwd"])
 
     assert uploaded[0].error is None
@@ -111,6 +121,40 @@ def test_upload_creates_nested_parent_directories_before_write() -> None:
         "/workspace/nested",
         "/workspace/nested/deeper",
     ]
+
+
+def test_platform_mcp_service_and_endpoint_are_fixed() -> None:
+    sandbox = _Sandbox()
+    sandbox.commands.run = lambda command, *, opts: (
+        sandbox.commands.calls.append((command, opts)) or _Execution("ready")
+    )
+    backend = OpenSandboxBackend(sandbox)
+
+    backend.prepare_mcp_service("playwright")
+    endpoint, headers = backend.get_mcp_endpoint(8931)
+    backend.configure_mcp_service("playwright", allowed_host="sandbox-proxy.invalid")
+
+    assert [call[0] for call in sandbox.commands.calls] == [
+        "/opt/research-agent/start-mcp-service playwright bootstrap",
+        ("/opt/research-agent/start-mcp-service playwright configure sandbox-proxy.invalid"),
+    ]
+    assert all(
+        options.working_directory == "/workspace" and options.timeout == timedelta(seconds=30)
+        for _, options in sandbox.commands.calls
+    )
+    assert endpoint == "http://sandbox-proxy.invalid/private"
+    assert headers == {"X-Sandbox-Route": "opaque"}
+
+
+def test_platform_mcp_service_rejects_unregistered_recipe_and_port() -> None:
+    backend = OpenSandboxBackend(_Sandbox())
+
+    with pytest.raises(ValueError, match="MCP Service"):
+        backend.prepare_mcp_service("user-command")
+    with pytest.raises(ValueError, match="MCP Host"):
+        backend.configure_mcp_service("playwright", allowed_host="bad;host")
+    with pytest.raises(ValueError, match="MCP 端口"):
+        backend.get_mcp_endpoint(9999)
 
 
 async def test_provider_creation_is_fixed_resource_default_deny_and_secret_free(
@@ -150,4 +194,5 @@ async def test_provider_creation_is_fixed_resource_default_deny_and_secret_free(
     assert calls[0]["network_policy"].default_action == "deny"
     assert calls[0]["network_policy"].egress == []
     assert calls[0]["env"] == {}
+    assert calls[0]["entrypoint"] == ["/entrypoint"]
     assert "provider-secret" not in repr(provider)

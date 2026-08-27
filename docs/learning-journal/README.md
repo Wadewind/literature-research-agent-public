@@ -58,4 +58,6 @@ OpenSandbox/Lease/WorkspaceSnapshot 推进；ADR-0008 又将剩余顺序固定�
 [MCP Configuration Foundation → 同 Sandbox Playwright/现有 Search MCP → Deep Agents Native Skills](decisions/0008-use-native-mcp-and-skills-capabilities.md)
 → Agent Chat UI。其中 7.1 已完成实现与离线/临时 PostgreSQL 验证，详见
 [Agent Sandbox Workspace](modules/agent-sandbox-workspace.md)；真实 OpenSandbox 隔离/资源 Smoke 与
-7.2–7.4 能力仍待验证。
+7.2 已完成 MCP Configuration Foundation；7.3 已完成固定 Playwright/arXiv MCP 的实现及无网络镜像内
+回路验证，详见 [Agent Playwright/Search MCP](modules/agent-mcp-browser-search.md)。真实 OpenSandbox
+proxy Smoke 与 7.4 Native Skills 仍待验证。

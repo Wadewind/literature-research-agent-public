@@ -1,0 +1,10 @@
+{
+  "name": "agent-service-sandbox-mcp",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Phase 5 固定的 Sandbox MCP 运行时依赖",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@playwright/mcp": "0.0.79"
+  }
+}

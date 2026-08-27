@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -21,6 +22,10 @@ from opensandbox.models.filesystem import DirectoryListEntry, WriteEntry
 from opensandbox.models.sandboxes import NetworkPolicy
 
 from literature_agent.domain.workspace_snapshot import is_workspace_file_path
+
+_PLATFORM_MCP_SERVICES = frozenset({"playwright", "arxiv-search"})
+_PLATFORM_MCP_PORTS = frozenset({8931, 8932})
+_MCP_ALLOWED_HOST = re.compile(r"^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
 
 
 class OpenSandboxBackend(BaseSandbox):
@@ -132,6 +137,43 @@ class OpenSandboxBackend(BaseSandbox):
             if str(item.path) != "/workspace"
         ]
 
+    def prepare_mcp_service(self, service_name: str) -> None:
+        """先以仅 loopback allowlist 启动，满足 endpoint 解析前置条件。"""
+        if service_name not in _PLATFORM_MCP_SERVICES:
+            raise ValueError("MCP Service 未在平台镜像中注册")
+        self._run_mcp_recipe(f"/opt/research-agent/start-mcp-service {service_name} bootstrap")
+
+    def configure_mcp_service(self, service_name: str, *, allowed_host: str) -> None:
+        """把 bootstrap 进程一次性收敛到 Provider 的精确 authority。"""
+        if service_name not in _PLATFORM_MCP_SERVICES:
+            raise ValueError("MCP Service 未在平台镜像中注册")
+        if not _MCP_ALLOWED_HOST.fullmatch(allowed_host):
+            raise ValueError("MCP Host 不是安全的 Provider authority")
+        if ":" in allowed_host and int(allowed_host.rsplit(":", 1)[1]) > 65535:
+            raise ValueError("MCP Host 不是安全的 Provider authority")
+        self._run_mcp_recipe(
+            f"/opt/research-agent/start-mcp-service {service_name} configure {allowed_host}"
+        )
+
+    def _run_mcp_recipe(self, command: str) -> None:
+        """以固定超时运行已经过平台注册和语法校验的镜像 recipe。"""
+        execution = self._sandbox.commands.run(
+            command,
+            opts=RunCommandOpts(
+                working_directory="/workspace",
+                timeout=timedelta(seconds=30),
+            ),
+        )
+        if execution.exit_code != 0:
+            raise RuntimeError("Sandbox MCP Service 启动失败")
+
+    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str]]:
+        """解析当前 Sandbox generation 的私有 endpoint；调用者不得持久化。"""
+        if port not in _PLATFORM_MCP_PORTS:
+            raise ValueError("MCP 端口未在平台镜像中注册")
+        endpoint = self._sandbox.get_endpoint(port)
+        return str(endpoint.endpoint), dict(endpoint.headers)
+
     def close(self) -> None:
         """只关闭本地 HTTP 资源；Session Lease 的远端实例继续存在。"""
         self._sandbox.close()
@@ -174,6 +216,7 @@ class OpenSandboxProvider:
             image_ref,
             timeout=timedelta(seconds=ttl_seconds),
             env={},
+            entrypoint=["/entrypoint"],
             metadata=dict(metadata),
             resource={"cpu": str(cpu), "memory": f"{memory_mib}Mi"},
             network_policy=NetworkPolicy(defaultAction="deny", egress=[]),

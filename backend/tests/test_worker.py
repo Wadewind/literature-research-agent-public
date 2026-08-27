@@ -17,6 +17,9 @@ from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
     FakeResearchAgentRuntime,
 )
+from literature_agent.infrastructure.agent.sandbox_mcp import (
+    PLATFORM_SANDBOX_MCP_RESOLVER,
+)
 from literature_agent.infrastructure.config import Settings
 from literature_agent.metrics import metrics
 from literature_agent.observability import get_log_context
@@ -175,6 +178,12 @@ def test_deep_research_runtime_uses_production_context_and_control(monkeypatch) 
     monkeypatch.setattr(
         "literature_agent.worker.SandboxedResearchAgentRuntime", StubSandboxedRuntime
     )
+
+    class StubMcpLoader:
+        def __init__(self, **kwargs: object) -> None:
+            captured["mcp_loader_kwargs"] = kwargs
+
+    monkeypatch.setattr("literature_agent.worker.LangchainMcpToolLoader", StubMcpLoader)
     settings = Settings(
         research_runtime_backend="deep_agents",
         research_model_api_key="agent-secret",
@@ -195,6 +204,10 @@ def test_deep_research_runtime_uses_production_context_and_control(monkeypatch) 
     assert isinstance(wrapper_kwargs, dict)
     assert wrapper_kwargs["checkpoint_factory"] is checkpoint_factory
     assert wrapper_kwargs["workspace_manager"] is workspace_manager
+    mcp_loader_kwargs = captured["mcp_loader_kwargs"]
+    assert isinstance(mcp_loader_kwargs, dict)
+    assert mcp_loader_kwargs["connection_resolver"] is PLATFORM_SANDBOX_MCP_RESOLVER
+
     async def before_succeed(request: object) -> None:
         del request
 

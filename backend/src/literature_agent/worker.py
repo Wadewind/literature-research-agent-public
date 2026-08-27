@@ -90,9 +90,11 @@ from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
 )
 from literature_agent.infrastructure.agent.mcp_tools import (
     LangchainMcpToolLoader,
-    RejectingMcpConnectionResolver,
 )
 from literature_agent.infrastructure.agent.opensandbox_backend import OpenSandboxProvider
+from literature_agent.infrastructure.agent.sandbox_mcp import (
+    PLATFORM_SANDBOX_MCP_RESOLVER,
+)
 from literature_agent.infrastructure.agent.sandbox_workspace import SandboxWorkspaceManager
 from literature_agent.infrastructure.agent.sandboxed_research_agent_runtime import (
     CheckpointExecutionFactory,
@@ -421,7 +423,7 @@ def _build_research_agent_runtime(
         event_notifier=event_notifier,
     )
     mcp_loader = LangchainMcpToolLoader(
-        connection_resolver=RejectingMcpConnectionResolver(),
+        connection_resolver=PLATFORM_SANDBOX_MCP_RESOLVER,
         guard=mcp_guard,
         execution_control=execution_control,
     )

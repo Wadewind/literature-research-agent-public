@@ -27,9 +27,14 @@ Playwright MCP 连接同一 OpenSandbox Chromium 并适配一个现有 Search MC
 Skills。Phase 5 不再自研 Browser Tool 或 MCP Server；公共网络与统一 egress 安全后移到 Phase 6。
 切片 7.2“MCP Configuration Foundation”已于 2026-08-27 完成实现：固定
 `langchain-mcp-adapters==0.3.2`，建立 SDK-neutral Catalog/Profile、逐 Turn 冻结引用、显式 MCP
-ClientSession 生命周期、Schema/hash 校验与平台 interceptor。生产 Catalog 当前保持为空并 fail-closed；
+ClientSession 生命周期、Schema/hash 校验与平台 interceptor。该切片完成时生产 Catalog 保持为空并 fail-closed；
 真实 Playwright/Search MCP 条目、连接解析和 Sandbox Server 属于 7.3，不能由本切片的进程内 Fake MCP
 测试替代。
+切片 7.3“Playwright MCP 与 Search MCP Spike”已于 2026-08-27 完成实现与离线/无网络容器验证：
+固定 `@playwright/mcp==0.0.79` 和 `arxiv-mcp-server==0.6.2`，将两个 Server 预装到
+Session Sandbox，并把审核后的 Tool 子集接入生产 Catalog/Worker。由于本机没有运行 OpenSandbox
+server，opaque endpoint/header 与代理 Host 保留语义仍是显式 Smoke 门槛；本切片只形成受限通过结论，
+不宣称公共浏览、真实 arXiv 搜索或下载安全。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -507,7 +512,7 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    - **7.2 MCP Configuration Foundation（已完成实现）**：验证平台注册 Catalog/Profile、owner/Session 隔离、版本与
      配置快照、client 生命周期、Tool namespace、Schema/hash、interceptor、预算/取消/输出限制和 Fake
      MCP；实现前先报告 `langchain-mcp-adapters` 精确版本、传递依赖与锁文件影响；
-   - **7.3 Playwright MCP 与 Search MCP Spike**：固定版本 Playwright MCP 在同一 OpenSandbox 中连接
+   - **7.3 Playwright MCP 与 Search MCP Spike（已完成实现，受限通过）**：固定版本 Playwright MCP 在同一 OpenSandbox 中连接
      Chromium/CDP，操作本地合成页面并把下载写入 `/workspace`；再适配一个现有、固定版本的只读 Search
      MCP；不自研 MCP Server，不把公共网络与统一 egress 作为本切片通过条件；
    - **7.4 Native Skills**：验证平台安装 Skill 与 owner-scoped 声明式 Skill 的只读 Backend、版本/哈希、
@@ -846,6 +851,34 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   不宣称 Exactly Once。详见
   [`agent-mcp-configuration.md`](../modules/agent-mcp-configuration.md)。
 
+切片 7.3 实现证据（2026-08-27）：
+
+- 派生镜像构建阶段固定 `node:24.19.0-trixie-slim` image index digest 与
+  `@playwright/mcp==0.0.79`；独立 npm lock 锁定其 `playwright`/`playwright-core`
+  `1.63.0-alpha-2026-08-05`。独立 Python hash lock 固定无 extras 的
+  `arxiv-mcp-server==0.6.2` 及传递依赖，镜像内 `npm ci` 和 `pip --require-hashes` 均实际通过；
+  根 `pyproject.toml`/`uv.lock` 未变化；
+- 两个 MCP 由镜像内固定 recipe 在当前 Sandbox 惰性、幂等启动，固定端口分别为 8931/8932；由于
+  OpenSandbox 只为已监听端口返回 endpoint，Resolver 先以仅 loopback allowlist bootstrap，再解析
+  endpoint，并在脚本锁内一次性收敛到 exact authority；不使用 wildcard；
+  Playwright 连接 `127.0.0.1:9222` 的同一 Chromium，下载目录固定为
+  `/workspace/downloads`。Worker 从当前 Lease generation 的 OpenSandbox endpoint 解析连接，不缓存
+  endpoint/client；endpoint/header 不进入 Domain、数据库、Event、Prompt 或公开 API；
+- 真实固定 Server 分别发现 24/14 个 Tool。Catalog 只投影审核的 17 个 Playwright 非代码 Tool 和
+  arXiv 的 `search_papers`、`get_abstract`；Loader 遍历完整分页并逐项校验允许子集的 Schema/hash，
+  缺失或漂移 fail-closed，未登记 Tool 不转换为 LangChain Tool。`browser_evaluate`、
+  `browser_run_code_unsafe`、文件上传和单请求 body 读取 `browser_network_request` 等未进入模型能力；
+- Playwright MCP 默认 Host 防护对未登记 Host 返回 403。recipe 不使用 wildcard，而把当前 opaque
+  endpoint 的精确 authority 固定到进程；相同 authority 重试幂等，变化时 fail-closed，要求重新解析/
+  轮换而不是默默复用旧 allowlist。Provider/recipe 异常统一脱敏为安全 Runtime 错误；
+- `--network none` 的真实派生容器完成 MCP 启动幂等、完整 discovery/schema、合成页面 navigate/click
+  和 `/workspace/downloads/paper.txt` 下载；其中 4 路并发 bootstrap/configure 最终收敛到单一进程，
+  exact authority 变化按预期 fail-closed；未调用公网 arXiv。最终 Domain/Adapter/Sandbox/Worker
+  定向离线回归为 `109 passed, 1 skipped in 2.29s`，skip 是需要显式
+  `AGENT_RUN_OPENSANDBOX_MCP_TESTS=1` 的真实 OpenSandbox 回路；该回路因本机 OpenSandbox server 缺席
+  未运行。因此“同进程/同镜像回路通过”和“真实 OpenSandbox proxy 回路通过”必须分开陈述。详见
+  [`agent-mcp-browser-search.md`](../modules/agent-mcp-browser-search.md)。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -870,7 +903,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. 7.3 实现前固定 Playwright MCP、现有 Search MCP 的精确版本、运行位置和镜像影响；
+1. 7.3 已固定 `@playwright/mcp==0.0.79`、`arxiv-mcp-server==0.6.2` 及其 Sandbox
+   运行位置；仍需在真实 OpenSandbox server 上执行显式 endpoint/header/Host Smoke；
 2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
    逐命令审批；
 3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
@@ -906,8 +940,10 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - 切片 7.1 已对 Project、文件和 `execute` Tool 强制 checkpoint 持久的统一逐 Turn `max_tool_calls`，但
   `max_model_calls` 仍不覆盖 `SummarizationMiddleware` 最多 3 次内部 Provider 尝试，也不消除已在途
   Provider/Tool 请求的不确定窗口；
-- 切片 7.2 已验证 MCP 配置与进程内 Fake MCP 调用基础，但生产 Catalog 为空、Resolver 拒绝所有连接；
-  没有运行真实 MCP Server、公共网络、Playwright/CDP、Search MCP 或付费服务。成功外部调用与
+- 切片 7.3 已让生产 Catalog/Resolver 支持固定 Playwright/arXiv MCP，并在 default-deny Docker
+  容器中运行真实 Server、Playwright/CDP、本地页面和 Workspace 下载；但尚未在真实 OpenSandbox
+  server 上验证 opaque endpoint/header 与代理 Host 语义，也没有运行公共网络、真实 arXiv 搜索或付费
+  服务。成功外部调用与
   ToolExecution 成功提交之间仍有在途不确定窗口，重复时对 orphan RUNNING fail-safe 拒绝而非盲目重放；
   graph 构造前的只读 session/discovery 尚无 graph RuntimeExecution permit，跨进程重复 Job 可能重复该
   discovery，但每个边界前会检查业务取消，且不会绕过 Tool invocation effect 去重；

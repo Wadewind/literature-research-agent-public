@@ -80,8 +80,11 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
   `BaseSandbox` Adapter。Checkpoint pool 直接依赖 `psycopg-pool==3.3.1`。
 - Sandbox 固定 1 CPU、2 GiB、命令 60 秒、inline 输出 64 KiB、网络 default-deny、空 env/volume；
   Worker 不持有 Docker Socket，OpenSandbox server 是显式外部前提，不加入普通 compose。
+- `OpenSandboxProvider.create` 固定传入 `entrypoint=['/entrypoint']`，避免 SDK 的空 entrypoint 默认值覆盖
+  pinned Chrome 镜像负责启动 Chromium 与 execd 的 recipe；该值不是用户配置。
 - `sandbox/research-agent/Dockerfile` 固定上游 Chrome image index digest，并在构建时预装固定版本的
-  Python、numpy、pandas、matplotlib 与 CJK 字体；运行时不安装依赖。
+  Python、numpy、pandas、matplotlib 与 CJK 字体；7.3 又以 pinned Node 24 构建阶段和独立 lock 预装
+  Playwright/arXiv MCP，运行时不安装依赖。
 
 ## 重要测试与实际结果
 
@@ -102,14 +105,14 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 
 ## 已知限制
 
-- 尚未运行真实 OpenSandbox Smoke，因此不能宣称镜像可构建、Provider 网络 default-deny、CPU/内存、
-  宿主/Secret 不可见或远端销毁补偿已在真实环境验证。
+- 7.3 已实际构建派生镜像，并在 `--network none` Docker 容器完成本地 MCP/Chromium/下载回路；仍未运行
+  真实 OpenSandbox Smoke，因此不能宣称 Provider 网络 default-deny、CPU/内存、宿主/Secret 不可见、
+  opaque endpoint/header 或远端销毁补偿已在真实环境验证。
 - OpenSandbox Python SDK 与自定义 Adapter 仍是 alpha Spike；没有孤儿 Lease 定时清理器、磁盘/PID
   运行时测量、公开部署或生产 SLA。
-- 7.2 已实现 MCP 配置与显式 client 生命周期基础：execute/resume 的 MCP session 包围 graph，并在
-  Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。生产 Catalog 仍为空，
-  Playwright/Search MCP、noVNC/公共下载和 Native Skills 属于 7.3/7.4 或 Phase 6；公共网络与统一 egress
-  仍后移到 Phase 6。
+- 7.3 已把固定 Playwright/arXiv MCP 接到当前 Lease，execute/resume 的 MCP session 包围 graph，并在
+  Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。真实 OpenSandbox 代理 Smoke、
+  noVNC/公共下载和 Native Skills 仍未完成；公共网络与统一 egress 后移到 Phase 6。
 - `max_model_calls` 仍不覆盖 SummarizationMiddleware 内部重试或已在途 Provider 不确定窗口。
 
 ## 代码入口

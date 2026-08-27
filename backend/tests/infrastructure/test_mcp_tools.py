@@ -10,7 +10,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntimeError,
@@ -208,7 +208,7 @@ async def test_loader_uses_prefixed_tools_explicit_session_and_replays_effect() 
         graph = builder.compile()
 
         async def invoke(call_id: str):
-            value = await graph.ainvoke(
+            value = await cast(Any, graph).ainvoke(
                 {
                     "messages": [
                         {
@@ -259,6 +259,53 @@ async def test_loader_fails_closed_on_schema_drift_and_closes_session() -> None:
 
     assert caught.value.code == "runtime_mcp_schema_drift"
     assert sessions.opened == sessions.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_loader_projects_only_catalog_tools_from_all_discovery_pages() -> None:
+    """Server 可提供更多 Tool，但模型只能看到完整分页后命中的冻结 allowlist。"""
+    server = _server()
+    async with create_connected_server_and_client_session(server) as session:
+        allowed = (await session.list_tools()).tools[0]
+    extra = Tool(
+        name="download_paper",
+        description="未授权的写文件能力",
+        inputSchema={
+            "type": "object",
+            "properties": {"paper_id": {"type": "string"}},
+            "required": ["paper_id"],
+        },
+    )
+
+    class _PagedSession:
+        def __init__(self) -> None:
+            self.cursors: list[str | None] = []
+
+        async def list_tools(self, cursor: str | None = None):
+            self.cursors.append(cursor)
+            if cursor is None:
+                return ListToolsResult(tools=[extra], nextCursor="allowed-page")
+            assert cursor == "allowed-page"
+            return ListToolsResult(tools=[allowed])
+
+    paged = _PagedSession()
+
+    class _PagedSessions:
+        @asynccontextmanager
+        async def open(self, server_name, connection):
+            del server_name, connection
+            yield paged
+
+    loader = LangchainMcpToolLoader(
+        connection_resolver=_Resolver(),
+        guard=_Guard(),
+        session_factory=cast(Any, _PagedSessions()),
+    )
+
+    async with loader.open(await _request(server), _lease()) as tools:
+        assert [tool.name for tool in tools] == ["fixture-search_search"]
+
+    assert paged.cursors == [None, "allowed-page"]
 
 
 @pytest.mark.asyncio
@@ -341,10 +388,11 @@ async def test_loader_redacts_every_sdk_lifecycle_boundary(
                 async with create_connected_server_and_client_session(server) as session:
                     if failure_stage == "list":
 
-                        async def fail_list():
+                        async def fail_list(cursor: str | None = None) -> ListToolsResult:
+                            del cursor
                             raise secret_error
 
-                        session.list_tools = fail_list
+                        cast(Any, session).list_tools = fail_list
                     yield session
                 if failure_stage == "close":
                     raise secret_error
@@ -353,10 +401,10 @@ async def test_loader_redacts_every_sdk_lifecycle_boundary(
 
     if failure_stage == "load":
 
-        async def fail_load(*args, **kwargs):
+        def fail_load(*args, **kwargs):
             raise secret_error
 
-        monkeypatch.setattr(mcp_tools_module, "load_mcp_tools", fail_load)
+        monkeypatch.setattr(mcp_tools_module, "convert_mcp_tool_to_langchain_tool", fail_load)
 
     loader = LangchainMcpToolLoader(
         connection_resolver=_Resolver(),

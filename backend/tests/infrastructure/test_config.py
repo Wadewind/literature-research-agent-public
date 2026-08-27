@@ -39,6 +39,17 @@ def test_research_agent_runtime_defaults_offline(monkeypatch) -> None:
     assert settings.research_model_api_key is None
 
 
+def test_research_agent_sandbox_image_defaults_to_slice_7_3(monkeypatch) -> None:
+    """真实模式默认使用包含固定 MCP recipe 的当前派生镜像。"""
+    monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", "deep_agents")
+    monkeypatch.delenv("AGENT_RESEARCH_SANDBOX_IMAGE", raising=False)
+
+    assert (
+        Settings.from_env().research_sandbox_image
+        == "agent-service/research-agent-sandbox:phase5-7.3"
+    )
+
+
 def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypatch) -> None:
     """真实 Agent Provider 配置不得复用 RAG/Review Chat 配置或泄漏 Key。"""
     monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", "deep_agents")

@@ -1,0 +1,246 @@
+#!/opt/research-agent-venv/bin/python
+"""幂等启动镜像内固定 MCP Server；不接受命令、环境或端口配置。"""
+
+from __future__ import annotations
+
+import fcntl
+import os
+import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+_RUNTIME_DIR = Path("/tmp/research-agent-mcp")
+_ALLOWED_HOST = re.compile(r"^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
+_BOOTSTRAP_AUTHORITY = "@bootstrap"
+
+
+def _service(
+    service_name: str, external_authority: str | None
+) -> tuple[int, list[str], dict[str, str]]:
+    if service_name == "playwright":
+        port = 8931
+        allowed_hosts = [f"127.0.0.1:{port}", f"localhost:{port}"]
+        if external_authority is not None:
+            allowed_hosts.insert(0, external_authority)
+        return (
+            port,
+            [
+                "/usr/local/bin/node",
+                "/opt/research-agent-mcp-node/node_modules/@playwright/mcp/cli.js",
+                "--cdp-endpoint",
+                "http://127.0.0.1:9222",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(port),
+                "--allowed-hosts",
+                ",".join(allowed_hosts),
+                "--output-dir",
+                "/workspace/downloads",
+                "--output-max-size",
+                "52428800",
+                "--isolated",
+                "--codegen",
+                "none",
+                "--image-responses",
+                "omit",
+                "--block-service-workers",
+            ],
+            {},
+        )
+    if service_name == "arxiv-search":
+        port = 8932
+        allowed_hosts = [f"127.0.0.1:{port}", f"localhost:{port}"]
+        allowed_origins = [
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+        ]
+        if external_authority is not None:
+            allowed_hosts.insert(0, external_authority)
+            allowed_origins[:0] = [
+                f"http://{external_authority}",
+                f"https://{external_authority}",
+            ]
+        return (
+            port,
+            [
+                "/opt/research-agent-venv/bin/arxiv-mcp-server",
+                "--storage-path",
+                "/workspace/arxiv-mcp",
+            ],
+            {
+                "TRANSPORT": "http",
+                "HOST": "0.0.0.0",
+                "PORT": str(port),
+                "ALLOWED_HOSTS": ",".join(allowed_hosts),
+                "ALLOWED_ORIGINS": ",".join(allowed_origins),
+            },
+        )
+    raise ValueError("MCP Service 未在平台镜像中注册")
+
+
+def _port_is_open(port: int) -> bool:
+    with socket.socket() as client:
+        client.settimeout(0.2)
+        return client.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _read_pid(pid_file: Path) -> int | None:
+    try:
+        pid = int(pid_file.read_text(encoding="ascii"))
+        os.kill(pid, 0)
+    except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
+        return None
+    return pid
+
+
+def _stop_process(pid: int, port: int) -> None:
+    """只停止 pidfile 指向的已登记进程，并等待固定端口释放。"""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while _port_is_open(port):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("MCP Service 固定端口释放超时")
+        time.sleep(0.05)
+
+
+def _start_process(
+    *,
+    service_name: str,
+    external_authority: str | None,
+    state_value: str,
+    pid_path: Path,
+    authority_path: Path,
+    log_path: Path,
+) -> None:
+    port, command, service_env = _service(service_name, external_authority)
+    environment = os.environ.copy()
+    environment.update(service_env)
+    with log_path.open("ab", buffering=0) as log:
+        process = subprocess.Popen(
+            command,
+            cwd="/workspace",
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            start_new_session=True,
+        )
+    pid_path.write_text(str(process.pid), encoding="ascii")
+    pid_path.chmod(0o600)
+    authority_path.write_text(state_value, encoding="ascii")
+    authority_path.chmod(0o600)
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("MCP Service 启动失败")
+        if _port_is_open(port):
+            return
+        time.sleep(0.1)
+    process.terminate()
+    raise TimeoutError("MCP Service 启动超时")
+
+
+def _ensure_service(
+    service_name: str,
+    *,
+    requested_authority: str,
+    external_authority: str | None,
+) -> int:
+    """在进程锁内把固定服务收敛到 bootstrap 或精确 external authority。"""
+    port, _, _ = _service(service_name, external_authority)
+    _RUNTIME_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock_path = _RUNTIME_DIR / f"{service_name}.lock"
+    pid_path = _RUNTIME_DIR / f"{service_name}.pid"
+    authority_path = _RUNTIME_DIR / f"{service_name}.authority"
+    log_path = _RUNTIME_DIR / f"{service_name}.log"
+    with lock_path.open("a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            current_authority = authority_path.read_text(encoding="ascii")
+        except FileNotFoundError:
+            current_authority = None
+        except (OSError, UnicodeError):
+            raise RuntimeError("MCP Service authority 状态非法") from None
+        current_pid = _read_pid(pid_path)
+        port_open = _port_is_open(port)
+        if current_pid is None and port_open:
+            raise RuntimeError("MCP 固定端口已被未知进程占用")
+        if current_pid is not None and port_open:
+            if current_authority is None:
+                raise RuntimeError("MCP Service authority 状态缺失")
+            if requested_authority == _BOOTSTRAP_AUTHORITY:
+                return 0
+            if current_authority == requested_authority:
+                return 0
+            if current_authority != _BOOTSTRAP_AUTHORITY:
+                raise RuntimeError("MCP Service authority 已变化")
+            _stop_process(current_pid, port)
+        elif current_pid is not None:
+            _stop_process(current_pid, port)
+
+        if requested_authority == _BOOTSTRAP_AUTHORITY:
+            if current_authority is None or current_authority == _BOOTSTRAP_AUTHORITY:
+                target_authority = _BOOTSTRAP_AUTHORITY
+                target_external = None
+            elif _ALLOWED_HOST.fullmatch(current_authority):
+                target_authority = current_authority
+                target_external = current_authority
+            else:
+                raise RuntimeError("MCP Service authority 状态非法")
+        else:
+            if current_authority not in {_BOOTSTRAP_AUTHORITY, requested_authority}:
+                raise RuntimeError("MCP Service authority 已变化")
+            target_authority = requested_authority
+            target_external = requested_authority
+        _start_process(
+            service_name=service_name,
+            external_authority=target_external,
+            state_value=target_authority,
+            pid_path=pid_path,
+            authority_path=authority_path,
+            log_path=log_path,
+        )
+        return 0
+
+
+def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[2] == "bootstrap":
+        return _ensure_service(
+            sys.argv[1],
+            requested_authority=_BOOTSTRAP_AUTHORITY,
+            external_authority=None,
+        )
+    if (
+        len(sys.argv) == 4
+        and sys.argv[2] == "configure"
+        and _ALLOWED_HOST.fullmatch(sys.argv[3])
+    ):
+        return _ensure_service(
+            sys.argv[1],
+            requested_authority=sys.argv[3],
+            external_authority=sys.argv[3],
+        )
+    raise ValueError("MCP Service 参数非法")
+
+
+if __name__ == "__main__":
+    os.umask(0o077)
+    raise SystemExit(main())

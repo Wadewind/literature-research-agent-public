@@ -15,9 +15,9 @@ from langchain_mcp_adapters.interceptors import (
     MCPToolCallRequest,
     ToolCallInterceptor,
 )
-from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
 from mcp import ClientSession
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, Tool
 
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntimeError,
@@ -36,6 +36,9 @@ from literature_agent.domain.mcp_configuration import (
 )
 from literature_agent.domain.tool_execution import TOOL_RESULT_MAX_CHARS, ToolErrorKind
 from literature_agent.infrastructure.agent.sandbox_workspace import SandboxWorkspaceLease
+
+_MAX_MCP_DISCOVERY_PAGES = 32
+_MAX_MCP_DISCOVERED_TOOLS = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,13 +340,17 @@ class LangchainMcpToolLoader:
                     )
                 )
                 await self._guard.assert_active(request.turn_run_id)
-                listed = await _external_boundary(session.list_tools)
-                actual = {item.name: canonical_json_hash(item.inputSchema) for item in listed.tools}
+                definitions = await _list_all_tool_definitions(
+                    session,
+                    guard=self._guard,
+                    turn_run_id=request.turn_run_id,
+                )
+                actual = {item.name: canonical_json_hash(item.inputSchema) for item in definitions}
                 expected = {
                     tool.name.removeprefix(f"{ref.catalog_id}_"): tool.input_schema_hash
                     for tool in ref.tools
                 }
-                if actual != expected:
+                if any(actual.get(name) != schema_hash for name, schema_hash in expected.items()):
                     raise _error("runtime_mcp_schema_drift", "MCP Tool 名称或 Schema 已漂移")
                 interceptor: ToolCallInterceptor = PlatformMcpToolInterceptor(
                     turn_run_id=request.turn_run_id,
@@ -352,14 +359,12 @@ class LangchainMcpToolLoader:
                     execution_control=self._execution_control,
                 )
                 await self._guard.assert_active(request.turn_run_id)
-                tools = await _external_boundary(
-                    lambda session=session, ref=ref, interceptor=interceptor: load_mcp_tools(
-                        session,
-                        server_name=ref.catalog_id,
-                        tool_name_prefix=True,
-                        tool_interceptors=[interceptor],
-                        handle_tool_errors=False,
-                    )
+                tools = _convert_allowed_tools(
+                    session=session,
+                    definitions=definitions,
+                    allowed_raw_names=frozenset(expected),
+                    server_name=ref.catalog_id,
+                    interceptor=interceptor,
                 )
                 if {tool.name for tool in tools} != {tool.name for tool in ref.tools}:
                     raise _error("runtime_mcp_namespace_mismatch", "MCP Tool 命名空间不匹配")
@@ -380,6 +385,72 @@ class LangchainMcpToolLoader:
                     "MCP 能力暂时不可用",
                     RuntimeErrorKind.TEMPORARY,
                 ) from None
+
+
+async def _list_all_tool_definitions(
+    session: ClientSession,
+    *,
+    guard: McpInvocationGuard,
+    turn_run_id: str,
+) -> tuple[Tool, ...]:
+    """遍历完整分页并拒绝重复、循环或无界的第三方能力清单。"""
+
+    definitions: list[Tool] = []
+    names: set[str] = set()
+    seen_cursors: set[str] = set()
+    cursor: str | None = None
+    for _ in range(_MAX_MCP_DISCOVERY_PAGES):
+        await guard.assert_active(turn_run_id)
+        page = await _external_boundary(
+            session.list_tools
+            if cursor is None
+            else lambda cursor=cursor: session.list_tools(cursor=cursor)
+        )
+        for item in page.tools:
+            if item.name in names or len(definitions) >= _MAX_MCP_DISCOVERED_TOOLS:
+                raise _error("runtime_mcp_schema_drift", "MCP Tool 名称或 Schema 已漂移")
+            names.add(item.name)
+            definitions.append(item)
+        cursor = page.nextCursor
+        if cursor is None:
+            return tuple(definitions)
+        if cursor in seen_cursors:
+            raise _error("runtime_mcp_schema_drift", "MCP Tool 名称或 Schema 已漂移")
+        seen_cursors.add(cursor)
+    raise _error("runtime_mcp_schema_drift", "MCP Tool 名称或 Schema 已漂移")
+
+
+def _convert_allowed_tools(
+    *,
+    session: ClientSession,
+    definitions: tuple[Tool, ...],
+    allowed_raw_names: frozenset[str],
+    server_name: str,
+    interceptor: ToolCallInterceptor,
+) -> tuple[BaseTool, ...]:
+    """只转换已审核子集，未登记 Tool 从不进入 Deep Agent。"""
+
+    try:
+        return tuple(
+            convert_mcp_tool_to_langchain_tool(
+                session,
+                item,
+                server_name=server_name,
+                tool_name_prefix=True,
+                tool_interceptors=[interceptor],
+                handle_tool_errors=False,
+            )
+            for item in definitions
+            if item.name in allowed_raw_names
+        )
+    except ResearchAgentRuntimeError:
+        raise
+    except Exception:
+        raise _error(
+            "runtime_mcp_unavailable",
+            "MCP 能力暂时不可用",
+            RuntimeErrorKind.TEMPORARY,
+        ) from None
 
 
 async def _external_boundary[T](operation: Callable[[], Awaitable[T]]) -> T:

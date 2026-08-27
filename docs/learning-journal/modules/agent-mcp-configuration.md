@@ -6,8 +6,9 @@ Phase 5 Slice 7.2 让绑定 Project 的 AgentSession 可以选择平台注册、
 提交 MCP URL、transport、command、env、Secret、Sandbox 镜像或网络配置。它把业务配置、逐 Turn 授权
 和 SDK client 生命周期分开：PostgreSQL 保存产品事实，`langchain-mcp-adapters` 只存在于 infrastructure。
 
-本切片验证配置与调用基础，不安装真实 Playwright/Search MCP。生产 Catalog 为空，任何意外 MCP 引用都
-会 fail-closed；真实 Server 与 OpenSandbox 连接解析属于 Slice 7.3。
+本模块最初在 7.2 验证配置与调用基础，当时生产 Catalog 为空。7.3 已在不改变 Domain/Profile/Policy
+契约的前提下安装固定 Playwright/arXiv MCP、填充生产 Catalog，并以当前 Sandbox Lease 解析连接；
+真实能力和限制见 `agent-mcp-browser-search.md`。
 
 ## 边界和执行流程
 
@@ -20,8 +21,8 @@ GET Catalog（平台静态、SDK-neutral）
   → PolicySnapshot 冻结 catalog/version/config hash/tool/schema hash
   → Worker 在数据库事务外 acquire Session Sandbox
   → execute/resume 打开显式 MCP ClientSession
-  → list_tools 全集与冻结 name/schema hash 比对
-  → load_mcp_tools(tool_name_prefix=True, interceptor=platform guard)
+  → 分页遍历完整 list_tools，校验允许子集的 name/schema hash
+  → 只转换允许 Tool（tool_name_prefix=True + platform interceptor）
   → create_deep_agent 使用本轮 Tool；结束或异常先关闭 MCP，再关闭 Sandbox
 ```
 
@@ -52,10 +53,11 @@ interceptor 的 `begin` 在一个短事务中认领 effect，外部调用完成�
 - 精确依赖固定为 `langchain-mcp-adapters==0.3.2`。锁文件新增 `mcp==1.29.1`、
   `httpx-sse==0.4.3`、`sse-starlette==3.4.8`；既有 Deep Agents、LangChain Core、LangGraph 未升级。
 - 使用 `MultiServerMCPClient(..., tool_name_prefix=True)` 与显式 `client.session(server_name)`，随后在同一
-  session 上调用 `load_mcp_tools`。没有采用为每次加载创建短暂 session 的 `get_tools()`，因为 stateful
+  session 上以公开 converter 只转换允许 Tool。没有采用为每次加载创建短暂 session 的 `get_tools()`，因为 stateful
   MCP 必须让 initialize 后的 session 贯穿本轮 Runtime execution。
-- Tool 名前缀固定为 `{catalog_id}_{raw_tool_name}`，不同 Server 的同名 Tool 不冲突；加载前以
-  `list_tools()` 对**完整集合**和 canonical Schema hash 做精确比较，新增、删除或漂移均拒绝。
+- Tool 名前缀固定为 `{catalog_id}_{raw_tool_name}`，不同 Server 的同名 Tool 不冲突；加载前分页遍历
+  `list_tools()` 完整发现结果，允许 Tool 必须存在且 canonical Schema hash 精确相等。Server 额外 Tool
+  可以存在，但不会被转换或传给 Agent；重复名称、分页循环、允许 Tool 缺失或漂移均拒绝。
 - 每个 Profile revision 中 `catalog_id` 唯一，不能同时选择同一 Server 的两个版本；Catalog 构造时也
   要求 prefixed Tool 名不超过业务账本的 100 字符上限，避免配置成功后才在执行阶段失败。
 - 没有把 Deep Agents `permissions` 当成 MCP 权限。平台 interceptor 与 Runtime 原有 Tool middleware
@@ -136,8 +138,8 @@ interceptor 的 `begin` 在一个短事务中认领 effect，外部调用完成�
 
 ## 已知限制
 
-- `PLATFORM_MCP_CATALOG` 为空，生产 Resolver 拒绝所有 MCP 连接。7.2 没有用户可真正调用的 MCP Tool；7.3
-  才安装首批 Playwright/Search Catalog 条目与精确 Resolver。
+- 生产 Catalog 现包含固定 Playwright/arXiv 两项，但默认 Session Profile 仍为空；用户必须显式选择平台
+  条目。真实 OpenSandbox endpoint/header 代理回路尚未运行，不把 Docker 内能力验证当作 Provider 验证。
 - Profile 参数首版只支持有界字符串；复杂枚举、数字或对象 Schema 留到真实 Catalog 有证据时扩展。
 - 没有 stateful 第三方 Server、Sandbox 内 stdio/HTTP Server、连接轮换、真实断连或多 Server 压力测试。
 - 没有公共网络、OAuth/Credential Vault、Secret 委托、统一 egress 或第三方隐私/费用治理。
@@ -153,5 +155,5 @@ interceptor 的 `begin` 在一个短事务中认领 effect，外部调用完成�
 名和 Schema hash 冻结到 Policy。Worker 在事务外为这一轮打开显式 MCP ClientSession，校验 Server 实际
 Tool 集合后才传给 create_deep_agent，并在实际调用处再检查 owner scope、取消、fence、预算、超时和
 输出。稳定 ToolExecution effect 让成功结果可重放，Event 只存 hash 和安全状态。SDK 类型和 endpoint 都
-留在 infrastructure；当前生产 Catalog 故意为空，所以我只声称完成了配置与生命周期基础，不把 Fake MCP
-测试说成真实浏览器或外部 Search 已可用。”
+留在 infrastructure。7.3 又把 discovery 改成完整分页与允许子集投影，所以第三方 Server 新增 Tool 不会
+被动态信任；生产已有两个固定条目，但默认 Profile 为空，真实 OpenSandbox 代理 Smoke 仍是独立门槛。”

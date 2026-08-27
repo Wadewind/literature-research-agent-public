@@ -39,6 +39,12 @@
 > 不再自研 Browser Tool 或 MCP Server；Slice 7.2–7.4 调整为 MCP 配置基础 → 同 Sandbox Playwright/
 > 现有 Search MCP → 原生 Skills。用户只能配置平台安装 Catalog 与 owner-scoped 声明式 Skill；公共网络
 > 和统一 egress 安全后移到 Phase 6。
+>
+> v10 变更：Slice 7.3 固定 `@playwright/mcp==0.0.79` 与
+> `arxiv-mcp-server==0.6.2`，通过独立 npm/Python hash lock 预装到 Session Sandbox；生产 Loader 完整
+> 分页发现后只投影审核 Tool 子集，当前 Lease resolver 不缓存 endpoint/client。无网络镜像内 MCP/
+> Chromium/下载回路已验证。OpenSandbox 连接固定保留 Chrome `/entrypoint`，MCP 采用 loopback bootstrap
+> → endpoint → exact Host 收敛；真实 OpenSandbox proxy Host/header、公共浏览和真实 arXiv 搜索仍未验证。
 
 ## 1. 文档用途
 
@@ -1517,6 +1523,10 @@ Checkpointer、Project Context 与 RuntimeExecution control；真实模式缺少
 SDK-neutral 边界、统一 Tool 预算与每 operation Saver/graph。ADR-0008 已将后续调整为 MCP 配置基础、
 同 Sandbox Playwright MCP/现有 Search MCP 和 Deep Agents 原生 Skills；不再自研 Browser Tool 或 MCP
 Server。真实 OpenSandbox Smoke 仍未运行。
+Slice 7.3 已进一步完成固定 Playwright/arXiv MCP 的生产 Catalog、Sandbox recipe 与 Worker resolver，
+并在无网络派生容器验证同 Chromium 合成页面和 Workspace 下载。由于开发环境没有运行 OpenSandbox
+server，opaque endpoint/header 与代理 Host 语义仍是显式 Smoke 门槛；该证据不扩张为公共浏览、真实
+arXiv 搜索或下载安全结论。
 
 `PolicySnapshot.max_model_calls` 在 7.0 精确定义为逐 Turn 主 Agent Loop 模型调用预算：调用前预留计数并
 随同步 checkpoint 持久化，已确认 checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确定窗口，
