@@ -74,3 +74,11 @@ Agent 绘图 Artifact 与同 generation 合成页面人工操作，再处理输�
 [ADR-0011：Phase 6 精简交付](decisions/0011-adopt-phase-06-lean-delivery.md)收敛：必须完成固定 arXiv 的统一
 egress、URL/SSRF 与 PDF 下载安全，以及最小硬预算、Sandbox 清理和资源限制；通用 Approval Center、
 开放互联网、OAuth/Credential、完整 Registry 和生产级 Sandbox 平台明确延期。
+
+[Phase 6：Research Agent 与安全强化](phases/phase-06-research-agent-security.md)已进入实施。Slice 1 已完成
+契约缺口审计并形成 [`Research Agent 精简安全契约`](../spec/research-agent-security-contract.md)：明确区分
+Phase 5 已验证事实与后续目标，冻结 owner/Project/Session/Turn/Sandbox generation/Workspace/Artifact
+所有权、信任与 Secret 边界、自动执行/直接拒绝矩阵、历史 Approval 字段兼容、事务外 I/O、取消/fence/
+Effectively Once、API/Event 增量和 Slice 2–8 安全门槛。本切片没有新增运行逻辑或安全验证结论；下一
+切片为 Agent 输出 Artifact。最终 UI 同时受
+[`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-redesign.md)约束，前置功能组件必须保持壳层无关。

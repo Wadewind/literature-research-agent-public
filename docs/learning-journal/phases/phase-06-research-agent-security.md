@@ -2,10 +2,18 @@
 
 ## 状态
 
-计划中，尚未开始实现。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25；按 ADR-0007
+进行中。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25；按 ADR-0007
 调整日期：2026-08-26；按 ADR-0008 调整日期：2026-08-27；按 ADR-0009/0010 对齐 Browser 人工控制与
 Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目精简交付日期：2026-08-28；对齐
-`docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28。
+`docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28；Slice 1 精简产品契约与威胁模型
+完成日期：2026-08-28。
+
+Slice 1 已完成文档契约审计，形成
+[`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
+已有代码/测试事实与 Phase 6 目标事实，冻结所有权与信任边界、自动执行/直接拒绝矩阵、历史
+`PolicySnapshot.approval_required` 兼容规则、API/Event 增量、事务外 I/O、Effectively Once/取消/fence
+以及后续切片门槛。它没有新增迁移、运行逻辑、依赖或安全验证结论；下一开发切片为 Slice 2 Agent 输出
+Artifact。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
@@ -513,9 +521,11 @@ Tool Call ID、Tool 副作用幂等键、Manifest 规范化 URL、Artifact 提�
 Phase 5 Slice 7 先分别提供 OpenSandbox、MCP 配置、Playwright/Search MCP 和原生 Skill 的最小证据。
 Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，不把 ADR-0007/0008 本身当作测试结果：
 
-1. **精简产品契约与威胁模型**：复核 Session/Turn/Snapshot、Project Context、Session 级 Sandbox Lease、
+1. **精简产品契约与威胁模型（已完成）**：复核 Session/Turn/Snapshot、Project Context、Session 级 Sandbox Lease、
    资产/信任边界、`execute` 和固定 arXiv 网络攻击面；落实 ADR-0009/0010/0011 的状态、API、Event、
-   自动执行/直接拒绝矩阵和安全验收；
+   自动执行/直接拒绝矩阵和安全验收；实施依据为
+   [`research-agent-security-contract.md`](../../spec/research-agent-security-contract.md)，完成仅表示契约已
+   冻结，不表示 Slice 2–8 目标已经实现；
 2. **Agent 输出 Artifact**：Candidate/AgentArtifact 迁移、`submit_artifact`、Sandbox/Storage 校验、
    Effectively Once 提交、图片预览与下载；先完成“Agent 画图并交付”的离线垂直切片；
 3. **Browser 画面与跨 Turn 人工控制**：BrowserControlLease、镜像/画面通道、鉴权代理和右侧 UI；只用
@@ -619,6 +629,7 @@ Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何�
 - [`ADR-0009：采用跨 Turn 的人工浏览器控制`](../decisions/0009-use-turn-boundary-browser-control.md)
 - [`ADR-0010：采用显式 Agent 文件交换与 Artifact 提交协议`](../decisions/0010-use-explicit-agent-file-exchange.md)
 - [`ADR-0011：采用 Phase 6 精简交付范围`](../decisions/0011-adopt-phase-06-lean-delivery.md)
+- [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)
 - [`Web UI 应用壳与视觉重设计`](../../spec/web-ui-app-shell-redesign.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Going to production](https://docs.langchain.com/oss/python/deepagents/going-to-production)

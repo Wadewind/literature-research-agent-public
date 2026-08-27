@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v14
+> 状态：Proposed v15
 >
 > 日期：2026-08-28
 >
@@ -65,6 +65,10 @@
 > v14 变更：Phase 6 最终 UI 强制遵循 `web-ui-app-shell-redesign.md`：统一使用左侧 `AppSidebar` 与轻量
 > `PageBar`，删除旧全局 Header、大 Hero 项目页头和重复模式入口。Phase 6 前置功能组件保持壳层无关；
 > 最终整合前若重设计尚未实施，先按其 4 个纯前端切片分别完成并同步 UI 契约。
+>
+> v15 变更：Phase 6 Slice 1 形成 `research-agent-security-contract.md`，把 Phase 5 已验证事实与 Phase 6
+> 目标事实分开，并冻结 owner/Project/Session/Turn/generation/Artifact 所有权、信任边界、自动执行/
+> 直接拒绝矩阵、历史 Approval 字段兼容、事务外 I/O、Effectively Once、API/Event 增量和后续安全门槛。
 
 ## 1. 文档用途
 
@@ -1662,6 +1666,10 @@ Smoke、Capability Profile 和后续 Sandbox/Tool 门槛通过前，只能称为
 基于 Phase 5 验证通过的会话与 Runtime 边界，将 Project-scoped Agent Chat 扩展为可用、受限、可观察的
 Research Workspace Agent，并以一个可演示的固定用户故事验证 Browser、MCP、Tool、版本化 Skills、
 Workspace、Sandbox、arXiv 访问和文件交付的安全与可靠性；不建设通用 Agent 安全平台。
+
+本阶段的强制实施边界见
+[`Research Agent 精简安全契约`](research-agent-security-contract.md)。该契约中的“目标事实”和“安全门槛”
+只有在责任切片通过相应离线测试及显式真实 Smoke 后才可声明完成；配置、Mock 或 Phase 5 Spike 不能替代。
 
 #### 主要内容
 
