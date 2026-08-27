@@ -12,6 +12,7 @@ function review(status: string): ReviewListItem {
     status,
     research_question: "问题",
     current_stage: "formulate_search_strategy",
+    evidence_matrix: null,
     created_at: "2026-08-23T00:00:00Z",
     updated_at: "2026-08-23T00:00:00Z",
   };

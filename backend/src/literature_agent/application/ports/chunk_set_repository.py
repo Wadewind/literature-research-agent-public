@@ -33,10 +33,21 @@ class ChunkSetRepository(Protocol):
         ...
 
     async def count_ready_by_version_ids(self, version_ids: list[str]) -> int:
-        """统计给定 PaperVersion 集合下 ready ChunkSet 的数量。
+        """统计给定 PaperVersion 集合中至少有一个 ready ChunkSet 的 Version 数量。
 
         提问提交时用于快速失败判断（范围内无任何 ready ChunkSet →
         ``project_not_indexed``）；空列表返回 0。
+        """
+        ...
+
+    async def count_ready_project_versions_scoped(
+        self,
+        project_id: str,
+        owner_id: str,
+    ) -> int | None:
+        """统计 owner/Project 当前选中版本中的 ready 索引数。
+
+        Project 不存在或不属于 owner 时返回 ``None``；合法的空 Project 返回 0。
         """
         ...
 

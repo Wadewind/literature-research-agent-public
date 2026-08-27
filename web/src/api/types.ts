@@ -196,6 +196,17 @@ export interface ReviewListItem {
   current_stage: string;
   created_at: string;
   updated_at: string;
+  evidence_matrix: {
+    output_id: string;
+    version: number;
+    row_count: number;
+    valid_papers: number;
+    failed_papers: number;
+  } | null;
+}
+
+export interface ProjectAgentContextSummary {
+  ready_index_count: number;
 }
 
 export interface ReviewStep {

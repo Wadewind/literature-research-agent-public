@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -14,6 +14,7 @@ import type {
   McpProfileSelection,
   PostMessageResult,
   Project,
+  ProjectAgentContextSummary,
   ReviewListItem,
   ReviewOutput,
   Run,
@@ -25,14 +26,22 @@ import {
   type AgentMessageIntent,
 } from "../agent/messageIntent";
 import { agentWorkspaceKey } from "../agent/interactionIdentity";
+import { eligibleEvidenceMatrices } from "../agent/matrixEligibility";
 import {
   agentEventLabel,
   canSendAgentMessage,
   isSkillProfileLocked,
   isSessionInProject,
 } from "../agent/presentation";
+import {
+  AGENT_WORKSPACE_DEFAULT,
+  loadAgentWorkspaceLayout,
+  saveAgentWorkspaceLayout,
+  type AgentWorkspaceLayout,
+} from "../agent/workspaceLayout";
 import AgentCapabilityPanel from "../components/AgentCapabilityPanel";
 import AgentEvidenceMargin from "../components/AgentEvidenceMargin";
+import AgentResizeSeparator from "../components/AgentResizeSeparator";
 import AgentSessionRail from "../components/AgentSessionRail";
 import ProjectNav from "../components/ProjectNav";
 import { isCancellable, isTerminal, statusLabel } from "../runs/runStatus";
@@ -55,6 +64,10 @@ interface AgentWorkspaceProps {
 function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [workspaceLayout, setWorkspaceLayout] = useState<AgentWorkspaceLayout>(() =>
+    loadAgentWorkspaceLayout(window.localStorage)
+  );
   const [newSessionTitle, setNewSessionTitle] = useState("");
   const [content, setContent] = useState("");
   const [messageIntent, setMessageIntent] = useState<AgentMessageIntent | null>(null);
@@ -74,6 +87,12 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     queryKey: ["agent-sessions", projectId],
     queryFn: () =>
       apiFetch<AgentSession[]>(`/api/v1/projects/${projectId}/agent-sessions`),
+  });
+  const projectContextQuery = useQuery({
+    queryKey: ["agent-context-summary", projectId],
+    queryFn: () => apiFetch<ProjectAgentContextSummary>(
+      `/api/v1/projects/${projectId}/agent-context-summary`,
+    ),
   });
   const sessionQuery = useQuery({
     queryKey: ["agent-session", sessionId],
@@ -343,7 +362,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     return label ? [{ ...event, label }] : [];
   });
   const assistantMessages = messages.filter((message) => message.role === "assistant");
-  const succeededReviews = reviewsQuery.data?.filter((review) => review.status === "succeeded") ?? [];
+  const availableMatrices = eligibleEvidenceMatrices(reviewsQuery.data ?? []);
   const capabilityLoading = mcpCatalogQuery.isPending || mcpProfileQuery.isPending ||
     skillCatalogQuery.isPending || skillProfileQuery.isPending;
   const capabilityError = capabilityMutation.isError
@@ -355,6 +374,15 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
           skillCatalogQuery.error ?? skillProfileQuery.error,
         )
       : null;
+  const updateWorkspaceLayout = (next: AgentWorkspaceLayout) => {
+    setWorkspaceLayout(next);
+    saveAgentWorkspaceLayout(window.localStorage, next);
+  };
+  const resetWorkspaceLayout = () => updateWorkspaceLayout(AGENT_WORKSPACE_DEFAULT);
+  const workspaceStyle = {
+    "--agent-left-width": `${workspaceLayout.left}px`,
+    "--agent-right-width": `${workspaceLayout.right}px`,
+  } as CSSProperties;
 
   return (
     <div className="page-flow agent-page">
@@ -369,7 +397,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
       </header>
       <ProjectNav projectId={projectId} active="agent" />
 
-      <div className="agent-workspace">
+      <div className="agent-workspace" ref={workspaceRef} style={workspaceStyle}>
         <AgentSessionRail
           projectId={projectId}
           sessions={sessionsQuery.data}
@@ -379,6 +407,14 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
           error={createSessionMutation.isError ? errorMessage(createSessionMutation.error) : null}
           onTitleChange={setNewSessionTitle}
           onCreate={() => createSessionMutation.mutate()}
+        />
+
+        <AgentResizeSeparator
+          pane="left"
+          layout={workspaceLayout}
+          containerRef={workspaceRef}
+          onChange={updateWorkspaceLayout}
+          onReset={resetWorkspaceLayout}
         />
 
         <section className="agent-conversation" aria-label="研究助手对话">
@@ -465,17 +501,23 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
               )}
 
               <form className="agent-composer" onSubmit={submitMessage}>
-                <label htmlFor="agent-matrix">本轮 Evidence Matrix</label>
-                <select id="agent-matrix" value={selectedReviewRunId} onChange={(event) => { setSelectedReviewRunId(event.target.value); setMessageIntent(null); }} disabled={Boolean(activeTurnRunId)}>
-                  <option value="">{turnQuery.data?.review_output_id ? "沿用上一轮 Evidence Matrix" : "请选择已完成的综述"}</option>
-                  {succeededReviews.map((review) => <option key={review.run_id} value={review.run_id}>{review.research_question}</option>)}
-                </select>
-                {selectedReviewRunId && selectedMatrixQuery.isPending && <small>正在验证 Evidence Matrix…</small>}
+                <div className="agent-composer-context">
+                  <label htmlFor="agent-matrix">本轮 Evidence Matrix</label>
+                  <select id="agent-matrix" value={selectedReviewRunId} onChange={(event) => { setSelectedReviewRunId(event.target.value); setMessageIntent(null); }} disabled={Boolean(activeTurnRunId)}>
+                    <option value="">{turnQuery.data?.review_output_id ? "沿用上一轮 Evidence Matrix" : "请选择可用 Evidence Matrix"}</option>
+                    {availableMatrices.map((review) => (
+                      <option key={review.run_id} value={review.run_id}>
+                        {review.research_question} · {review.evidence_matrix.valid_papers} valid / {review.evidence_matrix.failed_papers} failed / {review.evidence_matrix.row_count} rows{review.status === "failed" ? " · Review 后续失败" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {(selectedReviewRunId && selectedMatrixQuery.isPending) && <small>正在验证 Evidence Matrix…</small>}
                 {reviewsQuery.isError && <small className="error-text">{errorMessage(reviewsQuery.error)}</small>}
                 {selectedMatrixQuery.isError && <small className="error-text">{errorMessage(selectedMatrixQuery.error)}</small>}
-                <label htmlFor="agent-message">研究消息</label>
-                <textarea id="agent-message" rows={5} maxLength={16_000} value={content} onChange={(event) => { setContent(event.target.value); if (messageIntent && event.target.value.trim() !== messageIntent.content) setMessageIntent(null); }} disabled={Boolean(activeTurnRunId)} placeholder="例如：基于这些证据，比较各研究的方法差异并指出尚未解决的研究缺口。" />
-                <div>
+                <label className="agent-message-label" htmlFor="agent-message">研究消息</label>
+                <textarea id="agent-message" rows={3} maxLength={16_000} value={content} onChange={(event) => { setContent(event.target.value); if (messageIntent && event.target.value.trim() !== messageIntent.content) setMessageIntent(null); }} disabled={Boolean(activeTurnRunId)} placeholder="例如：基于这些证据，比较各研究的方法差异并指出尚未解决的研究缺口。" />
+                <div className="agent-composer-actions">
                   <small>{skillLocked ? "研究方法已锁定" : "发送首条消息后将锁定研究方法"} · 每条消息创建独立 Turn</small>
                   <button type="submit" disabled={!canSendAgentMessage(content, reviewOutputId, activeTurnRunId, postMessageMutation.isPending || mcpDirty || skillDirty)}>{postMessageMutation.isPending ? "正在提交…" : "开始本轮研究"}</button>
                 </div>
@@ -484,10 +526,20 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
           )}
         </section>
 
+        <AgentResizeSeparator
+          pane="right"
+          layout={workspaceLayout}
+          containerRef={workspaceRef}
+          onChange={updateWorkspaceLayout}
+          onReset={resetWorkspaceLayout}
+        />
+
         <AgentEvidenceMargin
           projectId={projectId}
           turn={turnQuery.data}
           matrix={selectedMatrixQuery.data}
+          projectReadyIndexCount={projectContextQuery.data?.ready_index_count}
+          projectIndexError={projectContextQuery.isError}
           assistantMessages={assistantMessages}
           selectedEvidence={selectedEvidence}
           onSelectEvidence={setSelectedEvidence}

@@ -3,6 +3,7 @@
 import hashlib
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import TypeVar
 
 from literature_agent.application.ports.review_repository import ReviewRepository
@@ -11,10 +12,17 @@ from literature_agent.application.ports.session import Session
 from literature_agent.application.ports.storage import Storage
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import RunNotFoundError
-from literature_agent.domain.review import Artifact, ReviewOutputType
-from literature_agent.domain.run import RunType
+from literature_agent.domain.review import Artifact, ReviewOutput, ReviewOutputType, ReviewRun
+from literature_agent.domain.run import Run, RunType
 
 TSession = TypeVar("TSession", bound=Session)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewListView:
+    run: Run
+    review: ReviewRun
+    evidence_matrix: ReviewOutput | None
 
 
 class ReviewQueryService[TSession: Session]:
@@ -55,9 +63,18 @@ class ReviewQueryService[TSession: Session]:
     async def list_reviews(self, actor: ActorContext, project_id: str):
         """返回当前 owner/Project 下的 Review，越权 Project 表现为空列表。"""
         async with self._session_factory() as session:
-            return await self._review_repo_factory(session).list_review_runs_scoped(
-                project_id, actor.owner_id
-            )
+            repo = self._review_repo_factory(session)
+            rows = await repo.list_review_runs_scoped(project_id, actor.owner_id)
+            matrices = {
+                output.review_run_id: output
+                for output in await repo.list_latest_evidence_matrix_outputs_scoped(
+                    project_id, actor.owner_id
+                )
+            }
+            return [
+                ReviewListView(run, review, matrices.get(run.run_id))
+                for run, review in rows
+            ]
 
     async def sources(self, actor, project_id, run_id):
         await self.detail(actor, project_id, run_id)
@@ -111,4 +128,4 @@ class ReviewQueryService[TSession: Session]:
         return artifact, content
 
 
-__all__ = ["ReviewOutputType", "ReviewQueryService"]
+__all__ = ["ReviewListView", "ReviewOutputType", "ReviewQueryService"]

@@ -45,9 +45,12 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   Query 持有服务端状态，本地只保存输入意图、能力配置草稿和当前选中的 Evidence。每条消息使用稳定
   `Idempotency-Key`，活动 Turn 时禁发；SSE 只显示允许列表中的业务活动，终态后失效 Session、Message
   和 Turn Query，正文、Claim、Citation 和 candidate 始终从 REST 读取。
-- 桌面端是 Session rail / Conversation / Evidence Margin 三栏。Evidence Margin 展示本轮 Matrix、
-  Project Index 引用数、持久 Claim/Citation/Evidence 和 staged candidate 元数据；前端不解析回答正文
-  中的引用标记，也不读取 candidate 内容。
+- 桌面端是 Session rail / Conversation / Evidence Margin 三栏，页面 chrome 固定在 viewport 内，三栏
+  独立滚动；中栏只有消息区滚动，composer 固定在底部。左右分隔条支持指针拖动、方向键与双击复位，
+  宽度按 v1 schema 保存到 `localStorage`。能力配置作为中栏浮层，不再挤压消息和 composer。
+- Evidence Margin 无 Turn 时显示当前 Project 的 ready ChunkSet 文献数，有 Turn 时明确显示不可变的
+  本轮索引快照；同时展示 Matrix、持久 Claim/Citation/Evidence 和 staged candidate 元数据。前端不解析
+  回答正文中的引用标记，也不读取 candidate 内容。
 
 - 前端不持有任何业务事实：列表与状态全部来自 PostgreSQL 支撑的 REST API；SSE 事件流由后端从 PostgreSQL 重放/推送（见 `run-event.md`）。
 - `/library` 展示 owner 范围的个人文献资产及其 Project 收录范围；Project 页面并行读取当前收录与个人库，可直接收录已有 PaperVersion。移出 Project 只删除 `ProjectPaper`，不会删除 PDF 或解析结果。
@@ -73,9 +76,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - **提问幂等意图**：`messageIntent` 在一次问题首次提交时生成 Key，同内容失败重试复用，内容变化才换 Key；成功后清空。它只保存交互意图，不保存服务端 Message/Run 事实。
 - **回答与事件解耦**：`answer_committed` 与 Run 终态同事务，前端收到后关闭 EventSource 并失效 messages；回答文本、Claim 与 Citation 始终重新读取 REST，不进入 Event payload。
 - **Evidence 阅读路径**：Claim 后的引用标记打开 Evidence 侧栏，显示 excerpt/section/page，再以 `key={page}` 重建 iframe 跳原文；不引入 pdf.js 或 UI 组件库。
-- **Review 列表是最小读模型**：只返回 `run_id/status/research_question/current_stage/created_at/
-  updated_at`；后端用单次 Join 限制 owner、Project 和 Review RunType，避免卡片列表 N+1，也不把
-  `config_snapshot`、Prompt 版本或 Checkpoint 暴露给列表。
+- **Review 列表是最小读模型**：除 Run/问题/阶段外，只附加 canonical aggregate Evidence Matrix 的
+  `output_id/version/row_count/valid_papers/failed_papers` 摘要；后端用 owner/Project-scoped 批量查询，
+  不逐 Review probing，也不把 `config_snapshot`、Prompt 版本或 Checkpoint 暴露给列表。
 - **Stage rail 是展示映射**：前端保存固定顺序和中文标签，但合法转换仍只属于后端 Domain；刷新、
   SSE 重连或页面直接打开都以 Detail API 的 `current_stage` 为准。
 - **HITL 交互意图不是业务状态**：浏览器可以为同一失败提交保留 Key，但 Request 是否开放、版本是否
@@ -90,9 +93,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - **能力配置是安全的产品语言**：界面只展示平台维护的能力名称、声明参数和研究方法，不暴露 MCP
   endpoint/transport/command/env、SDK Thread、Sandbox 或 Secret。Skill 在第一条产品消息后只读；MCP
   可按既有 Profile/Policy 契约调整，未保存草稿会阻止发送。
-- **Evidence Matrix 通过 Output ID 固化**：界面以成功 Review 的研究问题供用户选择，先读取当前
-  Project 的 Matrix，再把响应中的 `output_id` 提交给 Agent Turn；正常后续轮可沿用上一轮已冻结的
-  `review_output_id`，不会让浏览器猜测“最新 Matrix”。
+- **Evidence Matrix 通过 Output ID 固化**：可用性只取决于当前 owner/Project 下是否存在 canonical
+  aggregate `evidence-matrix` output，不取决于父 Review 最终状态；因此后续 Section 失败但已产出合法
+  Matrix 的 Review 仍可选择，失败且无 Matrix 的 Review 会被排除。提交 Turn 继续发送并由服务端校验
+  `output_id`；正常后续轮可沿用上一轮冻结值，不让浏览器猜测“最新 Matrix”。
 
 ## 失败、重试与取消行为
 
@@ -147,7 +151,7 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - E2E harness 现在显式选择 Fake Parser/Embedding/Chat/arXiv、清除 Provider Key 并关闭 Worker Metrics
   端口；不会读取 `.env`。首轮全套暴露 Phase 2 旧测试仍查找已被 Project 工作区导航替代的“返回项目
   文献库”链接，更新为当前 `文献库` 导航契约后单测通过；未修改产品行为。
-- Phase 5 切片 8：主审修正后 Vitest 全量 `128 passed`，新增稳定 Agent 消息意图、Session identity/
+- Phase 5 切片 8：主审修正后 Vitest 全量 `131 passed`，新增稳定 Agent 消息意图、Session identity/
   Project 闭包、发送/Skill 锁定/Project Index/
   candidate 展示规则和 Agent Run 具名事件/终态；`npm run build` 通过。Playwright 新增 1 条完全离线
   Agent 旅程，完成创建 Session、首轮前 Skill 配置、Matrix 选择、第一轮、刷新、第二轮、Evidence
@@ -160,6 +164,16 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   定向 `15 passed`、两轮集成 `1 passed`；前端 build 与 Phase 5 E2E `1 passed (36.2s)`。切换
   Project/Session 会重建本地交互状态；Session/路由 Project 不匹配时停止子查询和渲染；能力部分成功
   后等待所有请求收束并重新读取两个 Profile，失败草稿仍保留。
+- Matrix/viewport 补强先取得 4 条后端行为红灯与 3 个前端模块红灯；实现后后端 Review Matrix 批量
+  查询、失败 Review 可选、无 Matrix 排除和单查询 Project ready index 的定向回归为 `28 passed`，
+  前端全量为 `131 passed`，production build、定向 Ruff 与 Pyright 均通过。能力浮层首次 E2E 暴露
+  保存后仍拦截 composer 点击，关闭浮层后 Phase 5 完整离线旅程为 `1 passed (36.8s)`。
+- 随后的真实数据验收发现同一 Review 的 Section、per-paper Matrix 与 aggregate Matrix 可共享 version；
+  Repository 外层连接补齐 canonical type/key 限制，碰撞用例先返回 3 项、修复后只返回 aggregate Matrix，
+  相关 Repository/Application/API 回归为 `11 passed`。
+- 1440×1000 有头验收确认 viewport 与三栏滚动正确，但初版 composer 为 324px、消息区仅 213px；将
+  Matrix 改成紧凑横向 context row、textarea 调整为默认 80px、消息 label 视觉隐藏但保留关联后，build、
+  `131 passed` 与 Phase 5 E2E `1 passed (36.4s)` 通过，最终像素高度由主智能体有头复验。
 - 主智能体最终独立合并回归为后端 `31 passed in 80.51s`、前端 `128 passed`、定向 Ruff 通过、Pyright
   0 errors 与 production build 通过；Phase 4 取消 E2E 复测 `1 passed (10.7s)`。有头 `playwright-cli`
   在 1440×1000 下确认三栏计算宽度为 `220px / 586px / 350px` 且无横向溢出，空态、能力 Catalog、

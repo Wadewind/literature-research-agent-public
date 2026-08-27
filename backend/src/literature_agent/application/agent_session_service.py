@@ -191,6 +191,18 @@ class AgentSessionService[TSession: Session]:
                 project_id, actor.owner_id
             )
 
+    async def get_project_ready_index_count(
+        self, actor: ActorContext, project_id: str
+    ) -> int:
+        """返回当前 Project 中可进入新 Turn 快照的 ready 索引文献数。"""
+        async with self._session_factory() as session:
+            count = await self._chunk_set_repo_factory(
+                session
+            ).count_ready_project_versions_scoped(project_id, actor.owner_id)
+            if count is None:
+                raise ProjectNotFoundError(project_id)
+            return count
+
     async def list_messages(self, actor: ActorContext, session_id: str) -> list[AgentMessage]:
         async with self._session_factory() as session:
             repo = self._agent_repo_factory(session)

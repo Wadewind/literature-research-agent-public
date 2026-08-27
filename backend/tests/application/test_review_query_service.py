@@ -1,12 +1,14 @@
 """ReviewQueryService 列表读路径测试。"""
 
+from dataclasses import replace
+
 import pytest
 
 from literature_agent.application.review_query_service import ReviewQueryService
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import RunNotFoundError
 from literature_agent.domain.review import ReviewOutputType, create_review_output, create_review_run
-from literature_agent.domain.run import RunType, create_run
+from literature_agent.domain.run import RunStatus, RunType, create_run
 from tests.fakes.fake_project_repository import fake_session
 from tests.fakes.fake_review_repository import FakeReviewRepository
 from tests.fakes.fake_run_repository import FakeRunRepository
@@ -16,7 +18,10 @@ from tests.fakes.fake_storage import FakeStorage
 async def test_list_reviews_returns_only_scoped_review_runs_in_stable_order() -> None:
     reviews = FakeReviewRepository()
     first = create_run("project-1", "user-1", RunType.REVIEW)
-    second = create_run("project-1", "user-1", RunType.REVIEW)
+    second = replace(
+        create_run("project-1", "user-1", RunType.REVIEW),
+        status=RunStatus.FAILED,
+    )
     hidden = create_run("project-2", "user-1", RunType.REVIEW)
     wrong_type = create_run("project-1", "user-1", RunType.INGESTION)
     for run in (first, second, hidden, wrong_type):
@@ -35,10 +40,27 @@ async def test_list_reviews_returns_only_scoped_review_runs_in_stable_order() ->
         review_repo_factory=lambda _session: reviews,
         storage=FakeStorage(),
     )
+    aggregate = create_review_output(
+        review_run_id=second.run_id,
+        output_type=ReviewOutputType.EVIDENCE_MATRIX,
+        output_key="evidence-matrix",
+        version=1,
+        schema_version="evidence-matrix.v1",
+        payload={
+            "rows": [{"dimension_key": "methods"}] * 20,
+            "paper_failures": [{"paper_id": "failed"}],
+            "summary": {"valid_papers": 4, "failed_papers": 6},
+        },
+        idempotency_key="matrix:aggregate:1",
+    )
+    reviews.outputs.append(aggregate)
 
     rows = await service.list_reviews(ActorContext("user-1"), "project-1")
 
-    assert [run.run_id for run, _ in rows] == [second.run_id, first.run_id]
+    assert [row.run.run_id for row in rows] == [second.run_id, first.run_id]
+    assert rows[0].run.status is RunStatus.FAILED
+    assert rows[0].evidence_matrix == aggregate
+    assert rows[1].evidence_matrix is None
     assert await service.list_reviews(ActorContext("user-2"), "project-1") == []
 
 

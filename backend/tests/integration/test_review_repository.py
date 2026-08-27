@@ -213,6 +213,61 @@ async def test_review_list_is_stably_sorted_and_scoped(session, project: str) ->
     ) == []
 
 
+async def test_latest_aggregate_matrices_are_batched_versioned_and_scoped(
+    session, project: str
+) -> None:
+    first_run, _ = await _seed_review(session, project)
+    second_run, _ = await _seed_review(session, project)
+    repo = SqlalchemyReviewRepository(session)
+    outputs = [
+        create_review_output(
+            review_run_id=run_id,
+            output_type=ReviewOutputType.EVIDENCE_MATRIX,
+            output_key=output_key,
+            version=version,
+            schema_version="evidence-matrix.v1",
+            payload={"rows": [], "summary": {}},
+            idempotency_key=f"{run_id}:{output_key}:{version}",
+        )
+        for run_id, output_key, version in (
+            (first_run.run_id, "evidence-matrix", 1),
+            (first_run.run_id, "evidence-matrix", 2),
+            (first_run.run_id, "paper:source-1", 3),
+            (second_run.run_id, "outline", 1),
+        )
+    ]
+    outputs.extend(
+        [
+            create_review_output(
+                review_run_id=first_run.run_id,
+                output_type=ReviewOutputType.EVIDENCE_MATRIX,
+                output_key="paper:source-version-collision",
+                version=2,
+                schema_version="paper-evidence.v1",
+                payload={"rows": [{"claim": "不能冒充聚合 Matrix"}]},
+                idempotency_key=f"{first_run.run_id}:paper-collision:2",
+            ),
+            create_review_output(
+                review_run_id=first_run.run_id,
+                output_type=ReviewOutputType.SECTION,
+                output_key="section:version-collision",
+                version=2,
+                schema_version="section.v1",
+                payload={"section_key": "version-collision"},
+                idempotency_key=f"{first_run.run_id}:section-collision:2",
+            ),
+        ]
+    )
+    for output in outputs:
+        await repo.add_output(output)
+    await session.commit()
+
+    assert await repo.list_latest_evidence_matrix_outputs_scoped(project, "user-1") == [
+        outputs[1]
+    ]
+    assert await repo.list_latest_evidence_matrix_outputs_scoped(project, "user-2") == []
+
+
 async def test_latest_sections_are_filtered_versioned_and_scoped(session, project: str) -> None:
     """章节读模型只返回每个 key 的最新版本，并隐藏其他 Output 与越权范围。"""
     run, _ = await _seed_review(session, project)

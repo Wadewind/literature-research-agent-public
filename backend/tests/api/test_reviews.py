@@ -13,6 +13,7 @@ from literature_agent.api.reviews import (
     get_review_run_service,
     get_review_workflow_service,
 )
+from literature_agent.application.review_query_service import ReviewListView
 from literature_agent.application.review_workflow_service import CreateReviewRunResult
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import RunNotFoundError
@@ -49,7 +50,11 @@ class _Query:
             output_key="evidence-matrix",
             version=1,
             schema_version="evidence-matrix.v1",
-            payload={"rows": []},
+            payload={
+                "rows": [{}] * 20,
+                "paper_failures": [{}] * 6,
+                "summary": {"valid_papers": 4, "failed_papers": 6},
+            },
             idempotency_key="matrix",
         )
 
@@ -75,7 +80,7 @@ class _Query:
     async def list_reviews(self, actor, project_id):
         if actor.owner_id != "user-1" or project_id != "project-1":
             return []
-        return [(_ListRun(), _ListReview())]
+        return [ReviewListView(_ListRun(), _ListReview(), self.output_value)]
 
     async def sources(self, actor, project_id, run_id):
         self._scope(actor, project_id, run_id)
@@ -149,7 +154,7 @@ class _Row:
 @dataclass(frozen=True)
 class _ListRun:
     run_id: str = "review-1"
-    status: RunStatus = RunStatus.QUEUED
+    status: RunStatus = RunStatus.FAILED
     created_at: datetime = datetime(2026, 8, 23, tzinfo=UTC)
     updated_at: datetime = datetime(2026, 8, 23, tzinfo=UTC)
 
@@ -216,11 +221,18 @@ def test_list_reviews_is_project_scoped(client) -> None:
     assert response.json() == [
         {
             "run_id": "review-1",
-            "status": "queued",
+            "status": "failed",
             "research_question": "研究问题",
             "current_stage": "formulate_search_strategy",
             "created_at": "2026-08-23T00:00:00+00:00",
             "updated_at": "2026-08-23T00:00:00+00:00",
+            "evidence_matrix": {
+                "output_id": client[1].output_value.output_id,
+                "version": 1,
+                "row_count": 20,
+                "valid_papers": 4,
+                "failed_papers": 6,
+            },
         }
     ]
     assert test_client.get("/api/v1/projects/project-2/reviews").json() == []
@@ -230,7 +242,7 @@ def test_matrix_is_project_scoped_and_missing_outline_is_404(client) -> None:
     test_client, query, *_ = client
     response = test_client.get("/api/v1/projects/project-1/reviews/review-1/evidence-matrix")
     assert response.status_code == 200
-    assert response.json()["payload"] == {"rows": []}
+    assert len(response.json()["payload"]["rows"]) == 20
     assert query.output_calls[-1] == (
         ReviewOutputType.EVIDENCE_MATRIX,
         "evidence-matrix",

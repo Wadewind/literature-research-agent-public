@@ -55,8 +55,14 @@ export function isSkillSelectionSelected(
     selection.version === skill.version;
 }
 
-export function projectIndexLabel(count: number): string {
-  return `${count} 篇已索引文献`;
+export function projectIndexLabel(
+  count: number | undefined,
+  scope: "project" | "turn",
+): string {
+  if (count === undefined) return "正在读取 Project 索引…";
+  return scope === "turn"
+    ? `本轮索引快照 · ${count} 篇文献`
+    : `当前 Project · ${count} 篇已索引文献`;
 }
 
 export function formatCandidateSize(sizeBytes: number): string {

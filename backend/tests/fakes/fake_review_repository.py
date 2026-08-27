@@ -62,6 +62,26 @@ class FakeReviewRepository(ReviewRepository):
         ]
         return sorted(rows, key=lambda row: (row[0].created_at, row[0].run_id), reverse=True)
 
+    async def list_latest_evidence_matrix_outputs_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[ReviewOutput]:
+        latest: dict[str, ReviewOutput] = {}
+        for output in self.outputs:
+            run = self.runs.get(output.review_run_id)
+            if (
+                run is None
+                or run.project_id != project_id
+                or run.owner_id != owner_id
+                or run.run_type != RunType.REVIEW.value
+                or output.output_type is not ReviewOutputType.EVIDENCE_MATRIX
+                or output.output_key != "evidence-matrix"
+            ):
+                continue
+            current = latest.get(output.review_run_id)
+            if current is None or output.version > current.version:
+                latest[output.review_run_id] = output
+        return [latest[key] for key in sorted(latest)]
+
     async def get_review_run_scoped_for_update(
         self, run_id: str, project_id: str, owner_id: str
     ) -> ReviewRun | None:

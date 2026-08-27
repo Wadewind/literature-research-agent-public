@@ -39,6 +39,12 @@ class ReviewRepository(Protocol):
         """稳定列出当前 owner/Project 下的 Review Run 读模型。"""
         ...
 
+    async def list_latest_evidence_matrix_outputs_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[ReviewOutput]:
+        """批量列出当前范围内每个 Review 最新的 canonical 聚合 Matrix。"""
+        ...
+
     async def get_review_run_scoped_for_update(
         self, run_id: str, project_id: str, owner_id: str
     ) -> ReviewRun | None:

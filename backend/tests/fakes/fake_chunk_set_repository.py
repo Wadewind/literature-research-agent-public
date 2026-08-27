@@ -20,6 +20,7 @@ class FakeChunkSetRepository(ChunkSetRepository):
     ) -> None:
         self._chunk_sets: dict[str, ChunkSet] = {}
         self._parse_revision_repo = parse_revision_repo
+        self.project_ready_counts: dict[tuple[str, str], int] = {}
 
     async def add(self, chunk_set: ChunkSet) -> ChunkSet:
         """将 ChunkSet 存入内存。"""
@@ -81,6 +82,14 @@ class FakeChunkSetRepository(ChunkSetRepository):
             if revision is not None and revision.version_id in version_ids:
                 count += 1
         return count
+
+    async def count_ready_project_versions_scoped(
+        self,
+        project_id: str,
+        owner_id: str,
+    ) -> int | None:
+        """Fake 不持有 Project 关系；调用方测试可显式设置计数映射。"""
+        return self.project_ready_counts.get((project_id, owner_id))
 
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新。"""

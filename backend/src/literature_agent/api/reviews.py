@@ -105,15 +105,37 @@ async def list_reviews(
 ) -> list[dict]:
     return [
         {
-            "run_id": run.run_id,
-            "status": run.status.value,
-            "research_question": review.research_question,
-            "current_stage": review.current_stage.value,
-            "created_at": run.created_at.isoformat(),
-            "updated_at": run.updated_at.isoformat(),
+            "run_id": item.run.run_id,
+            "status": item.run.status.value,
+            "research_question": item.review.research_question,
+            "current_stage": item.review.current_stage.value,
+            "created_at": item.run.created_at.isoformat(),
+            "updated_at": item.run.updated_at.isoformat(),
+            "evidence_matrix": _matrix_summary(item.evidence_matrix),
         }
-        for run, review in await query.list_reviews(actor, project_id)
+        for item in await query.list_reviews(actor, project_id)
     ]
+
+
+def _matrix_summary(output) -> dict | None:
+    if output is None:
+        return None
+    payload = output.payload if isinstance(output.payload, dict) else {}
+    rows = payload.get("rows")
+    summary = payload.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+
+    def count(name: str) -> int:
+        value = summary.get(name)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    return {
+        "output_id": output.output_id,
+        "version": output.version,
+        "row_count": len(rows) if isinstance(rows, list) else 0,
+        "valid_papers": count("valid_papers"),
+        "failed_papers": count("failed_papers"),
+    }
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)

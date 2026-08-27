@@ -84,6 +84,10 @@ class SessionResponse(BaseModel):
     last_activity_at: datetime
 
 
+class ProjectAgentContextSummaryResponse(BaseModel):
+    ready_index_count: int
+
+
 class MessageCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1, max_length=16_000)
@@ -511,6 +515,21 @@ async def list_sessions(
 ) -> list[SessionResponse]:
     try:
         return [_session(value) for value in await service.list_sessions(actor, project_id)]
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.get(
+    "/projects/{project_id}/agent-context-summary",
+    response_model=ProjectAgentContextSummaryResponse,
+)
+async def get_project_agent_context_summary(
+    project_id: str, actor: ActorDep, service: ServiceDep
+) -> ProjectAgentContextSummaryResponse:
+    try:
+        return ProjectAgentContextSummaryResponse(
+            ready_index_count=await service.get_project_ready_index_count(actor, project_id)
+        )
     except Exception as exc:
         raise _translate(exc) from exc
 

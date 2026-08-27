@@ -110,7 +110,14 @@ export default function AgentCapabilityPanel({
           <p className="warn-text">能力配置有未保存的修改，保存后才能开始下一轮研究。</p>
         )}
         {error && <p className="error-text">{error}</p>}
-        <button type="button" onClick={onSave} disabled={loading || pending || (!mcpDirty && !skillDirty)}>
+        <button
+          type="button"
+          onClick={(event) => {
+            onSave();
+            event.currentTarget.closest("details")?.removeAttribute("open");
+          }}
+          disabled={loading || pending || (!mcpDirty && !skillDirty)}
+        >
           {pending ? "正在保存…" : "保存能力配置"}
         </button>
       </div>

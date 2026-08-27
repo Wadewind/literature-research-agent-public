@@ -52,6 +52,11 @@ class _Service:
             )
         ]
 
+    async def get_project_ready_index_count(self, actor, project_id):
+        assert actor.owner_id == "owner-1"
+        assert project_id == "project-1"
+        return 25
+
     async def list_message_views(self, actor, session_id):
         del actor
         user = create_agent_message(
@@ -184,10 +189,13 @@ def test_agent_api_lists_project_sessions_and_returns_persisted_claim_summaries(
     app.dependency_overrides[get_agent_session_service] = _Service
     with TestClient(app) as client:
         sessions = client.get("/api/v1/projects/project-1/agent-sessions")
+        context = client.get("/api/v1/projects/project-1/agent-context-summary")
         messages = client.get("/api/v1/agent-sessions/session-1/messages")
 
     assert sessions.status_code == 200
     assert sessions.json()[0]["title"] == "最近研究"
+    assert context.status_code == 200
+    assert context.json() == {"ready_index_count": 25}
     assert messages.status_code == 200
     assert messages.json()[0]["claims"] is None
     assert messages.json()[1]["claim_set_id"] == "claim-set-1"

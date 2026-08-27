@@ -5,6 +5,8 @@ interface AgentEvidenceMarginProps {
   projectId: string;
   turn: AgentTurn | undefined;
   matrix: ReviewOutput | undefined;
+  projectReadyIndexCount: number | undefined;
+  projectIndexError: boolean;
   assistantMessages: AgentMessage[];
   selectedEvidence: CitationSummary | null;
   onSelectEvidence: (value: CitationSummary) => void;
@@ -23,6 +25,8 @@ export default function AgentEvidenceMargin({
   projectId,
   turn,
   matrix,
+  projectReadyIndexCount,
+  projectIndexError,
   assistantMessages,
   selectedEvidence,
   onSelectEvidence,
@@ -30,6 +34,8 @@ export default function AgentEvidenceMargin({
 }: AgentEvidenceMarginProps) {
   const claims = assistantMessages.flatMap((message) => message.claims ?? []);
   const activeMatrixId = matrix?.output_id ?? turn?.review_output_id;
+  const indexScope = turn ? "turn" : "project";
+  const indexCount = turn ? turn.project_index_refs.length : projectReadyIndexCount;
 
   return (
     <aside className="agent-evidence-margin" aria-label="Evidence Margin">
@@ -39,7 +45,14 @@ export default function AgentEvidenceMargin({
       </header>
       <dl className="agent-context-ledger">
         <div><dt>Evidence Matrix</dt><dd className="mono">{activeMatrixId?.slice(0, 8) ?? "未选择"}</dd></div>
-        <div><dt>Project Index</dt><dd>{projectIndexLabel(turn?.project_index_refs.length ?? 0)}</dd></div>
+        <div>
+          <dt>{turn ? "本轮索引快照" : "当前 Project 索引"}</dt>
+          <dd className={projectIndexError && !turn ? "error-text" : undefined}>
+            {projectIndexError && !turn
+              ? "Project 索引读取失败"
+              : projectIndexLabel(indexCount, indexScope)}
+          </dd>
+        </div>
         <div><dt>候选成果</dt><dd>{turn?.candidates.length ?? 0} 项 staged</dd></div>
       </dl>
 

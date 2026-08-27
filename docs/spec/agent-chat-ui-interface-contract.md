@@ -64,6 +64,11 @@ Session 列表 | 用户/Assistant 消息与筛选后研究活动 | Evidence/Cont
 Evidence Matrix 是逐 Turn 明确选择的授权输入，不永久绑定 Session。第二轮可以继续使用同一 Output，
 也可以显式选择当前 Project 的另一个合法 Evidence Matrix。
 
+Matrix 的可用性由 canonical aggregate Output 事实决定，不由父 Review 的整体状态替代：Review 即使因
+后续章节生成失败而处于 `failed`，只要 owner/Project-scoped 的最新
+`output_type=evidence_matrix + output_key=evidence-matrix` 已存在，该 Matrix 仍可供 Agent 选择；没有该
+聚合 Output 的 Review 不可选。前端不得为列表中的每个 Review 逐项探测 Matrix。
+
 ## 5. REST 接口
 
 ### 5.1 新增：按 Project 列出 AgentSession
@@ -184,6 +189,32 @@ Turn 详情继续返回冻结的 `review_output_id`、`project_index_refs`、状
 - `GET /api/v1/runs/{run_id}`、`GET /api/v1/runs/{run_id}/events/stream`、
   `POST /api/v1/runs/{run_id}/cancel`。
 
+Review 列表每项附加可空 `evidence_matrix` 摘要：
+
+```json
+{
+  "output_id": "uuid",
+  "version": 1,
+  "row_count": 20,
+  "valid_papers": 4,
+  "failed_papers": 6
+}
+```
+
+该字段由同一 Project/owner-scoped 列表读路径批量组装最新 canonical aggregate Output；`null` 表示当前
+没有可用于 Agent 的聚合 Matrix。摘要只读取现有 `payload.rows` 和 `payload.summary` 的有界计数，不把
+Matrix 正文复制进列表。
+
+Agent 首页另读取最小 Project Context 摘要：
+
+```http
+GET /api/v1/projects/{project_id}/agent-context-summary
+```
+
+响应 `{ "ready_index_count": 25 }`，只统计当前 owner/Project 收录版本中存在 ready ChunkSet 的文献。
+无 Turn 时 Evidence Margin 标为“当前 Project 索引”；有 Turn 时改用冻结的
+`project_index_refs` 并标为“本轮索引快照”。两者不能用同一个隐含的 `0` 代替未知或尚未加载状态。
+
 ## 6. Event 展示与安全
 
 前端 EventSource 增加 Agent 已登记业务事件，但只把下列语义投影给用户：
@@ -205,6 +236,11 @@ Event payload 仍是诊断与进度提示，不能替代 Message、Turn、Candid
 - 继续使用现有 Vite React、CSS token、Inter/IBM Plex Mono、零圆角和冷灰纸面，不新增 UI 框架；
 - Agent 页唯一签名元素是右侧 **Evidence Margin**：回答引用与论文页码按 Claim 排列，表达“研究证据
   批注”而不是通用 Coding IDE；
+- 桌面 Agent route 使用 viewport workspace。Session、Message、Evidence 三栏独立滚动，中栏只有消息
+  时间线滚动、Composer 固定在底部；Matrix 选择使用紧凑 context row，默认消息输入约 72–88px，避免
+  Composer 挤占对话历史；能力配置展开为中栏内浮层，不改变消息区高度；
+- 左右栏由可聚焦的垂直 separator 调整宽度，支持鼠标拖动、方向键和双击恢复默认值。宽度只以带版本
+  的最小 localStorage 记录保存，非法/旧版本数据回退默认值；业务事实不进入 localStorage；
 - `PHASE 04` Header 标记更新为不误导的 `RESEARCH AGENT · SPIKE`，避免暗示公网生产可用。
 
 ## 8. 测试与完成条件

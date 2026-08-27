@@ -1,6 +1,6 @@
 """ChunkSet Repository 的 PostgreSQL 适配器。"""
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
@@ -8,6 +8,10 @@ from literature_agent.domain.chunk import ChunkSet, ChunkSetStatus
 from literature_agent.infrastructure.persistence.models import (
     ChunkSetORM,
     DocumentParseRevisionORM,
+    PaperORM,
+    PaperVersionORM,
+    ProjectORM,
+    ProjectPaperORM,
 )
 
 
@@ -124,6 +128,56 @@ class SqlalchemyChunkSetRepository(ChunkSetRepository):
             ),
         )
         return result.scalar_one()
+
+    async def count_ready_project_versions_scoped(
+        self,
+        project_id: str,
+        owner_id: str,
+    ) -> int | None:
+        """用单条 Project-scoped 查询统计当前可用索引。"""
+        ready_count = (
+            select(func.count(func.distinct(ProjectPaperORM.selected_version_id)))
+            .select_from(ProjectPaperORM)
+            .join(
+                PaperORM,
+                and_(
+                    PaperORM.paper_id == ProjectPaperORM.paper_id,
+                    PaperORM.owner_id == owner_id,
+                    PaperORM.archived_at.is_(None),
+                ),
+            )
+            .join(
+                PaperVersionORM,
+                and_(
+                    PaperVersionORM.version_id
+                    == ProjectPaperORM.selected_version_id,
+                    PaperVersionORM.paper_id == ProjectPaperORM.paper_id,
+                    PaperVersionORM.owner_id == owner_id,
+                ),
+            )
+            .join(
+                DocumentParseRevisionORM,
+                DocumentParseRevisionORM.version_id == PaperVersionORM.version_id,
+            )
+            .join(
+                ChunkSetORM,
+                and_(
+                    ChunkSetORM.parse_revision_id
+                    == DocumentParseRevisionORM.revision_id,
+                    ChunkSetORM.status == ChunkSetStatus.READY.value,
+                ),
+            )
+            .where(ProjectPaperORM.project_id == ProjectORM.project_id)
+            .correlate(ProjectORM)
+            .scalar_subquery()
+        )
+        result = await self._session.execute(
+            select(ready_count).select_from(ProjectORM).where(
+                ProjectORM.project_id == project_id,
+                ProjectORM.owner_id == owner_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def save(self, chunk_set: ChunkSet) -> None:
         """保存 ChunkSet 状态更新。"""

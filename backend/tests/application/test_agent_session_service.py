@@ -43,6 +43,22 @@ async def test_list_sessions_requires_owned_project_and_returns_project_scope(db
 
 
 @pytest.mark.asyncio
+async def test_project_context_summary_counts_current_ready_indexes_and_checks_owner(
+    db_engine,
+) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+
+    assert await service.get_project_ready_index_count(
+        scenario.actor, scenario.project.project_id
+    ) == 1
+    with pytest.raises(ProjectNotFoundError):
+        await service.get_project_ready_index_count(
+            ActorContext(owner_id="other-owner"), scenario.project.project_id
+        )
+
+
+@pytest.mark.asyncio
 async def test_post_message_commits_one_scoped_bundle_and_replays_idempotently(
     db_engine,
 ) -> None:

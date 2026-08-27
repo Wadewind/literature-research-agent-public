@@ -48,13 +48,13 @@ test("离线 Research Agent 完成配置、两轮恢复与候选成果展示", a
   await page.getByRole("button", { name: "保存能力配置" }).click();
   await expect(page.getByText(/研究方法已锁定/)).toHaveCount(0);
 
-  await page.getByLabel("本轮 Evidence Matrix").selectOption({ label: reviewQuestion });
+  await page.getByLabel("本轮 Evidence Matrix").selectOption({ index: 1 });
   await page.getByLabel("研究消息").fill("请综合这些证据并指出主要研究缺口。");
   await page.getByRole("button", { name: "开始本轮研究" }).click();
   await expect(page.getByText("当前授权上下文证据不足。")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("research-note.md")).toBeVisible();
   await expect(page.getByText("1 项 staged")).toBeVisible();
-  await expect(page.getByText(/篇已索引文献/)).toBeVisible();
+  await expect(page.getByText(/本轮索引快照 · \d+ 篇文献/)).toBeVisible();
 
   await page.reload();
   await expect(page.getByText("请综合这些证据并指出主要研究缺口。")).toBeVisible();

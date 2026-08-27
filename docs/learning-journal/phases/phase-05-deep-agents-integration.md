@@ -584,6 +584,20 @@ Smoke 必须显式启用、限制预算，并记录版本、命令、耗时和�
   Phase 4 取消场景复测为 `1 passed (10.7s)`。有头 `playwright-cli` 在 1440×1000 下确认三栏实际为
   `220px / 586px / 350px`，工作区 `scrollWidth == clientWidth == 1192`，且能力面板没有暴露 MCP endpoint、
   transport、env 或 Secret；
+- Matrix/工作区补强后，Review 列表以 canonical aggregate output 是否存在判断可用性，不依赖父
+  Review 的最终状态；同 owner/Project 的最新版本用一次批量查询装配，摘要只读取 Matrix payload。
+  当前 Project ready index 由单条 Project-scoped ChunkSet 查询返回，Turn 建立后则显示冻结快照；
+- 有头真实数据验收发现，同一 Review 下不同类型 Output 可共享 version，批量查询若在外层只按
+  `run_id + version` 连接会把 Section/per-paper Matrix 冒充为聚合 Matrix。修复后外层再次限定 canonical
+  type/key；同 Run、同 version 的三类 Output PostgreSQL 回归先红后绿，相关 Repository/Application/API
+  定向为 `11 passed`；
+- 桌面 Agent route 使用 viewport 工作区，Session rail、消息区与 Evidence Margin 独立滚动；左右
+  分隔条支持指针、方向键、双击复位并用版本化 localStorage 保存。能力配置改为浮层，保存后主动关闭，
+  避免覆盖 composer。补强定向后端为 `28 passed`、前端全量为 `131 passed`、build/ruff/pyright 通过，
+  Phase 5 离线 E2E 为 `1 passed (36.8s)`；
+- 有头验收显示初版 composer 占用过高后，Matrix 选择压缩为横向 context row，消息标签保持可访问但
+  视觉隐藏，textarea 默认高度降为 80px；前端 build、`131 passed` 与 Phase 5 E2E
+  `1 passed (36.4s)` 复测通过；
 - Fake 的固定结果为证据不足且执行过快，因此浏览器旅程没有稳定制造运行中取消或非空 Agent
   Citation；取消按钮/终态收束由通用 Run 单元测试覆盖，持久 Claim/Citation/Evidence 投影由后端
   cited-runtime 测试覆盖。有头检查发现的唯一 Console error 是既有 `/favicon.ico` 404，不影响业务

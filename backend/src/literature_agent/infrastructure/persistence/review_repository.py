@@ -595,6 +595,43 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return [_output_to_domain(x) for x in result.scalars().all()]
 
+    async def list_latest_evidence_matrix_outputs_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[ReviewOutput]:
+        """用单次 scoped 查询读取每个 Review 最新的 canonical 聚合 Matrix。"""
+        latest = (
+            select(
+                ReviewOutputORM.review_run_id.label("review_run_id"),
+                func.max(ReviewOutputORM.version).label("version"),
+            )
+            .join(ReviewRunORM, ReviewRunORM.run_id == ReviewOutputORM.review_run_id)
+            .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .where(
+                RunORM.project_id == project_id,
+                RunORM.owner_id == owner_id,
+                RunORM.run_type == RunType.REVIEW.value,
+                ReviewOutputORM.output_type == ReviewOutputType.EVIDENCE_MATRIX.value,
+                ReviewOutputORM.output_key == "evidence-matrix",
+            )
+            .group_by(ReviewOutputORM.review_run_id)
+            .subquery()
+        )
+        result = await self._session.execute(
+            select(ReviewOutputORM)
+            .join(
+                latest,
+                (latest.c.review_run_id == ReviewOutputORM.review_run_id)
+                & (latest.c.version == ReviewOutputORM.version),
+            )
+            .where(
+                ReviewOutputORM.output_type
+                == ReviewOutputType.EVIDENCE_MATRIX.value,
+                ReviewOutputORM.output_key == "evidence-matrix",
+            )
+            .order_by(ReviewOutputORM.review_run_id)
+        )
+        return [_output_to_domain(value) for value in result.scalars().all()]
+
     async def get_output_scoped(
         self, output_id: str, project_id: str, owner_id: str
     ) -> ReviewOutput | None:

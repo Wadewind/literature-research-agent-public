@@ -27,7 +27,9 @@ describe("Agent UI 投影", () => {
   it("首条产品消息后锁定 Skill，并使用 Project Index 数量文案", () => {
     expect(isSkillProfileLocked(0)).toBe(false);
     expect(isSkillProfileLocked(1)).toBe(true);
-    expect(projectIndexLabel(3)).toBe("3 篇已索引文献");
+    expect(projectIndexLabel(3, "project")).toBe("当前 Project · 3 篇已索引文献");
+    expect(projectIndexLabel(2, "turn")).toBe("本轮索引快照 · 2 篇文献");
+    expect(projectIndexLabel(undefined, "project")).toBe("正在读取 Project 索引…");
   });
 
   it("Session 必须属于路由 Project，Skill 身份包含 source", () => {
