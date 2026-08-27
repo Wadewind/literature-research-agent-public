@@ -9,6 +9,11 @@ ADR-0007 已修订本 ADR 的物理 Workspace 细节：Sandbox Lease 改为每�
 短 TTL”“首版隐藏 `execute`”保留为当时的历史决定，不再作为 Slice 7 契约。Session/Turn/Thread、
 逻辑 Workspace、平台业务事实和权限所有权仍由本 ADR 决定。
 
+ADR-0008 又修订 MCP/Skill 的配置边界：用户可选择平台安装、固定版本的 MCP/Skill Catalog 条目并填写
+声明的非敏感安全参数，也可创建 owner-scoped 的只读声明式 Markdown/文本 Skill；仍禁止任意 MCP
+endpoint/command/env、可执行 Skill、动态依赖和权限扩张。下文“Skill 只能来自平台 Catalog”保留为
+当时决定，由 ADR-0008 取代。
+
 ## 背景
 
 ADR-0001 已选择基于 LangGraph 的 Deep Agents 作为 `ResearchAgentRuntime` 内部实现。Phase 5 初版

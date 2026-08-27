@@ -12,6 +12,10 @@ ADR-0007 已进一步选择 OpenSandbox 并决定在 Slice 7 的 Session 专属�
 `execute`。下文“Phase 5 默认关闭任意 Shell”保留为本 ADR 作出时以及 Slice 1–6 的历史边界；Slice 7
 起由 ADR-0007 的可执行 Workspace、网络和隔离边界修订。宿主 Shell/Python 仍然禁止。
 
+ADR-0008 已进一步固定 MCP/Skill 接入方式：复用 LangChain MCP Adapter、Playwright MCP 与 Deep Agents
+原生 Skills；用户可选择平台白名单条目和 owner-scoped 声明式 Skill，但仍不能提交任意 MCP 连接、命令、
+env、可执行 Skill、Sandbox 或网络配置。本 ADR 的 Runtime Adapter 与平台权限边界继续有效。
+
 ## 背景
 
 Core Research Backend 先交付确定性的文献导入、RAG、引用校验和固定 Review Workflow。其上的 Research Agent Extension 需要在授权 Evidence 范围内规划研究任务、调用 MCP 工具，并在受限 Sandbox 中处理文件和生成 Artifact。

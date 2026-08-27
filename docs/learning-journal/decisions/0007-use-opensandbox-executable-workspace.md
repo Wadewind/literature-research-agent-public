@@ -4,6 +4,10 @@
 - 日期：2026-08-26
 - 决策者：项目维护者
 
+> 2026-08-27 修订：ADR-0008 取代本文关于 Browser/MCP/Skill 实现方式、公共 egress 验收范围和
+> Slice 7.2–7.4 顺序的决定。本文关于 OpenSandbox Lease、WorkspaceSnapshot、宿主隔离、固定镜像和
+> Sandbox `execute` 的决定继续有效。
+
 ## 背景
 
 Phase 5 切片 1–6 已建立 `AgentSession`、逐轮 `AgentTurnRun`、`ResearchAgentRuntime`、Deep Agents
@@ -93,14 +97,12 @@ OpenSandbox 中执行。该能力不等于开放宿主 Shell、宿主 Python 或
 
 ### 网络、Browser 与下载
 
-- Sandbox 默认拒绝出站网络；只由平台为固定 Browser 研究目标配置 egress allowlist，模型、用户、网页
-  或 Skill 不能扩大网络目标；
-- egress policy 作用于 Sandbox 内全部进程，包括 Chromium、Python 和命令行客户端，不能只检查
-  Browser Tool 参数；
-- Browser 通过自定义 `browser_*` Tool 使用同一 Sandbox 中的 Chromium/CDP。模型不能看到或提交 CDP、
-  VNC/noVNC endpoint；
-- Browser 下载先进入 `/workspace` 的隔离 incoming 区域，经过来源、最终 URL、哈希、MIME、大小和文件
-  策略校验后，才能进入 WorkspaceSnapshot 或候选 Artifact；
+- Sandbox 默认拒绝出站网络。Phase 5 只以 Sandbox 内合成页面验证浏览器回路；公共网络、固定目标与覆盖
+  Chromium、Python 和命令行客户端的统一 egress policy 后移到 Phase 6；
+- Browser 使用固定版本 Playwright MCP 连接同一 Sandbox 中的 Chromium/CDP，不再自研 `browser_*`
+  Tool。模型不能看到或提交 CDP、MCP、VNC/noVNC endpoint；
+- Phase 5 下载只验证文件进入同一 `/workspace` 并经过 WorkspaceSnapshot/候选 Artifact 边界；公共来源、
+  最终 URL、哈希、MIME、大小和恶意文件策略留到 Phase 6；
 - noVNC 在 Phase 5 只可作为可信本地诊断能力。面向用户的画面需要浏览器鉴权代理和 owner/Session 映射，
   留到 Phase 6 UI/安全强化；
 - 首版仍不支持登录站点、Cookie/用户凭据委托、付费墙、CAPTCHA 或对外写操作。
@@ -108,26 +110,29 @@ OpenSandbox 中执行。该能力不等于开放宿主 Shell、宿主 Python 或
 ### MCP 与 Skills
 
 - MCP 通过 `langchain-mcp-adapters` 转换为 LangChain Tool 后传入 `create_deep_agent`；
-- MCP Server 只能来自平台维护、版本化的 Catalog。用户不能提交 endpoint、URL、transport、command、
-  env、认证信息或任意 Server 配置；
-- 优先使用受控 Streamable HTTP，开源 MCP 优先部署为独立容器并固定镜像/版本。Phase 5 不在 ARQ Worker
-  宿主以 stdio 启动第三方 MCP 子进程，也不把 OpenSandbox 管理 MCP 暴露给模型；
-- 首个 MCP 固定为只读 `search_arxiv_metadata`；默认 stateless。普通测试连接本地确定性 Server，真实
-  arXiv Smoke 必须显式启用；
+- MCP Server 只能来自平台安装、审核、锁定版本的 Catalog。用户可在 owner/Session 范围选择条目并填写
+  Catalog 声明的非敏感安全参数，但不能提交 endpoint、URL、transport、command、env、包版本、认证
+  信息、Sandbox 镜像或网络配置；
+- 需要本地进程的第三方 MCP 预装并运行在 Session OpenSandbox，不能在 ARQ Worker 宿主以 stdio 启动；
+  固定 Playwright MCP 通过 Sandbox 内 Streamable HTTP endpoint 连接同一 Chromium；
+- Phase 5 不自研 `search_arxiv_metadata` Server，而适配一个平台审核、固定版本的现有只读 Search MCP；
+  普通测试连接确定性 Fake MCP，真实外部 Smoke 必须显式启用；
 - MCP Tool 加载后必须按名称、输入 Schema、版本/哈希和 allowlist fail-closed 校验；平台 interceptor
   注入稳定 Turn scope，并执行权限、取消、预算、超时、输出限制、Secret 过滤和 ToolExecution 审计；
-- Skill 只来自平台维护的固定版本 Catalog。Skill 不能授予 Tool、网络、Sandbox 或 Secret 权限；如需
-  脚本，脚本必须随固定 Sandbox 镜像或受控只读路径发布，执行输出只写 `/workspace`。
+- Skill 使用 Deep Agents 原生加载机制。用户可启用平台安装的固定版本 Skill，也可创建 owner-scoped
+  声明式 Markdown/文本 Skill；虚拟 `/skills/` 路由平台管理的只读 Backend，不进入 Sandbox
+  `/workspace`，并按 owner/Session 固定版本/哈希。首版不接受可执行脚本、二进制、动态依赖或 Secret；
+  Skill 不能授予 Tool、MCP、网络、Sandbox 或 Project 权限。
 
 ### Slice 7 顺序与阶段边界
 
-Slice 7 调整为五个独立、可回退提交：
+Slice 7 保持五个独立、可回退提交；ADR-0008 将后三个切片调整为：
 
 1. 7.0 Real Deep Agent Runtime Enablement；
 2. 7.1 OpenSandbox、Sandbox Lease 与 WorkspaceSnapshot；
-3. 7.2 同 Sandbox Browser 与下载；
-4. 7.3 固定平台 MCP；
-5. 7.4 平台 Research Skill。
+3. 7.2 MCP Configuration Foundation；
+4. 7.3 Playwright MCP 与现有 Search MCP Spike；
+5. 7.4 Deep Agents Native Skills。
 
 ### Slice 7.0 已固定的 Provider 与费用边界
 
@@ -193,9 +198,10 @@ derived image 构建、远端 network/resource/Secret/host isolation 和销毁�
 写成基础设施安全实测结论。
 
 这会把 OpenSandbox `execute`、Session 级 Lease、最小网络/资源边界和 WorkspaceSnapshot 从原 Phase 6
-计划提前到 Phase 5 Spike。Phase 6 仍负责完整 Registry、用户从已审核 Catalog 中选择、OAuth/
-Credential Vault、复杂审批中心、更广网络策略、Prompt Injection/恶意文件专项测试、Agent Chat/noVNC
-鉴权 UI、运行监控和公网多租户强化。
+计划提前到 Phase 5 Spike。ADR-0008 又把最小 MCP Catalog/Profile 选择和 owner-scoped 声明式 Skill
+提前到 Phase 5。Phase 6 仍负责完整 Registry、任意第三方接入审核、OAuth/Credential Vault、复杂审批
+中心、公共网络与统一 egress、Prompt Injection/恶意文件专项测试、Agent Chat/noVNC 鉴权 UI、运行监控
+和公网多租户强化。
 
 ## 被替代或修订的既有决定
 
@@ -242,13 +248,14 @@ Injection 后果；网络策略必须覆盖全部 Sandbox 进程；需要处理 
 - 7.1：已验证 owner/Session scope、Lease/generation/fence、跨 Turn 复用、Snapshot 重建、默认禁网配置、
   资源/输出参数、取消 DIRTY、统一预算和离线 collect/reconcile；真实 OpenSandbox 下的宿主/Secret 不可见、
   网络/资源限制、TTL 销毁和丢失补偿仍需显式 Smoke；
-- 7.2：Browser/CDP 与文件工具指向同一 Sandbox，导航/redirect/egress/下载边界、文件取回和 endpoint
-  不泄漏；
-- 7.3：MCP Catalog、Schema 漂移拒绝、stateless 会话、interceptor、预算/取消/输出限制和执行记录；
-- 7.4：Skill 版本/哈希、能力依赖、只读加载和权限不扩张。
+- 7.2：MCP Catalog/Profile、owner/Session 隔离、Schema/hash 漂移拒绝、client 生命周期、interceptor、
+  预算/取消/输出限制和执行记录；
+- 7.3：Playwright MCP/CDP 与文件工具指向同一 Sandbox，本地导航/下载写入同一 Workspace、endpoint 不
+  泄漏，并明确记录现有 Search MCP 的版本、运行位置和外部边界；
+- 7.4：平台安装与 owner-scoped 声明式 Skill 的版本/哈希、只读加载、Session 隔离和权限不扩张。
 
 普通自动测试继续完全离线、确定性、零模型/网站/外部 MCP/付费 Sandbox 费用。真实 Provider、
-OpenSandbox、Browser 和 arXiv MCP Smoke 必须显式启用、限制预算并记录准确版本、配置、命令、耗时和
+OpenSandbox、Playwright/Search MCP Smoke 必须显式启用、限制预算并记录准确版本、配置、命令、耗时和
 结果。未通过对应门槛前，不得宣称 OpenSandbox 隔离、网络限制、跨 Turn Workspace、Browser、MCP、
 Skill 或代码执行已经达到生产安全。
 
@@ -261,3 +268,4 @@ Skill 或代码执行已经达到生产安全。
 - [Deep Agents Skills](https://docs.langchain.com/oss/python/deepagents/skills)
 - [LangChain MCP Adapter](https://docs.langchain.com/oss/python/langchain/mcp)
 - [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox)
+- [ADR-0008：复用 Deep Agents 原生 MCP 与 Skills 能力](0008-use-native-mcp-and-skills-capabilities.md)

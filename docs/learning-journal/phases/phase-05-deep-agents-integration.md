@@ -22,6 +22,9 @@ AgentSession/SDK Thread 专属的短 TTL Lease 中向模型开放 Sandbox `execu
 Context 与 RuntimeExecution control。切片 7.1“OpenSandbox/Lease/WorkspaceSnapshot”已于 2026-08-26
 完成实现与离线/临时 PostgreSQL 验证；尚未运行真实 OpenSandbox Smoke，不能宣称远端隔离、资源限制或
 镜像运行已经验证。
+2026-08-27 由 ADR-0008 将剩余能力 Spike 调整为：先建立 MCP Configuration Foundation，再使用
+Playwright MCP 连接同一 OpenSandbox Chromium 并适配一个现有 Search MCP，最后验证 Deep Agents 原生
+Skills。Phase 5 不再自研 Browser Tool 或 MCP Server；公共网络与统一 egress 安全后移到 Phase 6。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -67,8 +70,8 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 - 两轮会话、单活动 Turn、消息顺序、Run/Event/Outbox、取消、恢复和结果对账；
 - Deep Agents Adapter 的最小闭环：Fake Chat Model、Thread、Checkpoint、流式事件和错误转换；
 - Runtime 部署与崩溃恢复门槛：恢复所有权、持久终态、orphan `RUNNING` 识别和真实跨进程恢复；
-- 后续独立 Spike：OpenSandbox/Lease/WorkspaceSnapshot、同 Sandbox Browser/下载、固定 MCP、平台维护的
-  Research Skill；
+- 后续独立 Spike：OpenSandbox/Lease/WorkspaceSnapshot、MCP 配置基础、同 Sandbox Playwright MCP 与
+  现有 Search MCP、Deep Agents 原生 Skills；
 - 候选 Artifact 的 staged、校验、内容哈希和幂等提交；
 - 最小 Agent Chat/API 集成与完全离线的默认测试；
 - 集成 ADR、Spike 证据和是否进入 Phase 6 的结论。
@@ -76,7 +79,9 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 ### 不包含
 
 - 任意目标的通用 Agent 或 Coding Agent；
-- 用户自定义系统 Prompt、Tool、Skill、MCP Server、Sandbox、网络权限或 SDK 配置；
+- 用户自定义系统 Prompt、Tool/MCP 代码、原始 MCP Server 连接、可执行 Skill、Sandbox、网络权限或 SDK
+  配置；允许的用户配置仅限 owner/Session 范围内选择平台安装 Catalog、填写其声明的非敏感安全参数，
+  以及创建只读声明式 Markdown/文本 Skill；
 - 宿主 Shell、宿主 Python、开放网络、动态安装依赖；Sandbox `execute` 仅按 ADR-0007 在 Session 专属
   OpenSandbox 的固定镜像、固定依赖和默认禁网边界内开放；
 - 登录站点、付费墙、CAPTCHA、用户凭据委托或对外写操作；
@@ -149,10 +154,11 @@ ChunkSet 作用域均由稳定 `turn_run_id` 在平台侧反查。
 `approval_required`、`max_model_calls`、`max_tool_calls`、`snapshot_hash`、`created_at`。首版默认
 Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以构造和持久化策略快照。
 
-上述默认值是当前 Fake/切片 1–6 的已实现事实。Slice 7 只能由服务端选择固定 Capability Profile，为
-`sandbox_enabled`、`network_enabled`、Tool/MCP/Skill allowlist 和预算生成不可变 Snapshot；用户请求体
-仍不能直接切换 Sandbox、网络、MCP 或 `execute`。Snapshot 必须引用平台策略/镜像/Catalog 版本，精确
-字段和迁移在相应 7.x 切片通过失败测试确定，不在本次文档对齐中宣称已经落库。
+上述默认值是当前 Fake/切片 1–6 的已实现事实。Slice 7 由服务端从固定 Capability Profile 与平台安装
+Catalog 构造 `sandbox_enabled`、`network_enabled`、Tool/MCP/Skill allowlist 和预算的不可变 Snapshot；
+用户只能选择当前 owner/Session 可见条目及其声明的安全参数，不能直接切换 Sandbox、网络、`execute`
+或提交原始 MCP 连接。Snapshot 必须引用平台策略/镜像/Catalog/Skill 版本和配置哈希，精确字段和迁移在
+相应 7.x 切片通过失败测试确定，不在本次文档对齐中宣称已经落库。
 
 ### 切片 1 领域字段清单
 
@@ -364,7 +370,8 @@ GET  /api/v1/runs/{run_id}/events/stream
 
 - 创建 Session 返回业务 Session；发送消息创建 Turn，返回 `202 Accepted` 和稳定 `run_id`；
 - owner 来自可信身份上下文；不可见 Session/Turn 继续返回 404；
-- 请求体不能提交 owner、SDK Thread、Workspace、MCP Server、Sandbox 或网络策略；
+- 请求体不能提交 owner、SDK Thread、Workspace、原始 MCP Server 连接、Sandbox 或网络策略；后续专用
+  配置 API 只能引用当前 owner 可见的平台注册 Catalog/Skill ID，并校验其声明的安全参数 Schema；
 - 活动 Turn 未完成时的新消息采用明确的 `409 Conflict`，首版不做排队或并行分支；
 - token 增量可走临时 stream，但刷新后的 Message、Run 和 Event 必须从 PostgreSQL 恢复。
 
@@ -405,15 +412,16 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 
 ### MCP、Browser、Sandbox 与 Skills
 
-- Deep Agents 作为完整 Harness 组装 Backend、文件、`execute`、Project Tool、Browser Tool、MCP Tool 和
-  Skill；平台不复制 Agent Loop，但仍负责 owner/Project、Policy、预算、恢复、审计和业务提交；
+- Deep Agents 作为完整 Harness 组装 Backend、文件、`execute`、Project Tool、由 MCP 转换的 Browser/Search
+  Tool 和 Skill；平台不复制 Agent Loop，但仍负责 owner/Project、Policy、预算、恢复、审计和业务提交；
 - OpenSandbox 是 Slice 7 的 Sandbox Provider。OpenSandbox Backend 作为 `CompositeBackend` 默认 Backend，
   使文件工具、Sandbox `execute` 与 Browser 下载操作同一物理 Workspace；`/conversation_history/`、
   `/large_tool_results/` 等 Runtime 内部路径路由 `StateBackend`；
 - 每个 AgentSession/SDK Thread 一个短 TTL Sandbox Lease，跨 Turn 复用且不跨 owner/Session 共享；Lease
   失效或环境污染时递增 generation，并从 WorkspaceSnapshot/授权 Artifact 重建；
-- Sandbox 默认禁网，只允许平台固定 Browser 域名进入 egress allowlist；策略必须覆盖 Chromium、Python、
-  `curl` 等 Sandbox 内全部进程，而不是只校验 Browser Tool URL；
+- Sandbox 默认禁网。Phase 5 Browser Spike 只访问 Sandbox 内合成页面，不把公共网络作为通过条件；固定
+  Browser 域名、URL/DNS/Redirect/SSRF 策略和覆盖 Chromium、Python、`curl` 等全部进程的统一 egress
+  留到 Phase 6；
 - Sandbox 使用非 root、固定镜像和 Python/pandas/numpy/matplotlib/字体等固定依赖，不允许动态安装包；
   限制 CPU、内存、PID、磁盘、文件数、墙钟、命令和 stdout/stderr/Tool 输出；
 - 不挂载宿主源码、用户目录、数据库/Valkey/Docker Socket、Secret、Provider Key、OpenSandbox Key 或 MCP
@@ -426,19 +434,25 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 - Deep Agents 文件权限和文件工具 allowlist 只约束内置文件工具，不能授权或保护自定义 Tool、MCP、
   Sandbox `execute`、owner/Project、预算或副作用；这些边界继续由平台 Snapshot、Tool Adapter、应用服务
   和审计事实执行，不能用命令字符串 allowlist 冒充强隔离；
-- Browser 通过自定义 `browser_*` Tool 操作同一 Sandbox 中的 Chromium/CDP，只访问预先允许的公开 HTTPS
-  目标；平台执行 URL、DNS/IP、Redirect、大小、MIME 和超时策略，CDP/VNC/noVNC endpoint 不暴露给模型
-  或公开 API；
-- 下载先进入隔离 `/workspace` incoming 区域，校验来源、最终 URL、哈希、类型和大小后才能进入
-  WorkspaceSnapshot 或候选 Artifact；noVNC 在 Phase 5 只作为可信本地诊断，用户鉴权代理留到 Phase 6；
-- MCP 通过 `langchain-mcp-adapters` 作为 LangChain Tool 传入 `create_deep_agent`。只连接平台 Catalog 中
-  固定版本的受控 Streamable HTTP/独立容器 Server；用户不能提交 URL、transport、command、env 或认证
-  配置，Phase 5 不在 Worker 宿主以 stdio 启动第三方 MCP；
-- 首个 MCP 固定为只读 `search_arxiv_metadata`，默认 stateless；Tool 名称、输入 Schema、版本/哈希和
-  allowlist 必须 fail-closed 校验，平台 interceptor 负责 Turn scope、权限、取消、预算、超时、输出限制
-  和 ToolExecution 审计；
-- Skill 只能由平台维护、版本化和 allowlist 启用；Skill 是提示与能力组合，不是权限边界；
-- Skill 如需脚本，脚本只能来自固定 Sandbox 镜像或受控只读路径，输出只写 `/workspace`；
+- Browser 不再由平台自研 `browser_*` Tool。固定版本的 Playwright MCP 预装并运行在当前 OpenSandbox，
+  连接同一 Sandbox Chromium/CDP；Worker 通过 OpenSandbox opaque endpoint 使用 MCP client，模型、用户和
+  公开 API 都不能提交或看到 CDP/MCP/VNC/noVNC endpoint；
+- Phase 5 下载只验证本地合成页面产生的文件进入同一 `/workspace`，再复用 WorkspaceSnapshot/候选
+  Artifact 边界；真实来源、最终 URL、MIME、恶意文件和公共下载策略留到 Phase 6；
+- MCP 通过 `langchain-mcp-adapters` 转换为 LangChain Tool 后传入 `create_deep_agent`。平台维护安装、
+  审核、锁定版本的 Catalog；用户可在 owner/Session 范围选择条目并配置 Catalog 声明的非敏感安全参数，
+  但不能提交 URL、transport、command、env、包版本、认证信息、镜像或网络策略；
+- 需要 stdio/本地进程的第三方 MCP 必须预装并运行在 Session OpenSandbox，不在 Worker 宿主启动。远程
+  Streamable HTTP MCP 由 Worker client 外连，其网络、隐私、费用与 Secret 边界必须单独记录；
+- MCP Tool 名称、输入 Schema、实现版本/哈希和 allowlist 必须 fail-closed 校验；平台 interceptor 负责
+  owner/Project/Session/Turn scope、权限、取消、Runtime fence、预算、超时、输出限制和安全审计；
+- Phase 5 不自研 `search_arxiv_metadata` Server，而选择一个现有、固定版本的只读 Search MCP 作为适配
+  样本；具体实现和运行位置须在新增依赖或镜像内容前单独确认；
+- Skill 使用 Deep Agents 原生 `skills` 加载。用户可启用平台安装、固定版本的 Skill，也可创建
+  owner-scoped 的声明式 Markdown/文本 Skill；`/skills/` 路由平台管理的只读 Backend，不进入可由
+  Sandbox `execute` 改写的 `/workspace`，并按 owner/Session 固化版本/内容哈希；
+- Skill 是提示与能力组合，不是权限边界；首版不接受 Skill 可执行脚本、二进制、动态依赖、任意路径或
+  Secret，也不能扩大 Tool、MCP、网络、Sandbox、预算和 Project 权限；
 - 子 Agent 与长期 Memory 默认关闭，除非 Phase 6 通过新 ADR 明确开放。
 
 以上能力每项都是后续独立 Spike。某项失败不应迫使业务 Session/Turn 契约返工，也不自动阻塞其他项。
@@ -481,10 +495,14 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    - **7.1 OpenSandbox/Lease/WorkspaceSnapshot（已完成实现）**：验证 Session 级短 TTL Lease、可执行默认
      Backend、隔离文件与命令、物理 Sandbox 生命周期、Snapshot 取回和逻辑 Workspace 重建；真实
      OpenSandbox Smoke 仍须显式 opt-in；
-   - **7.2 Browser/下载**：验证同一 Sandbox Chromium/CDP、受控导航、统一 egress、下载与来源/文件边界；
-   - **7.3 MCP**：验证固定、平台维护的只读 `search_arxiv_metadata` MCP、Catalog、Schema/hash 和
-     interceptor；
-   - **7.4 Platform Skill**：最后验证平台维护、版本固定的科研 Skill；
+   - **7.2 MCP Configuration Foundation**：验证平台注册 Catalog/Profile、owner/Session 隔离、版本与
+     配置快照、client 生命周期、Tool namespace、Schema/hash、interceptor、预算/取消/输出限制和 Fake
+     MCP；实现前先报告 `langchain-mcp-adapters` 精确版本、传递依赖与锁文件影响；
+   - **7.3 Playwright MCP 与 Search MCP Spike**：固定版本 Playwright MCP 在同一 OpenSandbox 中连接
+     Chromium/CDP，操作本地合成页面并把下载写入 `/workspace`；再适配一个现有、固定版本的只读 Search
+     MCP；不自研 MCP Server，不把公共网络与统一 egress 作为本切片通过条件；
+   - **7.4 Native Skills**：验证平台安装 Skill 与 owner-scoped 声明式 Skill 的只读 Backend、版本/哈希、
+     owner/Session 隔离、Sandbox 不可改写和权限不扩张；
 8. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
 9. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
 
@@ -497,11 +515,15 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
   强制触发一次原生 summarization 后仍能完成第二轮；默认不调用真实模型；
 - **Context**：跨用户/Project 隔离、ChunkSet/Evidence Matrix 版本固定、token 限制和 Citation 校验；
 - **Workspace/Sandbox**：文件传入/取回、Snapshot 重建、Session 跨 Turn 复用、跨 owner/Session 隔离、
-  模型可见 `execute` 只能到当前 OpenSandbox、宿主/Secret 不可见、默认禁网、固定 egress、资源/输出
-  上限、超时、销毁和 orphan 清理；
+  模型可见 `execute` 只能到当前 OpenSandbox、宿主/Secret 不可见、默认禁网、资源/输出上限、超时、
+  销毁和 orphan 清理；统一 egress 属于 Phase 6；
+- **MCP/Skill**：Catalog/Profile 与声明参数 Schema、owner/Session 隔离、client/Server 生命周期、Tool
+  namespace/Schema/hash、取消/预算/输出限制、Playwright MCP 同 Sandbox CDP 与 Workspace、Skill
+  版本/哈希/只读加载和权限不扩张；
 - **故障注入**：重复 Job、Worker 崩溃、Runtime 断连、成功响应丢失、提交前后崩溃和取消竞争；切片 6
   必须启动第二个真实 OS 进程，而不是只用新连接或同进程新 Adapter 模拟重启；
-- **安全**：未授权 Project、伪造 SDK ID、未授权 Tool/Skill/MCP、内网 URL、超限输出和 Secret 泄漏；
+- **安全**：未授权 Project、伪造 SDK ID、跨 owner/Session Catalog 或 Skill、未授权 Tool/Skill/MCP、
+  原始 MCP URL/command/env、超限输出和 Secret 泄漏；公共 URL/SSRF 专项留到 Phase 6；
 - **E2E**：固定 Project + Index + Review Matrix → 两轮 Agent Chat → 可追溯候选 Artifact。
 
 普通自动测试必须完全离线，不访问真实模型、实时网站、外部 MCP 或付费 Sandbox。真实 Provider/Runtime
@@ -783,7 +805,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   `RUNNING` checkpoint，沿同一 Execution/Checkpoint 恢复，不重新追加用户输入或重复已提交调用；
 - Runtime 失败/取消终态可由新进程安全对账，不依赖旧 Adapter 的进程内协作状态；
 - Runtime Event 被筛选，业务 Message/Event 不保存完整思考过程或敏感内容；
-- MCP、Browser、Sandbox 和 Skill 各自有明确的通过、受限或失败结论，不以 SDK 自带能力代替验证；
+- MCP 配置、Playwright/Search MCP、Sandbox 和原生 Skill 各自有明确的通过、受限或失败结论，不以 SDK
+  自带能力或第三方 Server 存在代替平台隔离与恢复验证；
 - WorkspaceSnapshot 与 Artifact 的用途分离，Sandbox 丢失后可恢复允许跨 Turn 的内部工作文件；
 - 任何提交的 Agent Artifact 都有来源、哈希、Project 所有权与幂等保证；
 - 集成 ADR 记录 Deep Agents 版本、部署拓扑、Checkpoint/Store、重试所有权和能力 Spike 证据；
@@ -793,7 +816,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. 固定 Browser 测试域名和首个平台 Research Skill 的精确内容；
+1. 7.2 实现前固定 `langchain-mcp-adapters` 精确版本及锁文件影响；7.3 实现前固定 Playwright MCP、现有
+   Search MCP 的精确版本、运行位置和镜像影响；
 2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
    逐命令审批；
 3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
@@ -814,8 +838,8 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - Session 级并发首版采用单活动 Turn，不提供分支、排队或多人协作；
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
 - 7.1 已用离线 Adapter/真实 PostgreSQL 验证 Lease、fence、默认禁网配置和 WorkspaceSnapshot 重建契约，
-  但未运行真实 OpenSandbox Smoke；不得据此宣称远端隔离、资源限制或宿主/Secret 不可见已实测。Browser/
-  CDP、统一固定 egress、下载与 Artifact 取回仍属于 7.2；
+  但未运行真实 OpenSandbox Smoke；不得据此宣称远端隔离、资源限制或宿主/Secret 不可见已实测。
+  Playwright MCP/CDP 与本地下载属于 7.3；公共浏览、统一 egress、来源/下载安全属于 Phase 6；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
 - Worker 生产默认仍使用 Fake Runtime，但切片 7.0 已增加显式 `deep_agents` 模式并装配真实 Provider、
   持久 Checkpointer、Project Context 与 RuntimeExecution control；本切片只证明无 Tool、单 Turn 的真实
@@ -843,6 +867,7 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - `../decisions/0005-interactive-research-agent-session-model.md`
 - `../decisions/0006-run-deep-agents-inside-arq-worker.md`
 - `../decisions/0007-use-opensandbox-executable-workspace.md`
+- `../decisions/0008-use-native-mcp-and-skills-capabilities.md`
 - [`Phase 5 Runtime 恢复缺口台账`](../reports/phase-05-runtime-recovery-gap-log.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Customization](https://docs.langchain.com/oss/python/deepagents/customization)
@@ -852,5 +877,6 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - [Deep Agents Sandboxes](https://docs.langchain.com/oss/python/deepagents/sandboxes)
 - [Deep Agents Human-in-the-loop](https://docs.langchain.com/oss/python/deepagents/human-in-the-loop)
 - [LangChain MCP Adapter](https://docs.langchain.com/oss/python/langchain/mcp)
+- [Playwright MCP](https://github.com/microsoft/playwright-mcp)
 
 外部资料只用于确定能力边界，不替代固定版本实验、威胁分析和本项目测试证据。

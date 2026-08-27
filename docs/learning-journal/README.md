@@ -54,7 +54,8 @@ Runtime、两轮离线业务闭环、取消恢复对账、受限 Deep Agents Ada
 生产 Worker 默认仍为 Fake，显式真实模式才装配固定 Provider、持久 Checkpointer、Project Context 和
 RuntimeExecution control。ADR-0007 已选择
 [OpenSandbox 可执行研究 Workspace](decisions/0007-use-opensandbox-executable-workspace.md)，后续按
-OpenSandbox/Lease/WorkspaceSnapshot → 同 Sandbox Browser/下载 → 固定平台 MCP → 平台 Skill → Agent
-Chat UI 的顺序推进。其中 7.1 已完成实现与离线/临时 PostgreSQL 验证，详见
+OpenSandbox/Lease/WorkspaceSnapshot 推进；ADR-0008 又将剩余顺序固定为
+[MCP Configuration Foundation → 同 Sandbox Playwright/现有 Search MCP → Deep Agents Native Skills](decisions/0008-use-native-mcp-and-skills-capabilities.md)
+→ Agent Chat UI。其中 7.1 已完成实现与离线/临时 PostgreSQL 验证，详见
 [Agent Sandbox Workspace](modules/agent-sandbox-workspace.md)；真实 OpenSandbox 隔离/资源 Smoke 与
 7.2–7.4 能力仍待验证。

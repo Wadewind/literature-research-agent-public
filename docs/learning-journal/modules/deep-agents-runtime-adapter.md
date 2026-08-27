@@ -67,7 +67,8 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   schema 只能看到 query 或空参数，不能伪造 owner/Project/Snapshot/ReviewOutput/ChunkSet ID；
 - Project Context 的 temporary/permanent/cancelled 安全错误会映射为既有 `RuntimeErrorKind`，最终回答
   Evidence 标记解析为小型 `RuntimeTurnResult.evidence_ids`；Application 仍负责 Citation 授权与事务提交；
-- 未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；
+- 本切片未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，ADR-0008
+  决定剩余能力复用 LangChain MCP Adapter、Playwright MCP 与 Deep Agents Native Skills；
 - Runtime Event 只产生 `bound/started/assistant_delta/completed`，不输出模型思考、Tool 原始结果或 Graph
   State。
 
@@ -163,7 +164,7 @@ checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确�
 - 没有真实 Provider/OpenSandbox Smoke、Usage 账单闭环、流式 token、MCP、Browser、Skill 或正式
   Artifact。7.1 已用固定 Capability Profile 和 checkpoint State 对 Project/文件/execute Tool 强制统一
   `max_tool_calls`，主 Agent Loop 已强制 `max_model_calls`，但 summarization 内部调用与 Provider 在途窗口
-  不在模型预算内；
+  不在模型预算内；7.2–7.4 将按 ADR-0008 分别验证 MCP 配置、Playwright/Search MCP 与 Native Skills；
 - Worker 已使用 checkpoint pool，并为每次 Runtime operation 创建独立 Saver/graph；完成后的 collect/
   reconcile 不依赖活 Sandbox。实际数据库容量与故障切换未做生产评测；
 - Project Tool 成功后的重放、并发和 temporary retry 已有持久 effect 证据；Tool 外部调用完成后、
