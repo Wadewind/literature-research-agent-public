@@ -4,6 +4,7 @@ import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import DocumentPage from "./pages/DocumentPage";
 import AgentPage from "./pages/AgentPage";
 import ConversationPage from "./pages/ConversationPage";
+import ChatPage from "./pages/ChatPage";
 import LibraryPage from "./pages/LibraryPage";
 import PersonalLibraryPage from "./pages/PersonalLibraryPage";
 import ProjectsPage from "./pages/ProjectsPage";
@@ -31,6 +32,11 @@ export default function App() {
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/library" element={<PersonalLibraryPage />} />
           <Route path="/projects/:projectId" element={<LibraryPage />} />
+          <Route path="/projects/:projectId/chat" element={<ChatPage />} />
+          <Route
+            path="/projects/:projectId/chat/:conversationId"
+            element={<ConversationPage />}
+          />
           <Route path="/projects/:projectId/agent" element={<AgentPage />} />
           <Route path="/projects/:projectId/agent/:sessionId" element={<AgentPage />} />
           <Route path="/projects/:projectId/reviews" element={<ReviewsPage />} />

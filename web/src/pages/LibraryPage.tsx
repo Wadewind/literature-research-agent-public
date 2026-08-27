@@ -2,25 +2,20 @@
 
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type {
-  Conversation,
   IndexStatus,
   PaperListItem,
   Project,
   ProjectPaperResult,
   UploadResult,
 } from "../api/types";
-import {
-  createScopeSelection,
-  scopeRequest,
-  toggleScopePaper,
-  type ScopeSelection,
-} from "../conversations/scopeSelection";
+import { createScopeSelection, toggleScopePaper, type ScopeSelection } from "../conversations/scopeSelection";
 import { ensureUploadIntent, type UploadIntent } from "../library/uploadIntent";
-import ProjectNav from "../components/ProjectNav";
+import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
+import { chatHomePath, chatPreselectionPath } from "../workspace/projectWorkspace";
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -30,7 +25,6 @@ function formatSize(bytes: number): string {
 export default function LibraryPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [intent, setIntent] = useState<UploadIntent | null>(null);
@@ -53,11 +47,6 @@ export default function LibraryPage() {
   const libraryQuery = useQuery({
     queryKey: ["library-papers"],
     queryFn: () => apiFetch<PaperListItem[]>("/api/v1/library/papers"),
-  });
-  const conversationsQuery = useQuery({
-    queryKey: ["conversations", projectId],
-    queryFn: () =>
-      apiFetch<Conversation[]>(`/api/v1/projects/${projectId}/conversations`),
   });
 
   useEffect(() => {
@@ -146,21 +135,6 @@ export default function LibraryPage() {
       }),
     onSuccess: refreshProject,
   });
-  const createConversationMutation = useMutation({
-    mutationFn: (scope: ScopeSelection) => {
-      const request = scopeRequest(scope);
-      return apiFetch<Conversation>(`/api/v1/projects/${projectId}/conversations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
-    },
-    onSuccess: (conversation) => {
-      void queryClient.invalidateQueries({ queryKey: ["conversations", projectId] });
-      navigate(`/projects/${projectId}/conversations/${conversation.conversation_id}`);
-    },
-  });
-
   const onFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const selected = event.target.files?.[0] ?? null;
     setFile(selected);
@@ -180,7 +154,6 @@ export default function LibraryPage() {
   const available =
     libraryQuery.data?.filter((paper) => !paper.project_ids.includes(projectId)) ?? [];
   const actionError =
-    createConversationMutation.error ??
     projectArchiveMutation.error ??
     updateMutation.error ??
     paperArchiveMutation.error;
@@ -196,29 +169,30 @@ export default function LibraryPage() {
 
   return (
     <div className="page-flow">
-      <header className="project-heading">
-        <div>
-          <p className="breadcrumb"><Link to="/">研究项目</Link><span>/</span>文献库</p>
-          <p className="eyebrow">PROJECT LIBRARY</p>
-          <div className="heading-title-row">
-            <h1>{project?.name ?? "正在读取…"}</h1>
-            {archived && <span className="badge badge-warn">已归档</span>}
-          </div>
-          <p>{project?.description || "集中管理本课题需要的文献与解析结果。"}</p>
-          {archived && (
-            <p className="readonly-note">该 Project 当前只读：历史对话、引用与文献仍可查看，不能上传、移出或新建问答。</p>
-          )}
-        </div>
-        <div className="project-heading-actions">
+      <ProjectWorkspaceHeader
+        projectId={projectId}
+        project={project}
+        active="library"
+        eyebrow="文献库"
+        description={project?.description || "集中管理本课题三种研究模式共享的文献、解析结果与固定索引。"}
+        actions={<div className="project-heading-actions">
           <div className="metric-block"><strong>{papersQuery.data?.length ?? "—"}</strong><span>已收录</span></div>
           <button type="button" className="button-quiet" disabled={projectArchiveMutation.isPending} onClick={() => projectArchiveMutation.mutate(archived)}>
             {archived ? "恢复 Project" : "归档 Project"}
           </button>
           {!archived && <button type="button" className="button-plain" onClick={() => setEditing((value) => !value)}>修改信息</button>}
-        </div>
-      </header>
+        </div>}
+      />
 
-      <ProjectNav projectId={projectId} active={location.hash === "#project-chat" ? "chat" : "library"} />
+      {archived && (
+        <p className="readonly-note">该 Project 当前只读：历史问答、综述、研究会话与引用仍可查看，不能修改文献或创建新的研究执行。</p>
+      )}
+
+      <section className="project-mode-entry-grid" aria-label="Project 研究模式">
+        <Link to={chatHomePath(projectId)}><span>文献问答</span><strong>针对固定范围提出可引用的问题</strong><small>Claim → Citation → Evidence</small></Link>
+        <Link to={`/projects/${projectId}/reviews`}><span>综述</span><strong>按固定 Workflow 聚合证据与章节</strong><small>Evidence Matrix → Artifact</small></Link>
+        <Link to={`/projects/${projectId}/agent`}><span>研究助手</span><strong>持续分析项目材料与研究上下文</strong><small>Session → Turn → Candidate</small></Link>
+      </section>
 
       {editing && !archived && (
         <form className="project-edit-form panel" onSubmit={onRename}>
@@ -228,13 +202,6 @@ export default function LibraryPage() {
         </form>
       )}
 
-      <section className="ask-strip">
-        <div><p className="eyebrow">CITED RAG</p><h2>从项目文献中寻找答案</h2><p>{selection.paperIds.length > 0 ? `已选择 ${selection.paperIds.length} 篇文献作为固定范围。` : "默认检索提问时项目内全部可用版本。"}</p></div>
-        <div className="ask-actions">
-          <button type="button" disabled={archived || createConversationMutation.isPending} onClick={() => createConversationMutation.mutate(createScopeSelection())}>询问整个项目 <span aria-hidden="true">→</span></button>
-          <button type="button" className="button-outline" disabled={archived || selection.paperIds.length === 0 || createConversationMutation.isPending} onClick={() => createConversationMutation.mutate(selection)}>询问选中（{selection.paperIds.length}）</button>
-        </div>
-      </section>
       {actionError && <p className="notice error-text">{errorMessage(actionError)}</p>}
 
       <section className="ingest-grid" aria-disabled={archived}>
@@ -257,6 +224,20 @@ export default function LibraryPage() {
 
       <section className="section-block">
         <div className="section-title-row"><div><p className="eyebrow">EVIDENCE SOURCES</p><h2>已收录文献</h2></div><span className="section-count">{String(papersQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
+        <div className="library-chat-handoff">
+          <p>{selection.paperIds.length > 0 ? `已选择 ${selection.paperIds.length} 篇文献，可带入文献问答继续确认范围。` : "勾选论文可带入单篇或多篇文献问答；不选择则使用整个 Project。"}</p>
+          <div>
+            <Link className="button-link" to={chatHomePath(projectId)}>询问整个 Project</Link>
+            <Link
+              className={`button-link button-outline ${selection.paperIds.length === 0 ? "disabled" : ""}`}
+              aria-disabled={selection.paperIds.length === 0}
+              tabIndex={selection.paperIds.length === 0 ? -1 : undefined}
+              to={selection.paperIds.length > 0 ? chatPreselectionPath(projectId, selection.paperIds) : chatHomePath(projectId)}
+            >
+              询问选中（{selection.paperIds.length}）
+            </Link>
+          </div>
+        </div>
         {papersQuery.isError && <p className="notice error-text">{errorMessage(papersQuery.error)}</p>}
         {papersQuery.data?.length === 0 && <div className="empty-state compact"><h3>这个项目还没有文献</h3><p>上传新 PDF，或从右侧收录个人文献库中的已有文献。</p></div>}
         {papersQuery.data && papersQuery.data.length > 0 && (
@@ -269,7 +250,7 @@ export default function LibraryPage() {
               archivedProject={archived}
               selected={selection.paperIds.includes(paper.paper_id)}
               onToggle={() => setSelection((current) => toggleScopePaper(current, paper.paper_id))}
-              onAsk={() => createConversationMutation.mutate(createScopeSelection([paper.paper_id]))}
+              onAsk={() => navigate(chatPreselectionPath(projectId, [paper.paper_id]))}
               removing={removeMutation.isPending && removeMutation.variables === paper.paper_id}
               onRemove={() => removeMutation.mutate(paper.paper_id)}
               onArchive={() => paperArchiveMutation.mutate({ paperId: paper.paper_id, restore: Boolean(paper.archived_at) })}
@@ -279,11 +260,6 @@ export default function LibraryPage() {
         {removeMutation.isError && <p className="error-text">{errorMessage(removeMutation.error)}</p>}
       </section>
 
-      <section className="section-block" id="project-chat">
-        <div className="section-title-row"><div><p className="eyebrow">HISTORY</p><h2>项目对话</h2></div><span className="section-count">{String(conversationsQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
-        {conversationsQuery.data?.length === 0 && <p className="muted">还没有对话。可从上方选择整个项目、单篇或多篇文献开始。</p>}
-        <div className="conversation-links">{conversationsQuery.data?.map((conversation) => <Link key={conversation.conversation_id} to={`/projects/${projectId}/conversations/${conversation.conversation_id}`}><strong>{conversation.title || "未命名对话"}</strong><span>{conversation.scope_mode === "project" ? "整个项目" : `${conversation.scope_papers.length || "所选"} 篇文献`} · {new Date(conversation.created_at).toLocaleDateString()}</span></Link>)}</div>
-      </section>
     </div>
   );
 }

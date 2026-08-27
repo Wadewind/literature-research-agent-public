@@ -29,6 +29,7 @@ import { agentWorkspaceKey } from "../agent/interactionIdentity";
 import { eligibleEvidenceMatrices } from "../agent/matrixEligibility";
 import {
   agentEventLabel,
+  canInteractWithAgentSession,
   canSendAgentMessage,
   isSkillProfileLocked,
   isSessionInProject,
@@ -43,7 +44,7 @@ import AgentCapabilityPanel from "../components/AgentCapabilityPanel";
 import AgentEvidenceMargin from "../components/AgentEvidenceMargin";
 import AgentResizeSeparator from "../components/AgentResizeSeparator";
 import AgentSessionRail from "../components/AgentSessionRail";
-import ProjectNav from "../components/ProjectNav";
+import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
 import { isCancellable, isTerminal, statusLabel } from "../runs/runStatus";
 import { useRunEvents } from "../runs/useRunEvents";
 
@@ -103,11 +104,16 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const sessionMatchesRoute = Boolean(
     sessionQuery.data && isSessionInProject(sessionQuery.data, projectId),
   );
+  const canInteract = canInteractWithAgentSession(
+    projectQuery.data,
+    sessionQuery.data,
+    projectId,
+  );
   const messagesQuery = useQuery({
     queryKey: ["agent-messages", sessionId],
     queryFn: () =>
       apiFetch<AgentMessage[]>(`/api/v1/agent-sessions/${sessionId}/messages`),
-    enabled: Boolean(sessionId && sessionMatchesRoute),
+    enabled: Boolean(sessionId && canInteract),
   });
   const reviewsQuery = useQuery({
     queryKey: ["reviews", projectId],
@@ -125,28 +131,28 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const mcpCatalogQuery = useQuery({
     queryKey: ["agent-mcp-catalog"],
     queryFn: () => apiFetch<McpCatalogEntry[]>("/api/v1/agent-mcp-catalog"),
-    enabled: Boolean(sessionId && sessionMatchesRoute),
+    enabled: Boolean(sessionId && canInteract),
   });
   const mcpProfileQuery = useQuery({
     queryKey: ["agent-mcp-profile", sessionId],
     queryFn: () => apiFetch<McpProfile>(`/api/v1/agent-sessions/${sessionId}/mcp-profile`),
-    enabled: Boolean(sessionId && sessionMatchesRoute),
+    enabled: Boolean(sessionId && canInteract),
   });
   const skillCatalogQuery = useQuery({
     queryKey: ["agent-skills"],
     queryFn: () => apiFetch<AgentSkill[]>("/api/v1/agent-skills"),
-    enabled: Boolean(sessionId && sessionMatchesRoute),
+    enabled: Boolean(sessionId && canInteract),
   });
   const skillProfileQuery = useQuery({
     queryKey: ["agent-skill-profile", sessionId],
     queryFn: () => apiFetch<SkillProfile>(`/api/v1/agent-sessions/${sessionId}/skill-profile`),
-    enabled: Boolean(sessionId && sessionMatchesRoute),
+    enabled: Boolean(sessionId && canInteract),
   });
 
   const messages = messagesQuery.data ?? [];
   const latestMessage = messages.at(-1);
   const candidateTurnRunId =
-    sessionMatchesRoute
+    canInteract
       ? submittedRunId ?? sessionQuery.data?.active_turn_run_id ?? latestMessage?.turn_run_id
       : undefined;
   const runQuery = useQuery({
@@ -250,8 +256,11 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     selectedMatrixQuery.data?.output_id ??
     (selectedReviewRunId ? "" : turnQuery.data?.review_output_id ?? "");
   const postMessageMutation = useMutation({
-    mutationFn: (intent: AgentMessageIntent) =>
-      apiFetch<PostMessageResult>(`/api/v1/agent-sessions/${sessionId}/messages`, {
+    mutationFn: (intent: AgentMessageIntent) => {
+      if (!canInteract) {
+        return Promise.reject(new Error("资源闭包尚未确认，暂时无法开始研究"));
+      }
+      return apiFetch<PostMessageResult>(`/api/v1/agent-sessions/${sessionId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -261,7 +270,8 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
           content: intent.content,
           review_output_id: intent.reviewOutputId,
         }),
-      }),
+      });
+    },
     onSuccess: (result) => {
       setSubmittedRunId(result.run_id);
       setContent("");
@@ -283,6 +293,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
 
   const submitMessage = (event: FormEvent) => {
     event.preventDefault();
+    if (!canInteract) return;
     const normalized = content.trim();
     if (
       !canSendAgentMessage(
@@ -385,17 +396,15 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   } as CSSProperties;
 
   return (
-    <div className="page-flow agent-page">
-      <header className="project-heading agent-heading">
-        <div>
-          <p className="breadcrumb"><Link to="/">研究项目</Link><span>/</span>研究助手</p>
-          <p className="eyebrow">PROJECT-SCOPED RESEARCH AGENT</p>
-          <h1>{project?.name ?? "正在读取…"}</h1>
-          <p>在同一研究会话中持续分析项目论文，并把每轮执行、证据与候选成果保留为平台事实。</p>
-        </div>
-        <div className="metric-block"><strong>{sessionsQuery.data?.length ?? "—"}</strong><span>Agent Sessions</span></div>
-      </header>
-      <ProjectNav projectId={projectId} active="agent" />
+    <div className="viewport-workspace-page agent-page">
+      <ProjectWorkspaceHeader
+        projectId={projectId}
+        project={project}
+        active="agent"
+        eyebrow="研究助手"
+        description="持续分析项目论文，并把每轮执行、证据与候选成果保留为平台事实。"
+        actions={<span className="workspace-context-chip">{sessionsQuery.data?.length ?? "—"} 个会话</span>}
+      />
 
       <div className="agent-workspace" ref={workspaceRef} style={workspaceStyle}>
         <AgentSessionRail
@@ -503,7 +512,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
               <form className="agent-composer" onSubmit={submitMessage}>
                 <div className="agent-composer-context">
                   <label htmlFor="agent-matrix">本轮 Evidence Matrix</label>
-                  <select id="agent-matrix" value={selectedReviewRunId} onChange={(event) => { setSelectedReviewRunId(event.target.value); setMessageIntent(null); }} disabled={Boolean(activeTurnRunId)}>
+                  <select id="agent-matrix" value={selectedReviewRunId} onChange={(event) => { setSelectedReviewRunId(event.target.value); setMessageIntent(null); }} disabled={!canInteract || Boolean(activeTurnRunId)}>
                     <option value="">{turnQuery.data?.review_output_id ? "沿用上一轮 Evidence Matrix" : "请选择可用 Evidence Matrix"}</option>
                     {availableMatrices.map((review) => (
                       <option key={review.run_id} value={review.run_id}>
@@ -516,10 +525,14 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
                 {reviewsQuery.isError && <small className="error-text">{errorMessage(reviewsQuery.error)}</small>}
                 {selectedMatrixQuery.isError && <small className="error-text">{errorMessage(selectedMatrixQuery.error)}</small>}
                 <label className="agent-message-label" htmlFor="agent-message">研究消息</label>
-                <textarea id="agent-message" rows={3} maxLength={16_000} value={content} onChange={(event) => { setContent(event.target.value); if (messageIntent && event.target.value.trim() !== messageIntent.content) setMessageIntent(null); }} disabled={Boolean(activeTurnRunId)} placeholder="例如：基于这些证据，比较各研究的方法差异并指出尚未解决的研究缺口。" />
+                <textarea id="agent-message" rows={3} maxLength={16_000} value={content} onChange={(event) => { setContent(event.target.value); if (messageIntent && event.target.value.trim() !== messageIntent.content) setMessageIntent(null); }} disabled={!canInteract || Boolean(activeTurnRunId)} placeholder="例如：基于这些证据，比较各研究的方法差异并指出尚未解决的研究缺口。" />
                 <div className="agent-composer-actions">
-                  <small>{skillLocked ? "研究方法已锁定" : "发送首条消息后将锁定研究方法"} · 每条消息创建独立 Turn</small>
-                  <button type="submit" disabled={!canSendAgentMessage(content, reviewOutputId, activeTurnRunId, postMessageMutation.isPending || mcpDirty || skillDirty)}>{postMessageMutation.isPending ? "正在提交…" : "开始本轮研究"}</button>
+                  <small>
+                    {!canInteract
+                      ? "正在确认 Project 与研究会话范围…"
+                      : `${skillLocked ? "研究方法已锁定" : "发送首条消息后将锁定研究方法"} · 每条消息创建独立 Turn`}
+                  </small>
+                  <button type="submit" disabled={!canSendAgentMessage(content, reviewOutputId, activeTurnRunId, !canInteract || postMessageMutation.isPending || mcpDirty || skillDirty)}>{postMessageMutation.isPending ? "正在提交…" : "开始本轮研究"}</button>
                 </div>
               </form>
             </>

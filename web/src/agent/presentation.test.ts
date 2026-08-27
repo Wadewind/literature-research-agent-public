@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentEventLabel,
   canSendAgentMessage,
+  canInteractWithAgentSession,
   isSkillProfileLocked,
   isSkillSelectionSelected,
   isSessionInProject,
@@ -40,5 +41,17 @@ describe("Agent UI 投影", () => {
     expect(
       isSkillSelectionSelected(selection, { ...selection, source: "owner" }),
     ).toBe(false);
+  });
+
+  it("Project 与 Session 闭包确认前禁止交互", () => {
+    const project = { project_id: "project-1" };
+    const session = { project_id: "project-1" };
+
+    expect(canInteractWithAgentSession(undefined, session, "project-1")).toBe(false);
+    expect(canInteractWithAgentSession(project, undefined, "project-1")).toBe(false);
+    expect(
+      canInteractWithAgentSession(project, { project_id: "project-2" }, "project-1"),
+    ).toBe(false);
+    expect(canInteractWithAgentSession(project, session, "project-1")).toBe(true);
   });
 });

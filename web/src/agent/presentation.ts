@@ -40,6 +40,14 @@ export function isSessionInProject(
   return session.project_id === projectId;
 }
 
+export function canInteractWithAgentSession(
+  project: { project_id: string } | undefined,
+  session: { project_id: string } | undefined,
+  projectId: string,
+): boolean {
+  return project?.project_id === projectId && session?.project_id === projectId;
+}
+
 interface SkillIdentity {
   source: string;
   skill_id: string;

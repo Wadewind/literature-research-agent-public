@@ -13,12 +13,18 @@ import type {
   PostMessageResult,
   Project,
 } from "../api/types";
+import ChatWorkspaceFrame from "../components/ChatWorkspaceFrame";
+import ConversationRail, { conversationScopeLabel } from "../components/ConversationRail";
+import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
 import {
   ensureMessageIntent,
   type MessageIntent,
 } from "../conversations/messageIntent";
 import { useRunEvents } from "../runs/useRunEvents";
-import ProjectNav from "../components/ProjectNav";
+import {
+  canInteractWithConversation,
+  isConversationInProject,
+} from "../workspace/projectWorkspace";
 
 const PROGRESS_LABELS: Record<string, string> = {
   run_created: "回答任务已创建",
@@ -35,11 +41,6 @@ const PROGRESS_LABELS: Record<string, string> = {
   run_cancelled: "回答任务已取消",
 };
 
-function scopeLabel(conversation: Conversation): string {
-  if (conversation.scope_mode === "project") return "整个项目";
-  return `${conversation.scope_papers.length || "所选"} 篇文献`;
-}
-
 function pageLabel(citation: CitationSummary): string {
   if (citation.page_start === null) return "页码未知";
   if (citation.page_end && citation.page_end !== citation.page_start) {
@@ -48,7 +49,7 @@ function pageLabel(citation: CitationSummary): string {
   return `第 ${citation.page_start} 页`;
 }
 
-export default function ConversationPage() {
+function ConversationWorkspace() {
   const { projectId = "", conversationId = "" } = useParams();
   const queryClient = useQueryClient();
   const [content, setContent] = useState("");
@@ -70,14 +71,25 @@ export default function ConversationPage() {
     queryKey: ["conversation", conversationId],
     queryFn: () => apiFetch<Conversation>(`/api/v1/conversations/${conversationId}`),
   });
+  const conversationMatchesRoute = Boolean(
+    conversationQuery.data && isConversationInProject(conversationQuery.data, projectId),
+  );
+  const canInteract = canInteractWithConversation(
+    projectQuery.data,
+    conversationQuery.data,
+    projectId,
+  );
   const messagesQuery = useQuery({
     queryKey: ["conversation-messages", conversationId],
     queryFn: () =>
       apiFetch<ConversationMessage[]>(
         `/api/v1/conversations/${conversationId}/messages`,
       ),
+    enabled: canInteract,
   });
-  const activeRunId = submittedRunId ?? conversationQuery.data?.active_run_id ?? undefined;
+  const activeRunId = canInteract
+    ? submittedRunId ?? conversationQuery.data?.active_run_id ?? undefined
+    : undefined;
   const stream = useRunEvents(activeRunId);
 
   const evidenceQuery = useQuery({
@@ -86,7 +98,7 @@ export default function ConversationPage() {
       apiFetch<EvidenceDetail>(
         `/api/v1/projects/${projectId}/evidence/${selectedEvidenceId}`,
       ),
-    enabled: selectedEvidenceId !== null,
+    enabled: selectedEvidenceId !== null && canInteract,
   });
 
   useEffect(() => {
@@ -105,15 +117,19 @@ export default function ConversationPage() {
   }, [evidenceQuery.data]);
 
   const postMutation = useMutation({
-    mutationFn: (input: MessageIntent) =>
-      apiFetch<PostMessageResult>(`/api/v1/conversations/${conversationId}/messages`, {
+    mutationFn: (input: MessageIntent) => {
+      if (!canInteract) {
+        return Promise.reject(new Error("资源闭包尚未确认，暂时无法发送问题"));
+      }
+      return apiFetch<PostMessageResult>(`/api/v1/conversations/${conversationId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Idempotency-Key": input.key,
         },
         body: JSON.stringify({ content: input.content }),
-      }),
+      });
+    },
     onSuccess: (result) => {
       setSubmittedRunId(result.run_id);
       setContent("");
@@ -125,6 +141,7 @@ export default function ConversationPage() {
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (!canInteract) return;
     const question = content.trim();
     if (!question) return;
     const nextIntent = ensureMessageIntent(intent, question, () => crypto.randomUUID());
@@ -132,13 +149,19 @@ export default function ConversationPage() {
     postMutation.mutate(nextIntent);
   };
 
-  if (conversationQuery.isError || projectQuery.isError) {
+  if (
+    conversationQuery.isError ||
+    projectQuery.isError ||
+    (conversationQuery.data && !conversationMatchesRoute)
+  ) {
     return (
       <section className="panel">
         <p className="error-text">
-          {errorMessage(conversationQuery.error ?? projectQuery.error)}
+          {conversationQuery.data && !conversationMatchesRoute
+            ? "资源不存在或无权访问"
+            : errorMessage(conversationQuery.error ?? projectQuery.error)}
         </p>
-        <Link to={`/projects/${projectId}`}>返回项目</Link>
+        <Link to={`/projects/${projectId}/chat`}>返回文献问答</Link>
       </section>
     );
   }
@@ -153,33 +176,28 @@ export default function ConversationPage() {
     : null;
 
   return (
-    <div className="conversation-page">
-      <aside className="conversation-sidebar">
-        <p className="eyebrow">CONVERSATIONS</p>
-        <h2>对话记录</h2>
-        <ProjectNav projectId={projectId} active="chat" />
-        {conversationsQuery.isPending && <p className="muted">正在读取对话…</p>}
-        {conversationsQuery.isError && (
-          <p className="error-text">{errorMessage(conversationsQuery.error)}</p>
-        )}
-        <nav className="conversation-list" aria-label="项目内对话">
-          {conversationsQuery.data?.map((item) => (
-            <Link
-              key={item.conversation_id}
-              className={item.conversation_id === conversationId ? "active" : ""}
-              to={`/projects/${projectId}/conversations/${item.conversation_id}`}
-            >
-              <strong>{item.title || "未命名对话"}</strong>
-              <span>{scopeLabel(item)}</span>
-            </Link>
-          ))}
-        </nav>
-      </aside>
-
-      <main className="conversation-main">
+    <div className="viewport-workspace-page chat-page">
+      <ProjectWorkspaceHeader
+        projectId={projectId}
+        project={project}
+        active="chat"
+        eyebrow="文献问答"
+        description="每个问题独立检索固定范围，并沿引用回到 Evidence 与原文。"
+        actions={<span className="workspace-context-chip">{conversation ? conversationScopeLabel(conversation) : "读取范围…"}</span>}
+      />
+      <ChatWorkspaceFrame
+        rail={
+          <ConversationRail
+            projectId={projectId}
+            conversations={conversationsQuery.data}
+            activeConversationId={conversationId}
+            error={conversationsQuery.isError ? errorMessage(conversationsQuery.error) : null}
+          />
+        }
+        conversation={<main className="conversation-main">
         <header className="chat-heading">
           <div>
-            <p className="eyebrow">CITED RAG / {conversation ? scopeLabel(conversation) : "读取中"}</p>
+            <p className="eyebrow">CITED RAG / {conversation ? conversationScopeLabel(conversation) : "读取中"}</p>
             <h1>{conversation?.title || "新对话"}</h1>
             <p>{project?.name} · 回答中的每个段落都必须绑定已验证 Evidence。</p>
           </div>
@@ -255,13 +273,25 @@ export default function ConversationPage() {
             placeholder="提出一个需要文献证据回答的问题…"
             rows={3}
             maxLength={4000}
-            disabled={busy || Boolean(project?.archived_at)}
+            disabled={!canInteract || busy || Boolean(project?.archived_at)}
           />
           <div>
-            <small>{busy ? "当前对话一次只处理一个问题" : "Enter 换行；提交后可实时跟随检索与引用校验"}</small>
+            <small>
+              {!canInteract
+                ? "正在确认 Project 与对话范围…"
+                : busy
+                  ? "当前对话一次只处理一个问题"
+                  : "Enter 换行；提交后可实时跟随检索与引用校验"}
+            </small>
             <button
               type="submit"
-              disabled={busy || postMutation.isPending || !content.trim() || Boolean(project?.archived_at)}
+              disabled={
+                !canInteract ||
+                busy ||
+                postMutation.isPending ||
+                !content.trim() ||
+                Boolean(project?.archived_at)
+              }
             >
               {postMutation.isPending ? "正在提交…" : "发送问题"}<span aria-hidden="true">→</span>
             </button>
@@ -270,9 +300,8 @@ export default function ConversationPage() {
             <p className="error-text">{errorMessage(postMutation.error)}</p>
           )}
         </form>
-      </main>
-
-      <aside className={`evidence-drawer ${selectedEvidenceId ? "open" : ""}`} aria-live="polite">
+      </main>}
+        evidence={<aside className={`evidence-drawer ${selectedEvidenceId ? "open" : ""}`} aria-live="polite">
         <header>
           <div><p className="eyebrow">EVIDENCE TRACE</p><h2>来源证据</h2></div>
           {selectedEvidenceId && (
@@ -308,7 +337,13 @@ export default function ConversationPage() {
             )}
           </>
         )}
-      </aside>
+      </aside>}
+      />
     </div>
   );
+}
+
+export default function ConversationPage() {
+  const { projectId = "", conversationId = "" } = useParams();
+  return <ConversationWorkspace key={`${projectId}:${conversationId}`} />;
 }

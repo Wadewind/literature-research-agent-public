@@ -45,6 +45,10 @@ Backend，Deep Agents 原生 `SkillsMiddleware` 在同一 SDK Thread 复用 meta
 两轮 Turn、通用 Run 恢复/取消、筛选后 Event、Evidence Margin 与 staged candidate 展示。默认
 Playwright 旅程使用 Fake Runtime 且阻断非 localhost 请求；本切片未接入官方 Deep Agents UI、
 Browser/noVNC、Workspace 文件管理、fork/rewind 或正式 Artifact 提交。
+切片 8.1“Project 工作区信息架构统一”已于 2026-08-27 完成实现与离线验收：将 RAG 创建/历史迁入
+canonical Project Chat，统一 Library/Chat/Review/Agent 的紧凑 Project chrome，并让 RAG Conversation
+复用可调整的 viewport 三栏。
+契约见 [`project-workspace-ui-contract.md`](../../spec/project-workspace-ui-contract.md)。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -536,6 +540,9 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    桌面三栏、Evidence Margin、首 Turn 前能力配置和非范围以
    [`agent-chat-ui-interface-contract.md`](../../spec/agent-chat-ui-interface-contract.md) 为准；不直接接入
    官方 Deep Agents UI，移动 Drawer 不作为本切片验收条件；
+8.1. **Project 工作区信息架构统一（已完成）**：增加 canonical Project Chat 首页/详情，将 RAG 创建和历史
+   从 Library 迁入 Chat，统一四个 Project 区域的紧凑 Header/Mode Nav，并让 RAG Conversation 复用
+   viewport 三栏与版本化 resize 规则；不修改后端 Conversation/Retrieval 契约；
 9. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
 
 ## 测试方式
@@ -602,6 +609,23 @@ Smoke 必须显式启用、限制预算，并记录版本、命令、耗时和�
   Citation；取消按钮/终态收束由通用 Run 单元测试覆盖，持久 Claim/Citation/Evidence 投影由后端
   cited-runtime 测试覆盖。有头检查发现的唯一 Console error 是既有 `/favicon.ico` 404，不影响业务
   请求或本切片 E2E，未在 Slice 8 中顺便扩大为站点资产修复。
+
+切片 8.1 实际验证（2026-08-27）：
+
+- 新增 `/projects/:projectId/chat` 与 `/chat/:conversationId` canonical 路由，旧
+  `/conversations/:conversationId` 继续复用同一页面；Library 不再读取或创建 Conversation，只把整个
+  Project、单篇或多篇选择带入 Chat 首页；URL `paper_id` 只有命中当前 Project Paper API 时才生效；
+- Library 以资源底座展示三个平级研究模式；Library、Chat、Reviews 和 Agent 复用紧凑 Project Header/
+  Mode Nav。RAG 与 Agent 复用 resize helper/separator，但使用独立 versioned localStorage key，业务事实
+  不进入 Storage；
+- RAG Conversation 使用 viewport 三栏，rail、消息时间线与 Evidence Margin 独立滚动，Composer 固定在
+  中栏底部；Conversation 与路由 Project 不匹配时停止 Message/Evidence 查询并统一显示 404 语义；
+- TDD 首轮两个 Vitest suite 因 canonical route/preselection 与 shared layout 模块不存在而失败；实现后
+  前端全量 `18 files / 137 tests`，`npm run build` 通过；
+- Phase 2 离线 E2E 经 canonical Chat 完成 Project/单篇 scope、刷新、Citation → Evidence → PDF 与归档
+  只读，`1 passed (16.3s)`；Phase 5 Agent 配置/两轮/刷新/candidate 回归
+  `1 passed (36.2s)`。两者均使用 Fake Adapter、隔离 PostgreSQL/Valkey，未访问真实模型、网站、MCP 或
+  Sandbox。
 
 切片 1 实际验证（2026-08-25）：
 

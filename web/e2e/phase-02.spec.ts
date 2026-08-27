@@ -27,7 +27,10 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
 
   await page.getByRole("link", { name: "文献库", exact: true }).click();
   await expect(page.getByText("索引已就绪")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: /询问整个项目/ }).click();
+  await page.getByRole("link", { name: "询问整个 Project", exact: true }).click();
+  await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/chat$/);
+  await page.getByRole("button", { name: /创建问答/ }).click();
+  await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/chat\/[0-9a-f-]+$/);
   await expect(page.getByText(/CITED RAG \/ 整个项目/)).toBeVisible();
 
   await page.getByPlaceholder("提出一个需要文献证据回答的问题…").fill("fake 论文讲了什么？");
@@ -44,11 +47,15 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
 
   await page.getByRole("link", { name: "文献库", exact: true }).click();
   await page.getByRole("button", { name: "询问此篇" }).click();
+  await expect(page.getByRole("checkbox").first()).toBeChecked();
+  await page.getByRole("button", { name: /创建问答/ }).click();
   await expect(page.getByText(/CITED RAG \/ 1 篇文献/)).toBeVisible();
 
   await page.getByRole("link", { name: "文献库", exact: true }).click();
   await page.getByRole("button", { name: "归档 Project" }).click();
   await expect(page.getByText(/该 Project 当前只读/)).toBeVisible();
-  await expect(page.getByRole("button", { name: /询问整个项目/ })).toBeDisabled();
+  await page.getByRole("link", { name: "文献问答", exact: true }).click();
+  await expect(page.getByText(/历史问答仍可查看/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /创建问答/ })).toBeDisabled();
   expect(pageErrors).toEqual([]);
 });

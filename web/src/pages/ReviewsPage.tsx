@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { CreateReviewResult, Project, ReviewListItem } from "../api/types";
-import ProjectNav from "../components/ProjectNav";
+import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
 import { ensureReviewIntent, type ReviewIntent } from "../reviews/reviewIntent";
 import { reviewListRefetchInterval } from "../reviews/reviewListRefresh";
 import { stageLabel } from "../reviews/reviewPresentation";
@@ -69,17 +69,14 @@ export default function ReviewsPage() {
 
   return (
     <div className="page-flow">
-      <header className="project-heading review-heading">
-        <div>
-          <p className="breadcrumb"><Link to="/">研究项目</Link><span>/</span>Reviews</p>
-          <p className="eyebrow">FIXED REVIEW WORKFLOW</p>
-          <h1>{project?.name ?? "正在读取…"}</h1>
-          <p>创建文献综述，并从检索、导入、证据矩阵到导出追踪每个真实业务阶段。</p>
-        </div>
-        <div className="metric-block"><strong>{reviewsQuery.data?.length ?? "—"}</strong><span>Review Runs</span></div>
-      </header>
-
-      <ProjectNav projectId={projectId} active="reviews" />
+      <ProjectWorkspaceHeader
+        projectId={projectId}
+        project={project}
+        active="reviews"
+        eyebrow="综述"
+        description="从检索、导入、Evidence Matrix 到 Artifact 追踪固定 Workflow。"
+        actions={<div className="metric-block"><strong>{reviewsQuery.data?.length ?? "—"}</strong><span>Review Runs</span></div>}
+      />
 
       <section className="review-workbench">
         <div>

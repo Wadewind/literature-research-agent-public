@@ -20,8 +20,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   └─ SSE：GET /runs/{id}/events/stream（原生 EventSource）
 ```
 
-- Project 工作区用同一语义导航连接 Library、Chat 与 Reviews；现有 Chat 页面和 Conversation 模型
-  保持不变，没有为 Review 重建另一套对话产品。
+- Project 是统一工作空间，文献库是三种研究模式共享的资源底座。Library、Chat、Reviews 与 Agent 复用
+  紧凑 Project Header/Mode Nav；文献库突出“文献问答 / 综述 / 研究助手”三个平级入口，但不把自己
+  冒充为第四种研究模式。
 - Project 工作区现在用“文献库 / 文献问答 / 综述 / 研究助手”区分三种产品模式。Research Agent 使用
   独立 `AgentSession/AgentTurnRun`，不会把 RAG Conversation 冒充为持续 Agent Thread，也不复制官方
   Deep Agents UI 的数据层。
@@ -58,7 +59,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - 上传幂等键由浏览器生成：选择新文件时 `crypto.randomUUID()` 生成新 Key，同一文件（同名同大小）重试复用同一 Key（`src/library/uploadIntent.ts`）。
 - 上传响应区分新建、复用和已收录：新文件带 `run_id` 进入 Run 页；复用已解析文件时 `run_id=null` 并直接刷新文献库。
 - PDF 预览不做自渲染：`<iframe src=".../file#page=N">` 使用浏览器原生 PDF 查看器的页码锚点，零新增依赖。
-- RAG 三入口只创建不同 scope 的 Project-scoped Conversation；对话页从 REST 恢复 Message/Claim/Citation，SSE 只驱动进度与缓存失效。
+- RAG 创建和历史位于 canonical `/projects/:projectId/chat`；Library 的整个 Project、单篇和多篇入口只
+  导航并带入范围，不再直接创建 Conversation。`paper_id` 预选仅接受当前 Project Paper API 返回的 ID。
+  详情内部链接使用 `/chat/:conversationId`，旧 `/conversations/:conversationId` 保留兼容；对话页从
+  REST 恢复 Message/Claim/Citation，SSE 只驱动进度与缓存失效。
 - Project/Paper 归档 UI 使用 `include_archived` 显式查看；「归档个人库资产」不等于「移出项目」，两者在 Project 文献行中是独立动作。
 
 ## 关键决定与替代方案
@@ -97,6 +101,11 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   aggregate `evidence-matrix` output，不取决于父 Review 最终状态；因此后续 Section 失败但已产出合法
   Matrix 的 Review 仍可选择，失败且无 Matrix 的 Review 会被排除。提交 Turn 继续发送并由服务端校验
   `output_id`；正常后续轮可沿用上一轮冻结值，不让浏览器猜测“最新 Matrix”。
+- **Project chrome 统一但业务模型不合并**：共享 Header/Nav 与三栏 resize 只解决入口位置、viewport 和
+  可访问交互；RAG `Conversation`、Review Run 与 AgentSession/Turn 仍使用各自 API 和恢复语义。
+- **栏宽偏好隔离**：RAG 与 Agent 使用同一个纯 resize helper 和可聚焦 separator，各自保存
+  `literature-agent:chat-workspace` / `agent-workspace` v1 最小记录；非法/旧版本回退默认值，Conversation、
+  Evidence、Session 和 SDK 状态不进入 localStorage。
 
 ## 失败、重试与取消行为
 
@@ -179,15 +188,24 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   在 1440×1000 下确认三栏计算宽度为 `220px / 586px / 350px` 且无横向溢出，空态、能力 Catalog、
   Session rail 与 Evidence Margin 均可访问。唯一 Console error 是既有 `/favicon.ico` 404；业务 API
   请求均为本地 200，本切片未顺便修改站点资产。
+- Phase 5 切片 8.1：canonical route、Project-scoped URL 预选、Conversation Project 闭包与 versioned
+  layout 的首轮 Vitest 因模块缺失真实红灯；主审补强后，Conversation 与 Agent Session 在 Project
+  闭包查询完成前均禁止读取子资源和提交消息，相关纯规则测试先红后绿；前端全量
+  `19 files / 140 tests`，production build
+  通过。Phase 2 离线 E2E `1 passed (16.3s)`，覆盖 canonical Chat、Project/单篇 scope、刷新恢复、
+  Evidence/PDF 与归档只读；Phase 5 Agent 回归 `1 passed (36.2s)`。普通测试未访问真实模型、网络、MCP
+  或 Sandbox。
 
 ## 代码入口
 
-- 页面：`web/src/pages/`（ProjectsPage、PersonalLibraryPage、LibraryPage、ConversationPage、RunDetailPage、DocumentPage）
+- 页面：`web/src/pages/`（ProjectsPage、PersonalLibraryPage、LibraryPage、ChatPage、ConversationPage、RunDetailPage、DocumentPage）
 - Review 页面：`web/src/pages/ReviewsPage.tsx`、`ReviewDetailPage.tsx`、
   `web/src/components/ReviewResults.tsx`
 - Agent 页面：`web/src/pages/AgentPage.tsx`、`web/src/components/AgentSessionRail.tsx`、
   `AgentCapabilityPanel.tsx`、`AgentEvidenceMargin.tsx`；纯交互规则位于 `web/src/agent/`。
-- Project 工作区导航：`web/src/components/ProjectNav.tsx`
+- Project 工作区：`web/src/components/ProjectWorkspaceHeader.tsx`、`ProjectNav.tsx`、
+  `ChatWorkspaceFrame.tsx`、`ConversationRail.tsx`、`WorkspaceResizeSeparator.tsx`；canonical 路由、
+  Project-scoped 预选与 versioned layout 纯规则位于 `web/src/workspace/`。
 - Review 纯展示/意图：`web/src/reviews/reviewPresentation.ts`、`reviewIntent.ts`、
   `reviewHumanInput.ts`、`reviewResults.ts`、`reviewListRefresh.ts`
 - SSE：`web/src/runs/useRunEvents.ts`、`eventStore.ts`、`runStatus.ts`
@@ -219,11 +237,13 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   Artifact 提交或移动端 Drawer；窄屏只避免阻断性溢出。Fake Runtime 固定回答没有 Citation 且完成
   很快，因此 E2E 不把非空 Agent Citation 或运行中取消作为稳定断言；相应业务边界由后端和通用 Run
   分层测试覆盖。
+- Chat/Agent 的 viewport 三栏以桌面为验收主体；窄屏顺序展开且不建设 Drawer。栏宽偏好只在各自模式
+  内复用，不跨设备同步。
 
 ## 60 秒面试说明
 
-这个 UI 同时表达资源模型、可靠执行和引用可信性：Project 工作区统一连接文献、Chat、Review 和
-Research Agent；
+这个 UI 同时表达资源模型、可靠执行和引用可信性：Project 是工作空间，文献库提供资源底座，canonical
+Chat、Review 和 Research Agent 是三种平级研究模式；
 问答与 Review 创建都用可重试的幂等意图，SSE 只提示 TanStack Query 重新读取 PostgreSQL 事实。
 Review Detail 不在浏览器复制状态机，而是把固定 `review.v1` 顺序与服务端 `current_stage` 映射成研究
 阶段脊柱，并展示 Step、部分失败 Source、等待和取消。RAG 仍从 Claim/Citation 回到 Evidence 与 PDF

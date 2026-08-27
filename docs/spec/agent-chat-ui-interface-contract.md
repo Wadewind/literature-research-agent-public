@@ -29,8 +29,10 @@ Project 工作区导航固定为：
 /projects/:projectId/agent/:sessionId      Agent 研究工作区
 ```
 
-既有 RAG 与 Review 路由保持不变。`Chat` 导航文案改为“文献问答”，但本切片不搬迁 Library 页内现有
-RAG 创建/历史入口，也不把 RAG Conversation 改造成有模型历史的对话。
+Slice 8.1 已进一步将 RAG 创建/历史迁入 canonical `/projects/:projectId/chat` 工作区，并为 RAG 与
+Agent 共用紧凑 Project chrome 和三栏 resize 规则。详细路由、兼容路径与信息架构以
+[`project-workspace-ui-contract.md`](project-workspace-ui-contract.md) 为准；这不把 RAG Conversation
+改造成有模型历史的对话，也不合并 Conversation 与 AgentSession 生命周期。
 
 ## 3. 桌面端交互契约
 
