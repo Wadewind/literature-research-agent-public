@@ -12,6 +12,12 @@ Turn 前配置，`/skills/` 为 Sandbox `execute` 不可见的只读虚拟 Backe
 权限。生产默认仍使用 Fake Runtime；真实 OpenSandbox proxy 的本地功能 Smoke 已通过，但真实 Provider、
 公共网络与 Phase 6 生产安全治理尚未完成。
 
+Phase 6 Slice 2 已完成受限 Agent 文件交付：真实 Sandbox Turn 可显式提交
+`/workspace/outputs/` 中的 PNG/JPEG/SVG/PDF/CSV/Markdown/text/JSON，平台在数据库事务外校验普通文件、
+10 MiB 上限、声明 MIME、magic/结构与 hash，并在 Turn 业务成功事务中发布独立 AgentArtifact。Research
+Agent 成果区只预览 PNG/JPEG，其余类型安全下载；Fake Runtime 的候选描述符与未提交 Candidate 都不是
+可下载资源。该实现不代表生产级恶意文件扫描，孤儿 staging GC 与总量配额仍待后续切片。
+
 ## 仓库布局
 
 ```text

@@ -6,14 +6,21 @@
 调整日期：2026-08-26；按 ADR-0008 调整日期：2026-08-27；按 ADR-0009/0010 对齐 Browser 人工控制与
 Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目精简交付日期：2026-08-28；对齐
 `docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28；Slice 1 精简产品契约与威胁模型
-完成日期：2026-08-28。
+完成日期：2026-08-28；Slice 2 Agent 输出 Artifact 完成日期：2026-08-28。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
 已有代码/测试事实与 Phase 6 目标事实，冻结所有权与信任边界、自动执行/直接拒绝矩阵、历史
 `PolicySnapshot.approval_required` 兼容规则、API/Event 增量、事务外 I/O、Effectively Once/取消/fence
-以及后续切片门槛。它没有新增迁移、运行逻辑、依赖或安全验证结论；下一开发切片为 Slice 2 Agent 输出
-Artifact。
+以及后续切片门槛。Slice 2 已在该边界内实现独立 `AgentArtifact`、Candidate
+`STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
+Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件；下一开发切片为
+Slice 3 Browser 画面与跨 Turn 人工控制。
+
+Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
+PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
+Web 全量 Vitest 为 143 passed 且 TypeScript/Vite build 通过。未运行真实 Provider 或真实 OpenSandbox
+Artifact Smoke，不能据此宣称生产级恶意文件扫描或无 TOCTOU 竞争。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
@@ -526,8 +533,10 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
    自动执行/直接拒绝矩阵和安全验收；实施依据为
    [`research-agent-security-contract.md`](../../spec/research-agent-security-contract.md)，完成仅表示契约已
    冻结，不表示 Slice 2–8 目标已经实现；
-2. **Agent 输出 Artifact**：Candidate/AgentArtifact 迁移、`submit_artifact`、Sandbox/Storage 校验、
-   Effectively Once 提交、图片预览与下载；先完成“Agent 画图并交付”的离线垂直切片；
+2. **Agent 输出 Artifact（已完成）**：Candidate/AgentArtifact 迁移、`submit_artifact`、Sandbox/Storage
+   校验、Effectively Once 提交、PNG/JPEG 图片预览与其余受支持类型下载已形成离线垂直切片。Fake Runtime
+   描述符继续停留在 `STAGED`，只有真实 Tool 完成文件校验的 `VALIDATED` Candidate 能随 Turn 成功事务
+   原子发布；
 3. **Browser 画面与跨 Turn 人工控制**：BrowserControlLease、镜像/画面通道、鉴权代理和右侧 UI；只用
    Sandbox 内合成登录页验证，不开放公网；
 4. **Agent 输入附件**：Session 上传、Message 引用、ContextSnapshot 冻结、`/workspace/inbox` 物化与
@@ -590,7 +599,8 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
 2. arXiv 初始精确 allowlist 已由 ADR-0011 固定为 `arxiv.org`、`export.arxiv.org`；真实 Smoke 仍需核对
    官方 Redirect 是否需要新增精确主机，以及统一 egress 的具体代理/网络实现；
 3. 硬 Budget 默认值、Provider Token/费用数据不可得时的记账方式和告警阈值；
-4. Workspace TTL、清理补偿、Agent Artifact 单文件/总量上限、MIME/magic 实现和 staging GC 策略；
+4. Workspace TTL、清理补偿、Agent Artifact 总量上限和 staging GC 策略；单文件上限已固定为 10 MiB，
+   扩展名、声明 MIME、magic/UTF-8/JSON/CSV/SVG 主动内容校验已在 Slice 2 实现；
 5. 当前 pinned Chrome 镜像可复用的 VNC 能力，以及 noVNC/websockify 或等价画面组件的精确版本、认证
    代理拓扑和镜像/前端锁文件影响；
 6. 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的评测、禁用和内容安全方式。
@@ -610,6 +620,9 @@ Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何�
 - 多 Agent、长期 Memory、宿主执行、动态安装和通用开放网络保持关闭；只开放固定 arXiv allowlist。
   OpenSandbox `execute` 不改变 Research Agent 的领域定位，也不代表通用 Coding Agent；
 - Research Agent Extension 可以独立禁用，Demo-ready Core Research Backend v1 仍应完整运行。
+- Slice 2 的 Sandbox Adapter 在读取前拒绝目录、symlink/device 和超限文件，并在 Storage/下载边界复核
+  size/hash；这不是无 TOCTOU 竞争的生产级恶意文件扫描器。staging blob 的总量配额和孤儿 GC 留给后续
+  Sandbox/清理切片。
 
 ## 预期学习笔记
 
@@ -619,6 +632,7 @@ Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何�
 - `agent-tool-policy.md`：固定 Tool/MCP/Skill Catalog、权限、硬预算、自动执行与直接拒绝边界；
 - `browser-download-security.md`：URL、SSRF、Prompt Injection 和文件隔离；
 - `agent-sandbox.md`：Workspace 生命周期、资源限制、文件传输和清理；
+- `agent-artifact-delivery.md`：Candidate 状态机、Sandbox/Storage 边界、成功事务发布与安全下载；
 - `agent-skills.md`：平台安装与 owner-scoped 声明式 Skills 的版本、隔离、权限依赖、评测和升级；
 - `agent-evaluation.md`：多轮研究、项目上下文、资源发现、来源、策略遵守和安全评测。
 
@@ -631,6 +645,7 @@ Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何�
 - [`ADR-0011：采用 Phase 6 精简交付范围`](../decisions/0011-adopt-phase-06-lean-delivery.md)
 - [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)
 - [`Web UI 应用壳与视觉重设计`](../../spec/web-ui-app-shell-redesign.md)
+- [`Agent 输出 Artifact 交付`](../modules/agent-artifact-delivery.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Going to production](https://docs.langchain.com/oss/python/deepagents/going-to-production)
 - [Deep Agents Backends](https://docs.langchain.com/oss/python/deepagents/backends)

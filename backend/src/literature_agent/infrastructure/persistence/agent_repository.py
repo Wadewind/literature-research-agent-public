@@ -9,6 +9,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.agent_repository import AgentRepository
+from literature_agent.domain.agent_artifact import AgentArtifact
 from literature_agent.domain.exceptions import RunConcurrentModificationError
 from literature_agent.domain.mcp_configuration import McpPolicyRef, McpPolicyToolRef
 from literature_agent.domain.research_agent import (
@@ -30,11 +31,13 @@ from literature_agent.domain.research_agent import (
 from literature_agent.domain.skill_configuration import SkillPolicyRef, SkillSource
 from literature_agent.infrastructure.persistence.models import (
     AgentArtifactCandidateORM,
+    AgentArtifactORM,
     AgentContextSnapshotORM,
     AgentMessageORM,
     AgentPolicySnapshotORM,
     AgentRuntimeSessionBindingORM,
     AgentRuntimeTurnBindingORM,
+    AgentSandboxLeaseORM,
     AgentSessionORM,
     AgentTurnRunORM,
 )
@@ -412,6 +415,13 @@ class SqlalchemyAgentRepository(AgentRepository):
                 content_hash=value.content_hash,
                 size_bytes=value.size_bytes,
                 status=value.status.value,
+                tool_call_id=value.tool_call_id,
+                storage_key=value.storage_key,
+                sandbox_generation=value.sandbox_generation,
+                sandbox_fencing_token=value.sandbox_fencing_token,
+                rejection_code=value.rejection_code,
+                validated_at=value.validated_at,
+                committed_at=value.committed_at,
                 created_at=value.created_at,
             )
             .on_conflict_do_nothing()
@@ -455,6 +465,168 @@ class SqlalchemyAgentRepository(AgentRepository):
             .all()
         )
         return [_candidate(row) for row in rows]
+
+    async def get_candidate(self, candidate_id: str) -> AgentArtifactCandidate | None:
+        row = await self._session.get(AgentArtifactCandidateORM, candidate_id)
+        return _candidate(row) if row is not None else None
+
+    async def is_sandbox_fence_current(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        session_id: str,
+        turn_run_id: str,
+        sandbox_generation: int,
+        sandbox_fencing_token: int,
+    ) -> bool:
+        """在正式发布事务中复核 Candidate 仍属于当前 ACTIVE Sandbox fence。"""
+        value = await self._session.scalar(
+            select(AgentSandboxLeaseORM.session_id)
+            .where(
+                AgentSandboxLeaseORM.owner_id == owner_id,
+                AgentSandboxLeaseORM.project_id == project_id,
+                AgentSandboxLeaseORM.session_id == session_id,
+                AgentSandboxLeaseORM.holder_turn_run_id == turn_run_id,
+                AgentSandboxLeaseORM.generation == sandbox_generation,
+                AgentSandboxLeaseORM.fencing_token == sandbox_fencing_token,
+                AgentSandboxLeaseORM.status == "active",
+            )
+            .with_for_update()
+        )
+        return value is not None
+
+    async def save_candidate(
+        self,
+        value: AgentArtifactCandidate,
+        *,
+        expected_status: str,
+    ) -> bool:
+        result = cast(
+            CursorResult,
+            await self._session.execute(
+                update(AgentArtifactCandidateORM)
+                .where(
+                    AgentArtifactCandidateORM.candidate_id == value.candidate_id,
+                    AgentArtifactCandidateORM.status == expected_status,
+                )
+                .values(
+                    status=value.status.value,
+                    tool_call_id=value.tool_call_id,
+                    storage_key=value.storage_key,
+                    sandbox_generation=value.sandbox_generation,
+                    sandbox_fencing_token=value.sandbox_fencing_token,
+                    rejection_code=value.rejection_code,
+                    validated_at=value.validated_at,
+                    committed_at=value.committed_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    async def add_artifact_if_absent(self, value: AgentArtifact) -> AgentArtifact:
+        await self._session.execute(
+            insert(AgentArtifactORM)
+            .values(
+                artifact_id=value.artifact_id,
+                candidate_id=value.candidate_id,
+                owner_id=value.owner_id,
+                project_id=value.project_id,
+                session_id=value.session_id,
+                turn_run_id=value.turn_run_id,
+                name=value.name,
+                media_type=value.media_type,
+                content_hash=value.content_hash,
+                size_bytes=value.size_bytes,
+                storage_key=value.storage_key,
+                created_at=value.created_at,
+            )
+            .on_conflict_do_nothing(index_elements=[AgentArtifactORM.candidate_id])
+        )
+        row = (
+            await self._session.execute(
+                select(AgentArtifactORM).where(AgentArtifactORM.candidate_id == value.candidate_id)
+            )
+        ).scalar_one()
+        found = _artifact(row)
+        if found != value and (
+            found.artifact_id,
+            found.candidate_id,
+            found.owner_id,
+            found.project_id,
+            found.session_id,
+            found.turn_run_id,
+            found.name,
+            found.media_type,
+            found.content_hash,
+            found.size_bytes,
+            found.storage_key,
+        ) != (
+            value.artifact_id,
+            value.candidate_id,
+            value.owner_id,
+            value.project_id,
+            value.session_id,
+            value.turn_run_id,
+            value.name,
+            value.media_type,
+            value.content_hash,
+            value.size_bytes,
+            value.storage_key,
+        ):
+            raise RunConcurrentModificationError(value.turn_run_id)
+        return found
+
+    async def list_artifacts_scoped(self, run_id: str, owner_id: str) -> list[AgentArtifact]:
+        rows = (
+            (
+                await self._session.execute(
+                    select(AgentArtifactORM)
+                    .join(
+                        AgentTurnRunORM,
+                        AgentArtifactORM.turn_run_id == AgentTurnRunORM.turn_run_id,
+                    )
+                    .join(
+                        AgentSessionORM,
+                        AgentTurnRunORM.session_id == AgentSessionORM.session_id,
+                    )
+                    .where(
+                        AgentArtifactORM.turn_run_id == run_id,
+                        AgentArtifactORM.owner_id == owner_id,
+                        AgentSessionORM.owner_id == owner_id,
+                        AgentArtifactORM.project_id == AgentSessionORM.project_id,
+                        AgentArtifactORM.session_id == AgentSessionORM.session_id,
+                    )
+                    .order_by(AgentArtifactORM.created_at, AgentArtifactORM.artifact_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [_artifact(row) for row in rows]
+
+    async def get_artifact_scoped(self, artifact_id: str, owner_id: str) -> AgentArtifact | None:
+        row = (
+            await self._session.execute(
+                select(AgentArtifactORM)
+                .join(
+                    AgentTurnRunORM,
+                    AgentArtifactORM.turn_run_id == AgentTurnRunORM.turn_run_id,
+                )
+                .join(
+                    AgentSessionORM,
+                    AgentTurnRunORM.session_id == AgentSessionORM.session_id,
+                )
+                .where(
+                    AgentArtifactORM.artifact_id == artifact_id,
+                    AgentArtifactORM.owner_id == owner_id,
+                    AgentSessionORM.owner_id == owner_id,
+                    AgentArtifactORM.project_id == AgentSessionORM.project_id,
+                    AgentArtifactORM.session_id == AgentSessionORM.session_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return _artifact(row) if row is not None else None
 
 
 def _session(row: AgentSessionORM) -> AgentSession:
@@ -579,5 +751,29 @@ def _candidate(row: AgentArtifactCandidateORM) -> AgentArtifactCandidate:
         row.content_hash,
         row.size_bytes,
         AgentArtifactCandidateStatus(row.status),
+        row.created_at,
+        row.tool_call_id,
+        row.storage_key,
+        row.sandbox_generation,
+        row.sandbox_fencing_token,
+        row.rejection_code,
+        row.validated_at,
+        row.committed_at,
+    )
+
+
+def _artifact(row: AgentArtifactORM) -> AgentArtifact:
+    return AgentArtifact(
+        row.artifact_id,
+        row.candidate_id,
+        row.owner_id,
+        row.project_id,
+        row.session_id,
+        row.turn_run_id,
+        row.name,
+        row.media_type,
+        row.content_hash,
+        row.size_bytes,
+        row.storage_key,
         row.created_at,
     )

@@ -81,6 +81,14 @@ class RuntimeSkillMaterializer(Protocol):
     ) -> SkillRuntimeMaterialization: ...
 
 
+class RuntimePlatformToolFactory(Protocol):
+    """根据当前受控 request/lease 创建平台自定义 Tool。"""
+
+    def create(
+        self, request: RuntimeTurnRequest, lease: SandboxWorkspaceLease
+    ) -> tuple[BaseTool, ...]: ...
+
+
 @dataclass(slots=True)
 class _ActiveExecution:
     runtime: ResearchAgentRuntime
@@ -103,6 +111,7 @@ class SandboxedResearchAgentRuntime:
         mcp_tool_loader: RuntimeMcpToolLoader | None = None,
         runtime_with_capabilities_factory: RuntimeWithCapabilitiesFactory | None = None,
         skill_materializer: RuntimeSkillMaterializer | None = None,
+        platform_tool_factory: RuntimePlatformToolFactory | None = None,
     ) -> None:
         self._checkpoint_factory = checkpoint_factory
         self._runtime_factory = runtime_factory
@@ -111,6 +120,7 @@ class SandboxedResearchAgentRuntime:
         self._mcp_tool_loader = mcp_tool_loader
         self._runtime_with_capabilities_factory = runtime_with_capabilities_factory
         self._skill_materializer = skill_materializer
+        self._platform_tool_factory = platform_tool_factory
         self._active: dict[str, _ActiveExecution] = {}
         self._active_lock = asyncio.Lock()
 
@@ -157,6 +167,11 @@ class SandboxedResearchAgentRuntime:
         else:
             skills = SkillRuntimeMaterialization(StateBackend(), ())
         lease = await self._workspace_manager.acquire(turn_request)
+        platform_tools = (
+            self._platform_tool_factory.create(turn_request, lease)
+            if self._platform_tool_factory is not None
+            else ()
+        )
         active_ref: _ActiveExecution | None = None
         tool_stack = AsyncExitStack()
         try:
@@ -183,7 +198,10 @@ class SandboxedResearchAgentRuntime:
 
         try:
             runtime = self._new_runtime(
-                lease.backend, before_succeed=finalize, tools=mcp_tools, skills=skills
+                lease.backend,
+                before_succeed=finalize,
+                tools=platform_tools + mcp_tools,
+                skills=skills,
             )
         except BaseException:
             await _close_runtime_resources(tool_stack, lease.backend)

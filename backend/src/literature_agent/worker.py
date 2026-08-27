@@ -29,6 +29,12 @@ from deepagents.backends import BackendProtocol
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from literature_agent.application.agent_artifact_publisher import (
+    RepositoryAgentArtifactPublisher,
+)
+from literature_agent.application.agent_artifact_service import (
+    AgentArtifactSubmissionService,
+)
 from literature_agent.application.agent_turn_executor import AgentTurnExecutor
 from literature_agent.application.agent_turn_lifecycle_service import (
     AgentTurnLifecycleService,
@@ -78,6 +84,7 @@ from literature_agent.domain.chunk_profile import ChunkProfile
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
+from literature_agent.infrastructure.agent.artifact_tools import AgentArtifactToolFactory
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
 )
@@ -375,6 +382,15 @@ def _build_research_agent_runtime(
         execution_repo_factory=SqlalchemyRuntimeExecutionRepository,
         lease_seconds=settings.worker_lease_seconds,
     )
+    artifact_submission = AgentArtifactSubmissionService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        storage=LocalFileStorage(settings.storage_root),
+        execution_control=execution_control,
+        event_notifier=event_notifier,
+    )
     project_context = ProjectResearchContextService(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -388,6 +404,7 @@ def _build_research_agent_runtime(
         chunk_repo_factory=SqlalchemyChunkRepository,
         event_notifier=event_notifier,
     )
+
     def runtime_factory(
         checkpointer: BaseCheckpointSaver[str],
         backend: BackendProtocol,
@@ -467,6 +484,10 @@ def _build_research_agent_runtime(
         mcp_tool_loader=mcp_loader,
         runtime_with_capabilities_factory=runtime_with_capabilities_factory,
         skill_materializer=skill_materializer,
+        platform_tool_factory=AgentArtifactToolFactory(
+            artifact_submission,
+            SqlalchemySandboxWorkspaceRepository(session_factory),
+        ),
     )
 
 
@@ -843,6 +864,9 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         event_notifier=event_notifier,
         workspace_snapshot_publisher_factory=SqlalchemyWorkspaceSnapshotPublisher,
         workspace_snapshot_required=settings.research_runtime_backend == "deep_agents",
+        agent_artifact_publisher_factory=lambda session: RepositoryAgentArtifactPublisher(
+            SqlalchemyAgentRepository(session)
+        ),
     )
     agent_turn_lifecycle = AgentTurnLifecycleService(
         session_factory,

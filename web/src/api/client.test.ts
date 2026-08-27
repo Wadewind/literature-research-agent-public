@@ -2,10 +2,16 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, apiFetch, errorMessage } from "./client";
+import { ApiError, agentArtifactContentUrl, apiFetch, errorMessage } from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+it("为 Artifact ID 生成编码后的正式内容地址", () => {
+  expect(agentArtifactContentUrl("artifact/一")).toBe(
+    "/api/v1/agent-artifacts/artifact%2F%E4%B8%80/content",
+  );
 });
 
 function mockResponse(status: number, body: unknown): Response {

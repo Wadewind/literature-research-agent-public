@@ -117,7 +117,7 @@ async def test_post_message_commits_one_scoped_bundle_and_replays_idempotently(
         assert context.project_index_refs[0].chunk_set_id == scenario.chunk_set_id
         policy = await agent_repo.get_policy_snapshot(turn.policy_snapshot_id)
         assert policy is not None
-        assert policy.policy_version == "agent-policy.project-research-workspace.v1"
+        assert policy.policy_version == "agent-policy.project-research-workspace.v2"
         assert policy.allowed_tool_names == (
             "search_project_chunks",
             "read_review_evidence_matrix",
@@ -128,6 +128,7 @@ async def test_post_message_commits_one_scoped_bundle_and_replays_idempotently(
             "glob",
             "grep",
             "execute",
+            "submit_artifact",
         )
         assert policy.allowed_skill_names == ()
         assert policy.network_enabled is False

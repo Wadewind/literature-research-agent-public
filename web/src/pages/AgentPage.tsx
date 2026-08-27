@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch, errorMessage } from "../api/client";
 import type {
   AgentMessage,
+  AgentArtifact,
   AgentSession,
   AgentSkill,
   AgentTurn,
@@ -168,6 +169,12 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
       apiFetch<AgentTurn>(`/api/v1/agent-turn-runs/${candidateTurnRunId}`),
     enabled: Boolean(candidateTurnRunId),
   });
+  const artifactsQuery = useQuery({
+    queryKey: ["agent-artifacts", candidateTurnRunId],
+    queryFn: () =>
+      apiFetch<AgentArtifact[]>(`/api/v1/agent-turn-runs/${candidateTurnRunId}/artifacts`),
+    enabled: Boolean(candidateTurnRunId),
+  });
   const activeTurnRunId = candidateTurnRunId && !isTerminal(runQuery.data?.status ?? "")
     ? candidateTurnRunId
     : null;
@@ -181,6 +188,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     void queryClient.invalidateQueries({ queryKey: ["agent-sessions", projectId] });
     void queryClient.invalidateQueries({ queryKey: ["agent-messages", sessionId] });
     void queryClient.invalidateQueries({ queryKey: ["agent-turn", candidateTurnRunId] });
+    void queryClient.invalidateQueries({ queryKey: ["agent-artifacts", candidateTurnRunId] });
   }, [
     candidateTurnRunId,
     eventStream.closed,
@@ -557,6 +565,9 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
           selectedEvidence={selectedEvidence}
           onSelectEvidence={setSelectedEvidence}
           onClearEvidence={() => setSelectedEvidence(null)}
+          artifacts={artifactsQuery.data}
+          artifactsLoading={artifactsQuery.isPending && Boolean(candidateTurnRunId)}
+          artifactsError={artifactsQuery.isError}
         />
       </div>
     </div>

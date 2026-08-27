@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v15
+> 状态：Proposed v16
 >
 > 日期：2026-08-28
 >
@@ -69,6 +69,12 @@
 > v15 变更：Phase 6 Slice 1 形成 `research-agent-security-contract.md`，把 Phase 5 已验证事实与 Phase 6
 > 目标事实分开，并冻结 owner/Project/Session/Turn/generation/Artifact 所有权、信任边界、自动执行/
 > 直接拒绝矩阵、历史 Approval 字段兼容、事务外 I/O、Effectively Once、API/Event 增量和后续安全门槛。
+>
+> v16 变更：Phase 6 Slice 2 完成 Agent 输出 Artifact 垂直切片。真实 Sandbox Turn 固定装配
+> `submit_artifact`，Candidate 经过事务外 regular-file/type/magic/hash/Storage 校验后进入 `VALIDATED`，
+> 仅在 Turn 成功事务中发布独立不可变 AgentArtifact；Fake descriptor 不会伪造下载资源。公开 API 按
+> owner/Project/Session/Turn 闭包列出并校验下载内容，Web 仅预览 PNG/JPEG，其余受支持类型默认下载；
+> 固定 Tool/Policy 与 graph revision 分别提升到 v2/`deep-agent-graph.v6`，拒绝按旧能力契约恢复。
 
 ## 1. 文档用途
 
@@ -673,9 +679,12 @@ WorkspaceSnapshot 与 Artifact 必须区分：前者保存 Agent 跨 Turn 继续
 
 Phase 6 的 Agent 文件交付进一步区分：用户输入使用业务 `AgentAttachment` ID，在事务外物化到
 `/workspace/inbox/`；Agent 输出必须显式调用 `submit_artifact`，且只允许
-`/workspace/outputs/` 的普通文件进入 staged Candidate。平台重新校验路径、大小、MIME/magic、哈希和
-当前 fence，只有 Turn 业务成功才发布独立 AgentArtifact。现有 Review Artifact 聚合继续绑定
-ReviewRun，不为 Agent 增量进行高风险泛化；两者复用 Storage 和公开下载语义。
+`/workspace/outputs/` 的普通文件进入 Candidate。Slice 2 已实现 `STAGED → VALIDATED → COMMITTED` 与
+`STAGED → REJECTED`：平台重新校验路径、大小、MIME/magic、哈希和当前 Runtime/Sandbox fence，事务外
+写入内容寻址 staging Storage，只有 Turn 业务成功才发布独立 AgentArtifact。现有 Review Artifact 聚合
+继续绑定 ReviewRun，不为 Agent 增量进行高风险泛化；两者复用 Storage Port，但保持独立业务聚合和授权
+查询。首版单文件上限 10 MiB，支持 PNG/JPEG/SVG/PDF/CSV/Markdown/text/JSON；SVG 只下载不内嵌。
+静态 symlink/device 拒绝与传输后 size/hash 校验不被宣称为无 TOCTOU 的生产级恶意文件扫描。
 
 ### 7.16 Observability
 
@@ -1101,7 +1110,8 @@ API。移动 Drawer、Browser/noVNC、Workspace 文件管理、fork/rewind 和�
 Phase 6 按 ADR-0009/0010 增加两个平台业务 UI，而不是接入 SDK UI：右侧 Browser 面板通过 owner/Session/
 generation 鉴权代理提供短时人工控制；成果区通过 AgentArtifact API 展示图片预览和稳定下载，并为消息
 提供 Attachment ID 上传。Web 不接收原始 Sandbox 路径，也不看到 VNC/noVNC/CDP/MCP/OpenSandbox
-endpoint；WorkspaceSnapshot 仍不是文件管理器或下载列表。
+endpoint；WorkspaceSnapshot 仍不是文件管理器或下载列表。Slice 2 的成果组件只消费正式 AgentArtifact
+API，PNG/JPEG 可预览，其他类型展示安全元数据与下载入口；Candidate 只作为内部状态摘要且不可下载。
 
 Run Detail 是核心页面，应展示：
 

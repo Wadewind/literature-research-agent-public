@@ -680,6 +680,44 @@ async def test_mcp_session_wraps_runtime_execution_and_closes_before_sandbox() -
 
 
 @pytest.mark.asyncio
+async def test_platform_submit_artifact_tool_is_assembled_for_real_sandbox_turn() -> None:
+    workspace = _WorkspaceManager()
+    known = {"value": False}
+    assembled: list[str] = []
+
+    @tool
+    def submit_artifact(path: str, name: str, media_type: str) -> str:
+        """测试用正式成果提交 Tool。"""
+        return f"{path}:{name}:{media_type}"
+
+    class _PlatformTools:
+        def create(self, request, lease):
+            assert request.turn_run_id == "turn-1"
+            assert lease.backend is workspace.backend
+            return (submit_artifact,)
+
+    def runtime_with_tools_factory(saver, backend, before_succeed, tools):
+        del saver, before_succeed
+        assembled.extend(item.name for item in tools)
+        return _Runtime(backend, known=known)
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=lambda saver, backend, before_succeed: _Runtime(
+            backend, known=known
+        ),
+        runtime_with_tools_factory=runtime_with_tools_factory,
+        platform_tool_factory=_PlatformTools(),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    events = [event async for event in runtime.execute_turn(_request())]
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert assembled == ["submit_artifact"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_session_and_sandbox_close_when_runtime_factory_fails() -> None:
     workspace = _WorkspaceManager()
     lifecycle: list[str] = []

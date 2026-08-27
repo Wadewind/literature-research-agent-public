@@ -450,11 +450,74 @@ class AgentArtifactCandidateORM(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    tool_call_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    sandbox_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sandbox_fencing_token: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rejection_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    validated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    committed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (
-        CheckConstraint("size_bytes BETWEEN 0 AND 1000000", name="ck_agent_candidate_size"),
-        CheckConstraint("status = 'staged'", name="ck_agent_candidate_status"),
+        CheckConstraint("size_bytes BETWEEN 0 AND 10485760", name="ck_agent_candidate_size"),
+        CheckConstraint(
+            "status IN ('staged','validated','committed','rejected')",
+            name="ck_agent_candidate_status",
+        ),
+        CheckConstraint(
+            "(status = 'staged' AND tool_call_id IS NULL AND storage_key IS NULL "
+            "AND sandbox_generation IS NULL AND sandbox_fencing_token IS NULL "
+            "AND rejection_code IS NULL AND validated_at IS NULL AND committed_at IS NULL) "
+            "OR (status = 'validated' AND tool_call_id IS NOT NULL "
+            "AND storage_key IS NOT NULL AND sandbox_generation > 0 "
+            "AND sandbox_fencing_token > 0 AND rejection_code IS NULL "
+            "AND validated_at IS NOT NULL AND committed_at IS NULL) "
+            "OR (status = 'committed' AND tool_call_id IS NOT NULL "
+            "AND storage_key IS NOT NULL AND sandbox_generation > 0 "
+            "AND sandbox_fencing_token > 0 AND rejection_code IS NULL "
+            "AND validated_at IS NOT NULL AND committed_at IS NOT NULL) "
+            "OR (status = 'rejected' AND tool_call_id IS NULL AND storage_key IS NULL "
+            "AND sandbox_generation IS NULL AND sandbox_fencing_token IS NULL "
+            "AND rejection_code IS NOT NULL AND validated_at IS NULL AND committed_at IS NULL)",
+            name="ck_agent_candidate_state_fields",
+        ),
         UniqueConstraint("turn_run_id", "content_hash", name="uq_agent_candidate_turn_hash"),
+        UniqueConstraint(
+            "turn_run_id", "tool_call_id", name="uq_agent_candidate_turn_tool_call"
+        ),
+    )
+
+
+class AgentArtifactORM(Base):
+    """经 Turn 成功事务发布的不可变 Agent 正式产物。"""
+
+    __tablename__ = "agent_artifacts"
+    artifact_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    candidate_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_artifact_candidates.candidate_id"), unique=True, nullable=False
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("size_bytes BETWEEN 0 AND 10485760", name="ck_agent_artifact_size"),
     )
 
 

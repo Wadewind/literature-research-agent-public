@@ -214,6 +214,14 @@ class AgentTurnNotFoundError(Exception):
         super().__init__(f"AgentTurnRun {run_id} 不存在")
 
 
+class AgentArtifactNotFoundError(Exception):
+    """正式 AgentArtifact 不存在或当前 actor 无权访问。"""
+
+    def __init__(self, artifact_id: str) -> None:
+        self.artifact_id = artifact_id
+        super().__init__(f"AgentArtifact {artifact_id} 不存在")
+
+
 class McpProfileRevisionConflictError(Exception):
     """Session MCP Profile revision 已变化，拒绝覆盖更新。"""
 

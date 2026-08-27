@@ -6,7 +6,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import update
 
+from literature_agent.application.agent_artifact_publisher import (
+    RepositoryAgentArtifactPublisher,
+)
 from literature_agent.application.agent_turn_executor import AgentTurnExecutor
 from literature_agent.application.agent_turn_lifecycle_service import (
     AgentTurnLifecycleService,
@@ -23,7 +27,12 @@ from literature_agent.application.run_execution_service import ExecutionOutcome,
 from literature_agent.application.run_service import RunService
 from literature_agent.domain.chunk import Chunk
 from literature_agent.domain.evidence import Citation, create_evidence
-from literature_agent.domain.research_agent import RuntimeSessionBinding, RuntimeTurnBinding
+from literature_agent.domain.research_agent import (
+    AgentArtifactCandidateStatus,
+    RuntimeSessionBinding,
+    RuntimeTurnBinding,
+    create_agent_artifact_candidate,
+)
 from literature_agent.domain.run import RunStatus, RunType
 from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
     FakeResearchAgentRuntime,
@@ -48,6 +57,10 @@ from literature_agent.infrastructure.persistence.event_repository import (
 )
 from literature_agent.infrastructure.persistence.evidence_repository import (
     SqlalchemyEvidenceRepository,
+)
+from literature_agent.infrastructure.persistence.models import (
+    AgentArtifactORM,
+    AgentSandboxLeaseORM,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
@@ -173,6 +186,145 @@ class _ResponseLostAfterSuccessRuntime(FakeResearchAgentRuntime):
                 safe_message="Runtime 成功响应丢失",
             )
         return reconciliation
+
+
+@pytest.mark.asyncio
+async def test_turn_success_atomically_commits_validated_candidate_as_agent_artifact(
+    db_engine,
+) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    agent_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title=None
+    )
+    submitted = await service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="生成正式图表",
+        review_output_id=scenario.matrix.output_id,
+        idempotency_key="artifact-commit-turn",
+        correlation_id="artifact-commit-submit",
+    )
+    validated = create_agent_artifact_candidate(
+        candidate_id="validated-candidate-1",
+        owner_id=scenario.actor.owner_id,
+        project_id=scenario.project.project_id,
+        session_id=agent_session.session_id,
+        turn_run_id=submitted.run_id,
+        name="chart.png",
+        media_type="image/png",
+        content_ref="/workspace/outputs/chart.png",
+        content_hash="c" * 64,
+        size_bytes=24,
+    ).validate(
+        tool_call_id="tool-call-1",
+        storage_key="agent-artifacts/owner/session/turn/staging/hash",
+        sandbox_generation=1,
+        sandbox_fencing_token=1,
+    )
+    async with scenario.factory() as session:
+        repository = SqlalchemyAgentRepository(session)
+        now = datetime.now(UTC)
+        session.add(
+            AgentSandboxLeaseORM(
+                session_id=agent_session.session_id,
+                owner_id=scenario.actor.owner_id,
+                project_id=scenario.project.project_id,
+                holder_turn_run_id=submitted.run_id,
+                sandbox_id="artifact-sandbox-1",
+                image_ref="artifact-test:v1",
+                generation=1,
+                fencing_token=1,
+                status="active",
+                generation_started_at=now,
+                expires_at=now,
+                updated_at=now,
+            )
+        )
+        staged = replace(
+            validated,
+            status=AgentArtifactCandidateStatus.STAGED,
+            tool_call_id=None,
+            storage_key=None,
+            sandbox_generation=None,
+            sandbox_fencing_token=None,
+            validated_at=None,
+        )
+        await repository.get_or_add_candidate(staged)
+        assert await repository.save_candidate(validated, expected_status="staged")
+        await session.commit()
+
+    executor = AgentTurnExecutor(
+        session_factory=scenario.factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        runtime=FakeResearchAgentRuntime(),
+        agent_artifact_publisher_factory=lambda session: RepositoryAgentArtifactPublisher(
+            SqlalchemyAgentRepository(session)
+        ),
+    )
+    runner = RunExecutionService(
+        scenario.factory,
+        SqlalchemyRunRepository,
+        SqlalchemyEventRepository,
+        SqlalchemyAttemptRepository,
+        SqlalchemyOutboxRepository,
+        RunDispatcher(
+            scenario.factory,
+            SqlalchemyRunRepository,
+            SqlalchemyEventRepository,
+            {RunType.AGENT_TURN: executor.execute},
+        ).execute,
+        "artifact-worker",
+        heartbeat_interval_seconds=3600,
+    )
+
+    assert await runner.execute(submitted.run_id, "artifact-worker") is ExecutionOutcome.COMPLETED
+    async with scenario.factory() as session:
+        repository = SqlalchemyAgentRepository(session)
+        artifacts = await repository.list_artifacts_scoped(
+            submitted.run_id, scenario.actor.owner_id
+        )
+        candidate = await repository.get_candidate(validated.candidate_id)
+        events = await SqlalchemyEventRepository(session).list_by_run(submitted.run_id)
+    assert len(artifacts) == 1
+    assert artifacts[0].candidate_id == validated.candidate_id
+    assert candidate is not None
+    assert candidate.status is AgentArtifactCandidateStatus.COMMITTED
+    assert "agent_artifact_committed" in [event.event_type for event in events]
+
+    # 即使持久层出现跨 Project/Session 的损坏引用，scoped 查询也必须 fail closed。
+    other = await seed_agent_scenario(db_engine, owner_id="other-owner")
+    other_session = await make_agent_service(other.factory).create_session(
+        other.actor, other.project.project_id, title=None
+    )
+    async with scenario.factory() as session:
+        await session.execute(
+            update(AgentArtifactORM)
+            .where(AgentArtifactORM.artifact_id == artifacts[0].artifact_id)
+            .values(
+                project_id=other.project.project_id,
+                session_id=other_session.session_id,
+            )
+        )
+        await session.commit()
+    async with scenario.factory() as session:
+        repository = SqlalchemyAgentRepository(session)
+        assert (
+            await repository.list_artifacts_scoped(
+                submitted.run_id, scenario.actor.owner_id
+            )
+            == []
+        )
+        assert (
+            await repository.get_artifact_scoped(
+                artifacts[0].artifact_id, scenario.actor.owner_id
+            )
+            is None
+        )
 
 
 class _CitedRuntime(FakeResearchAgentRuntime):

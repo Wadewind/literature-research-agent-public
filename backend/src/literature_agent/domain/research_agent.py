@@ -18,14 +18,14 @@ _AGENT_CANDIDATE_ID_MAX_LENGTH = 255
 _AGENT_CANDIDATE_NAME_MAX_LENGTH = 255
 _AGENT_CANDIDATE_MEDIA_TYPE_MAX_LENGTH = 255
 _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
-_AGENT_CANDIDATE_MAX_SIZE_BYTES = 1_000_000
+_AGENT_CANDIDATE_MAX_SIZE_BYTES = 10 * 1024 * 1024
 
-PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v1"
+PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v2"
 PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = (
-    "agent-policy.project-research-workspace-mcp.v1"
+    "agent-policy.project-research-workspace-mcp.v2"
 )
 PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = (
-    "agent-policy.project-research-capabilities.v1"
+    "agent-policy.project-research-capabilities.v2"
 )
 PROJECT_RESEARCH_WORKSPACE_TOOLS = (
     "search_project_chunks",
@@ -37,6 +37,7 @@ PROJECT_RESEARCH_WORKSPACE_TOOLS = (
     "glob",
     "grep",
     "execute",
+    "submit_artifact",
 )
 
 
@@ -55,9 +56,12 @@ class AgentMessageRole(StrEnum):
 
 
 class AgentArtifactCandidateStatus(StrEnum):
-    """Runtime 候选产物状态；切片 2 只允许 staged。"""
+    """候选产物必须经过显式校验并随 Turn 成功提交。"""
 
     STAGED = "staged"
+    VALIDATED = "validated"
+    COMMITTED = "committed"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +120,13 @@ class AgentArtifactCandidate:
     size_bytes: int
     status: AgentArtifactCandidateStatus
     created_at: datetime
+    tool_call_id: str | None = None
+    storage_key: str | None = None
+    sandbox_generation: int | None = None
+    sandbox_fencing_token: int | None = None
+    rejection_code: str | None = None
+    validated_at: datetime | None = None
+    committed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty(
@@ -137,7 +148,101 @@ class AgentArtifactCandidate:
         if not _SHA256_PATTERN.fullmatch(self.content_hash):
             raise ValueError("AgentArtifactCandidate content_hash 必须是小写 SHA-256")
         if not 0 <= self.size_bytes <= _AGENT_CANDIDATE_MAX_SIZE_BYTES:
-            raise ValueError("AgentArtifactCandidate size_bytes 必须在 0..1_000_000 范围内")
+            raise ValueError("AgentArtifactCandidate size_bytes 必须在 0..10_MiB 范围内")
+        if self.status is AgentArtifactCandidateStatus.STAGED:
+            if any(
+                value is not None
+                for value in (
+                    self.tool_call_id,
+                    self.storage_key,
+                    self.sandbox_generation,
+                    self.sandbox_fencing_token,
+                    self.rejection_code,
+                    self.validated_at,
+                    self.committed_at,
+                )
+            ):
+                raise ValueError("STAGED Candidate 不能携带已校验或终态字段")
+        elif self.status is AgentArtifactCandidateStatus.REJECTED:
+            if (
+                not self.rejection_code
+                or self.tool_call_id is not None
+                or self.storage_key is not None
+                or self.sandbox_generation is not None
+                or self.sandbox_fencing_token is not None
+                or self.validated_at is not None
+                or self.committed_at is not None
+            ):
+                raise ValueError("REJECTED Candidate 必须只携带安全拒绝码")
+        else:
+            if (
+                not self.tool_call_id
+                or not self.storage_key
+                or self.sandbox_generation is None
+                or self.sandbox_generation < 1
+                or self.sandbox_fencing_token is None
+                or self.sandbox_fencing_token < 1
+                or self.validated_at is None
+                or self.rejection_code is not None
+            ):
+                raise ValueError("VALIDATED/COMMITTED Candidate 缺少校验与 fence 事实")
+            if self.status is AgentArtifactCandidateStatus.COMMITTED and self.committed_at is None:
+                raise ValueError("COMMITTED Candidate 缺少 committed_at")
+            if (
+                self.status is AgentArtifactCandidateStatus.VALIDATED
+                and self.committed_at is not None
+            ):
+                raise ValueError("VALIDATED Candidate 不能提前携带 committed_at")
+
+    def validate(
+        self,
+        *,
+        tool_call_id: str,
+        storage_key: str,
+        sandbox_generation: int,
+        sandbox_fencing_token: int,
+        now: datetime | None = None,
+    ) -> "AgentArtifactCandidate":
+        """只允许 STAGED 幂等推进到 VALIDATED。"""
+        if self.status is AgentArtifactCandidateStatus.VALIDATED:
+            return self
+        if self.status is not AgentArtifactCandidateStatus.STAGED:
+            raise ValueError("Candidate 当前状态不能校验")
+        return replace(
+            self,
+            status=AgentArtifactCandidateStatus.VALIDATED,
+            tool_call_id=tool_call_id,
+            storage_key=storage_key,
+            sandbox_generation=sandbox_generation,
+            sandbox_fencing_token=sandbox_fencing_token,
+            validated_at=now or datetime.now(UTC),
+        )
+
+    def commit(self, *, now: datetime | None = None) -> "AgentArtifactCandidate":
+        """只有已校验 Candidate 能随业务 Turn 成功提交。"""
+        if self.status is AgentArtifactCandidateStatus.COMMITTED:
+            return self
+        if self.status is not AgentArtifactCandidateStatus.VALIDATED:
+            raise ValueError("只有 VALIDATED Candidate 可以提交")
+        return replace(
+            self,
+            status=AgentArtifactCandidateStatus.COMMITTED,
+            committed_at=now or datetime.now(UTC),
+        )
+
+    def reject(self, code: str) -> "AgentArtifactCandidate":
+        """永久非法 Candidate 进入不可恢复拒绝终态。"""
+        if self.status is AgentArtifactCandidateStatus.REJECTED:
+            return self
+        if self.status is not AgentArtifactCandidateStatus.STAGED:
+            raise ValueError("只有 STAGED Candidate 可以拒绝")
+        if not code.strip() or len(code) > 100:
+            raise ValueError("Candidate rejection_code 非法")
+        return replace(
+            self,
+            status=AgentArtifactCandidateStatus.REJECTED,
+            rejection_code=code,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +500,7 @@ def same_agent_artifact_candidate_fact(
     left: AgentArtifactCandidate,
     right: AgentArtifactCandidate,
 ) -> bool:
-    """比较可幂等收敛的稳定候选事实；忽略 Runtime ID 和创建时间。"""
+    """比较候选内容身份；忽略生命周期、物理位置与创建时间。"""
     return (
         left.owner_id,
         left.project_id,
@@ -406,7 +511,6 @@ def same_agent_artifact_candidate_fact(
         left.content_ref,
         left.content_hash,
         left.size_bytes,
-        left.status,
     ) == (
         right.owner_id,
         right.project_id,
@@ -417,7 +521,6 @@ def same_agent_artifact_candidate_fact(
         right.content_ref,
         right.content_hash,
         right.size_bytes,
-        right.status,
     )
 
 

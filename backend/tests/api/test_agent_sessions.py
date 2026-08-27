@@ -1,16 +1,19 @@
 """Phase 5 Agent Session API 契约。"""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
 from literature_agent.api.agent_sessions import (
+    get_agent_artifact_query_service,
     get_agent_session_service,
     get_mcp_configuration_service,
     get_skill_configuration_service,
     router,
 )
 from literature_agent.api.dependencies import get_actor
+from literature_agent.application.agent_artifact_service import AgentArtifactContent
 from literature_agent.application.agent_session_service import (
     AgentCitationView,
     AgentClaimView,
@@ -20,6 +23,8 @@ from literature_agent.application.agent_session_service import (
 from literature_agent.application.mcp_configuration_service import McpProfileView
 from literature_agent.application.skill_configuration_service import SkillProfileView
 from literature_agent.domain.actor import ActorContext
+from literature_agent.domain.agent_artifact import AgentArtifact
+from literature_agent.domain.exceptions import AgentArtifactNotFoundError, AgentTurnNotFoundError
 from literature_agent.domain.mcp_configuration import create_mcp_profile
 from literature_agent.domain.research_agent import (
     AgentMessageRole,
@@ -153,6 +158,72 @@ class _SkillService:
             kwargs["selections"],
             "1" * 64,
         )
+
+
+class _ArtifactService:
+    artifact = AgentArtifact(
+        artifact_id="00000000-0000-0000-0000-000000000001",
+        candidate_id="candidate-1",
+        owner_id="owner-1",
+        project_id="project-1",
+        session_id="session-1",
+        turn_run_id="run-1",
+        name="研究 图.png",
+        media_type="image/png",
+        content_hash="a" * 64,
+        size_bytes=24,
+        storage_key="private/key",
+        created_at=datetime.now(UTC),
+    )
+    content_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+    async def list_artifacts(self, owner_id, run_id):
+        if (owner_id, run_id) != ("owner-1", "run-1"):
+            raise AgentTurnNotFoundError(run_id)
+        return (self.artifact,)
+
+    async def content(self, owner_id, artifact_id):
+        if (owner_id, artifact_id) != ("owner-1", self.artifact.artifact_id):
+            raise AgentArtifactNotFoundError(artifact_id)
+        return AgentArtifactContent(self.artifact, self.content_bytes)
+
+
+def test_agent_artifact_api_hides_storage_and_serves_safe_verified_content() -> None:
+    app = create_app()
+    app.dependency_overrides[get_actor] = lambda: ActorContext(owner_id="owner-1")
+    app.dependency_overrides[get_agent_artifact_query_service] = _ArtifactService
+    with TestClient(app) as client:
+        listed = client.get("/api/v1/agent-turn-runs/run-1/artifacts")
+        content = client.get(
+            "/api/v1/agent-artifacts/00000000-0000-0000-0000-000000000001/content"
+        )
+        missing = client.get("/api/v1/agent-artifacts/missing/content")
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["previewable"] is True
+    assert "storage_key" not in listed.json()[0]
+    assert content.content == _ArtifactService.content_bytes
+    assert content.headers["x-content-type-options"] == "nosniff"
+    assert content.headers["content-disposition"].startswith("inline;")
+    assert missing.status_code == 404
+
+
+def test_agent_artifact_api_forces_pdf_to_attachment() -> None:
+    class _PdfArtifactService(_ArtifactService):
+        artifact = replace(
+            _ArtifactService.artifact,
+            name="report.pdf",
+            media_type="application/pdf",
+        )
+
+    app = create_app()
+    app.dependency_overrides[get_actor] = lambda: ActorContext(owner_id="owner-1")
+    app.dependency_overrides[get_agent_artifact_query_service] = _PdfArtifactService
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/agent-artifacts/00000000-0000-0000-0000-000000000001/content"
+        )
+    assert response.headers["content-disposition"].startswith("attachment;")
 
 
 def test_agent_api_returns_201_and_202_and_rejects_runtime_configuration() -> None:

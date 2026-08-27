@@ -2,6 +2,7 @@
 
 from typing import Protocol
 
+from literature_agent.domain.agent_artifact import AgentArtifact
 from literature_agent.domain.research_agent import (
     AgentArtifactCandidate,
     AgentMessage,
@@ -53,3 +54,27 @@ class AgentRepository(Protocol):
     async def list_candidates_scoped(
         self, run_id: str, owner_id: str
     ) -> list[AgentArtifactCandidate]: ...
+    async def get_candidate(self, candidate_id: str) -> AgentArtifactCandidate | None: ...
+    async def is_sandbox_fence_current(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        session_id: str,
+        turn_run_id: str,
+        sandbox_generation: int,
+        sandbox_fencing_token: int,
+    ) -> bool: ...
+    async def save_candidate(
+        self,
+        value: AgentArtifactCandidate,
+        *,
+        expected_status: str,
+    ) -> bool: ...
+    async def add_artifact_if_absent(self, value: AgentArtifact) -> AgentArtifact: ...
+    async def list_artifacts_scoped(
+        self, run_id: str, owner_id: str
+    ) -> list[AgentArtifact]: ...
+    async def get_artifact_scoped(
+        self, artifact_id: str, owner_id: str
+    ) -> AgentArtifact | None: ...

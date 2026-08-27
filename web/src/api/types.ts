@@ -312,6 +312,17 @@ export interface AgentCandidate {
   status: string;
 }
 
+export interface AgentArtifact {
+  artifact_id: string;
+  turn_run_id: string;
+  name: string;
+  media_type: string;
+  content_hash: string;
+  size_bytes: number;
+  previewable: boolean;
+  created_at: string;
+}
+
 export interface AgentTurn {
   run_id: string;
   session_id: string;

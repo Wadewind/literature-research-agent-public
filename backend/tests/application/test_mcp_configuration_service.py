@@ -188,7 +188,7 @@ async def test_turn_freezes_profile_version_config_hash_and_tool_schema(db_engin
     )
     turn = await agent_service.get_turn(scenario.actor, posted.run_id)
 
-    assert turn.policy_snapshot.policy_version.endswith("-mcp.v1")
+    assert turn.policy_snapshot.policy_version.endswith("-mcp.v2")
     profile_id = turn.policy_snapshot.mcp_refs[0].profile_id
     assert profile_id
     assert turn.policy_snapshot.mcp_refs[0].profile_revision == 1

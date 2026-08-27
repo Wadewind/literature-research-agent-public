@@ -79,6 +79,9 @@ egress、URL/SSRF 与 PDF 下载安全，以及最小硬预算、Sandbox 清理�
 契约缺口审计并形成 [`Research Agent 精简安全契约`](../spec/research-agent-security-contract.md)：明确区分
 Phase 5 已验证事实与后续目标，冻结 owner/Project/Session/Turn/Sandbox generation/Workspace/Artifact
 所有权、信任与 Secret 边界、自动执行/直接拒绝矩阵、历史 Approval 字段兼容、事务外 I/O、取消/fence/
-Effectively Once、API/Event 增量和 Slice 2–8 安全门槛。本切片没有新增运行逻辑或安全验证结论；下一
-切片为 Agent 输出 Artifact。最终 UI 同时受
+Effectively Once、API/Event 增量和 Slice 2–8 安全门槛。Slice 2 已完成
+[Agent 输出 Artifact 交付](modules/agent-artifact-delivery.md)：真实 Sandbox Tool、Candidate 生命周期、
+事务外 Storage/文件校验、Turn 成功原子发布、owner-scoped 下载与壳层无关成果组件均已落地；Fake
+descriptor 仍不可下载，真实 OpenSandbox Artifact Smoke 与生产级扫描没有被伪称通过。下一切片为
+Browser 画面与跨 Turn 人工控制。最终 UI 同时受
 [`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-redesign.md)约束，前置功能组件必须保持壳层无关。

@@ -1,5 +1,6 @@
-import type { AgentMessage, AgentTurn, CitationSummary, ReviewOutput } from "../api/types";
+import type { AgentArtifact, AgentMessage, AgentTurn, CitationSummary, ReviewOutput } from "../api/types";
 import { formatCandidateSize, projectIndexLabel } from "../agent/presentation";
+import AgentArtifactList from "./AgentArtifactList";
 
 interface AgentEvidenceMarginProps {
   projectId: string;
@@ -11,6 +12,9 @@ interface AgentEvidenceMarginProps {
   selectedEvidence: CitationSummary | null;
   onSelectEvidence: (value: CitationSummary) => void;
   onClearEvidence: () => void;
+  artifacts: AgentArtifact[] | undefined;
+  artifactsLoading: boolean;
+  artifactsError: boolean;
 }
 
 function pageLabel(citation: CitationSummary): string {
@@ -31,6 +35,9 @@ export default function AgentEvidenceMargin({
   selectedEvidence,
   onSelectEvidence,
   onClearEvidence,
+  artifacts,
+  artifactsLoading,
+  artifactsError,
 }: AgentEvidenceMarginProps) {
   const claims = assistantMessages.flatMap((message) => message.claims ?? []);
   const activeMatrixId = matrix?.output_id ?? turn?.review_output_id;
@@ -53,7 +60,7 @@ export default function AgentEvidenceMargin({
               : projectIndexLabel(indexCount, indexScope)}
           </dd>
         </div>
-        <div><dt>候选成果</dt><dd>{turn?.candidates.length ?? 0} 项 staged</dd></div>
+        <div><dt>正式成果</dt><dd>{artifacts?.length ?? 0} 项 committed</dd></div>
       </dl>
 
       {selectedEvidence ? (
@@ -93,8 +100,10 @@ export default function AgentEvidenceMargin({
         </section>
       )}
 
-      <section className="agent-candidate-list">
-        <h3>候选成果</h3>
+      <AgentArtifactList artifacts={artifacts} loading={artifactsLoading} error={artifactsError} />
+
+      <details className="agent-candidate-list">
+        <summary>内部候选 · {turn?.candidates.length ?? 0}</summary>
         {turn?.candidates.length === 0 && <p className="muted">本轮没有暂存候选成果。</p>}
         {turn?.candidates.map((candidate) => (
           <article key={candidate.candidate_id}>
@@ -103,7 +112,7 @@ export default function AgentEvidenceMargin({
             <span className="badge badge-pending">{candidate.status}</span>
           </article>
         ))}
-      </section>
+      </details>
     </aside>
   );
 }

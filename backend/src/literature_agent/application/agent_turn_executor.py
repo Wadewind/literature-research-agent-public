@@ -6,6 +6,9 @@ from contextlib import AbstractAsyncContextManager, suppress
 from typing import TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
+from literature_agent.application.ports.agent_artifact_publisher import (
+    AgentArtifactPublisher,
+)
 from literature_agent.application.ports.agent_repository import AgentRepository
 from literature_agent.application.ports.claim_set_repository import ClaimSetRepository
 from literature_agent.application.ports.event_notifier import EventNotifier, NoopEventNotifier
@@ -74,6 +77,8 @@ class AgentTurnExecutor[TSession: Session]:
         ]
         | None = None,
         workspace_snapshot_required: bool = False,
+        agent_artifact_publisher_factory: Callable[[TSession], AgentArtifactPublisher]
+        | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
@@ -88,6 +93,7 @@ class AgentTurnExecutor[TSession: Session]:
             workspace_snapshot_publisher_factory
         )
         self._workspace_snapshot_required = workspace_snapshot_required
+        self._agent_artifact_publisher_factory = agent_artifact_publisher_factory
         if workspace_snapshot_required and workspace_snapshot_publisher_factory is None:
             raise ValueError("Deep Runtime 必须配置 WorkspaceSnapshot publisher")
 
@@ -255,6 +261,17 @@ class AgentTurnExecutor[TSession: Session]:
                     raise RunConcurrentModificationError(run.run_id)
                 staged.append(saved)
 
+            artifacts = (
+                await self._agent_artifact_publisher_factory(session).publish_for_success(
+                    owner_id=run.owner_id,
+                    project_id=run.project_id,
+                    session_id=turn.session_id,
+                    turn_run_id=run.run_id,
+                )
+                if self._agent_artifact_publisher_factory is not None
+                else ()
+            )
+
             event_repo = self._event_repo_factory(session)
             event_sequence = locked.event_sequence
             await event_repo.add(
@@ -288,6 +305,24 @@ class AgentTurnExecutor[TSession: Session]:
                     )
                 )
                 event_sequence += 1
+            for artifact in artifacts:
+                await event_repo.add(
+                    create_event(
+                        run.run_id,
+                        event_sequence,
+                        "agent_artifact_committed",
+                        "system",
+                        correlation_id,
+                        {
+                            "artifact_id": artifact.artifact_id,
+                            "candidate_id": artifact.candidate_id,
+                            "content_hash": artifact.content_hash,
+                            "size_bytes": artifact.size_bytes,
+                            "media_type": artifact.media_type,
+                        },
+                    )
+                )
+                event_sequence += 1
             await event_repo.add(
                 create_event(
                     run.run_id,
@@ -298,6 +333,7 @@ class AgentTurnExecutor[TSession: Session]:
                     {
                         "assistant_message_id": assistant.message_id,
                         "candidate_count": len(staged),
+                        "artifact_count": len(artifacts),
                         "evidence_count": len(result.evidence_ids),
                     },
                 )

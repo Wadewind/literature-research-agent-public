@@ -5,10 +5,12 @@ import subprocess
 import sys
 from typing import cast
 
-from sqlalchemy import Table
+from sqlalchemy import Table, create_engine, inspect
 from testcontainers.community.postgres import PostgresContainer
 
 from literature_agent.infrastructure.persistence.models import (
+    AgentArtifactCandidateORM,
+    AgentArtifactORM,
     AgentContextSnapshotORM,
     AgentMcpProfileORM,
     AgentOwnerSkillORM,
@@ -20,6 +22,36 @@ from literature_agent.infrastructure.persistence.models import (
     AgentTurnRunORM,
     AgentWorkspaceSnapshotORM,
 )
+
+
+def test_agent_artifact_is_independent_immutable_business_fact() -> None:
+    """正式 AgentArtifact 独立于 Review Artifact，并闭合 Candidate/Turn/Session。"""
+    candidate_columns = set(AgentArtifactCandidateORM.__table__.columns.keys())
+    artifact_targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentArtifactORM.__table__.foreign_keys
+    }
+    assert {
+        "tool_call_id",
+        "storage_key",
+        "sandbox_generation",
+        "sandbox_fencing_token",
+        "validated_at",
+        "committed_at",
+    } <= candidate_columns
+    assert artifact_targets == {
+        "agent_artifact_candidates.candidate_id",
+        "agent_sessions.session_id",
+        "agent_turn_runs.turn_run_id",
+        "projects.project_id",
+    }
+    assert {
+        constraint.name
+        for constraint in AgentArtifactCandidateORM.__table__.constraints
+    } >= {
+        "ck_agent_candidate_status",
+        "ck_agent_candidate_state_fields",
+    }
 
 
 def test_agent_turn_foreign_keys_close_the_business_fact_graph() -> None:
@@ -166,12 +198,35 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         url = postgres.get_connection_url().replace(
             "postgresql+psycopg2://", "postgresql+psycopg://"
         )
-        env = {**os.environ, "DATABASE_URL": url}
-        for args in (
-            (sys.executable, "-m", "alembic", "upgrade", "head"),
-            (sys.executable, "-m", "alembic", "downgrade", "-1"),
-            (sys.executable, "-m", "alembic", "upgrade", "head"),
-            (sys.executable, "-m", "alembic", "check"),
-        ):
+        env = {**os.environ, "AGENT_DATABASE_URL": url}
+        def run_alembic(*arguments: str) -> None:
+            args = (sys.executable, "-m", "alembic", *arguments)
             result = subprocess.run(args, env=env, capture_output=True, text=True)
             assert result.returncode == 0, result.stdout + result.stderr
+
+        def candidate_checks() -> dict[str, str]:
+            engine = create_engine(url)
+            try:
+                return {
+                    value["name"]: value["sqltext"]
+                    for value in inspect(engine).get_check_constraints(
+                        "agent_artifact_candidates"
+                    )
+                    if value["name"] is not None
+                }
+            finally:
+                engine.dispose()
+
+        run_alembic("upgrade", "head")
+        state_check = candidate_checks()["ck_agent_candidate_state_fields"]
+        assert all(
+            value in state_check
+            for value in ("staged", "validated", "committed", "rejected")
+        )
+        assert "sandbox_generation > 0" in state_check
+        assert "sandbox_fencing_token > 0" in state_check
+        run_alembic("downgrade", "-1")
+        assert "ck_agent_candidate_state_fields" not in candidate_checks()
+        run_alembic("upgrade", "head")
+        assert "ck_agent_candidate_state_fields" in candidate_checks()
+        run_alembic("check")

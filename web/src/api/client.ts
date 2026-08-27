@@ -57,6 +57,11 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return (await response.json()) as T;
 }
 
+/** 正式 Artifact 内容地址；Candidate 没有可下载 URL。 */
+export function agentArtifactContentUrl(artifactId: string): string {
+  return `/api/v1/agent-artifacts/${encodeURIComponent(artifactId)}/content`;
+}
+
 /** 把错误映射为面向用户的可见提示。 */
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {

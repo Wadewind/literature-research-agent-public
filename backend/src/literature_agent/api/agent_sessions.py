@@ -2,11 +2,16 @@
 
 from datetime import datetime
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
+from literature_agent.application.agent_artifact_service import (
+    AgentArtifactQueryService,
+    AgentArtifactServiceError,
+)
 from literature_agent.application.agent_session_service import AgentSessionService
 from literature_agent.application.mcp_configuration_service import (
     McpConfigurationService,
@@ -17,6 +22,7 @@ from literature_agent.application.skill_configuration_service import (
     SkillProfileView,
 )
 from literature_agent.domain.exceptions import (
+    AgentArtifactNotFoundError,
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
     AgentSessionNotFoundError,
@@ -143,6 +149,17 @@ class CandidateResponse(BaseModel):
     status: str
 
 
+class AgentArtifactResponse(BaseModel):
+    artifact_id: str
+    turn_run_id: str
+    name: str
+    media_type: str
+    content_hash: str
+    size_bytes: int
+    previewable: bool
+    created_at: datetime
+
+
 class TurnResponse(BaseModel):
     run_id: str
     session_id: str
@@ -256,6 +273,22 @@ async def get_agent_session_service(request: Request) -> AgentSessionService:
 
 
 ServiceDep = Annotated[AgentSessionService, Depends(get_agent_session_service)]
+
+
+async def get_agent_artifact_query_service(
+    request: Request,
+) -> AgentArtifactQueryService:
+    state = request.app.state.app_state
+    return AgentArtifactQueryService(
+        session_factory=state.session_factory,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        storage=state.storage,
+    )
+
+
+AgentArtifactServiceDep = Annotated[
+    AgentArtifactQueryService, Depends(get_agent_artifact_query_service)
+]
 
 
 async def get_mcp_configuration_service(request: Request) -> McpConfigurationService:
@@ -708,3 +741,65 @@ async def get_turn(run_id: str, actor: ActorDep, service: ServiceDep) -> TurnRes
         )
     except Exception as exc:
         raise _translate(exc) from exc
+
+
+@router.get(
+    "/agent-turn-runs/{run_id}/artifacts",
+    response_model=list[AgentArtifactResponse],
+)
+async def list_agent_artifacts(
+    run_id: str,
+    actor: ActorDep,
+    service: AgentArtifactServiceDep,
+) -> list[AgentArtifactResponse]:
+    try:
+        values = await service.list_artifacts(actor.owner_id, run_id)
+    except AgentTurnNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "agent_turn_not_found") from exc
+    return [
+        AgentArtifactResponse(
+            artifact_id=value.artifact_id,
+            turn_run_id=value.turn_run_id,
+            name=value.name,
+            media_type=value.media_type,
+            content_hash=value.content_hash,
+            size_bytes=value.size_bytes,
+            previewable=value.previewable,
+            created_at=value.created_at,
+        )
+        for value in values
+    ]
+
+
+@router.get("/agent-artifacts/{artifact_id}/content", response_class=Response)
+async def get_agent_artifact_content(
+    artifact_id: str,
+    actor: ActorDep,
+    service: AgentArtifactServiceDep,
+) -> Response:
+    try:
+        result = await service.content(actor.owner_id, artifact_id)
+    except AgentArtifactNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "agent_artifact_not_found") from exc
+    except AgentArtifactServiceError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if exc.temporary
+            else status.HTTP_409_CONFLICT,
+            exc.code,
+        ) from exc
+    artifact = result.artifact
+    disposition = "inline" if artifact.previewable else "attachment"
+    fallback = "artifact" + artifact.name[artifact.name.rfind(".") :]
+    encoded_name = quote(artifact.name, safe="")
+    return Response(
+        content=result.content,
+        media_type=artifact.media_type,
+        headers={
+            "Content-Disposition": (
+                f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded_name}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )

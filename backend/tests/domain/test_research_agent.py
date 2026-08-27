@@ -1,6 +1,6 @@
 """Research Agent Session/Message/Turn/Snapshot 领域契约测试。"""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -9,6 +9,7 @@ from literature_agent.domain.research_agent import (
     PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION,
     PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION,
     PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION,
+    AgentArtifactCandidateStatus,
     AgentMessageRole,
     AgentSessionStatus,
     ArtifactContextRef,
@@ -311,7 +312,7 @@ def test_runtime_binding_rejects_invalid_generation_or_empty_session_binding_ref
         ("content_ref", "r" * 501, "content_ref"),
         ("content_hash", "bad", "SHA-256"),
         ("size_bytes", -1, "size_bytes"),
-        ("size_bytes", 1_000_001, "size_bytes"),
+        ("size_bytes", 10 * 1024 * 1024 + 1, "size_bytes"),
     ],
 )
 def test_artifact_candidate_rejects_unbounded_or_invalid_runtime_metadata(
@@ -342,7 +343,7 @@ def test_artifact_candidate_rejects_unbounded_or_invalid_runtime_metadata(
 
 def test_artifact_candidate_accepts_boundary_sizes() -> None:
     """候选元数据允许空文件和切片 2 上限内的小型文件描述。"""
-    for size_bytes in (0, 1_000_000):
+    for size_bytes in (0, 10 * 1024 * 1024):
         candidate = create_agent_artifact_candidate(
             candidate_id=f"candidate-{size_bytes}",
             owner_id="owner-1",
@@ -357,6 +358,68 @@ def test_artifact_candidate_accepts_boundary_sizes() -> None:
         )
 
         assert candidate.size_bytes == size_bytes
+
+
+def test_artifact_candidate_allows_only_validated_commit_path() -> None:
+    candidate = create_agent_artifact_candidate(
+        candidate_id="candidate-1",
+        owner_id="owner-1",
+        project_id="project-1",
+        session_id="session-1",
+        turn_run_id="turn-1",
+        name="chart.png",
+        media_type="image/png",
+        content_ref="/workspace/outputs/chart.png",
+        content_hash="a" * 64,
+        size_bytes=12,
+    )
+
+    with pytest.raises(ValueError, match="VALIDATED"):
+        candidate.commit()
+    validated = candidate.validate(
+        tool_call_id="call-1",
+        storage_key="agent-artifacts/owner/session/turn/staging/hash",
+        sandbox_generation=2,
+        sandbox_fencing_token=3,
+    )
+    committed = validated.commit()
+
+    assert validated.status is AgentArtifactCandidateStatus.VALIDATED
+    assert committed.status is AgentArtifactCandidateStatus.COMMITTED
+    assert committed.commit() == committed
+    with pytest.raises(ValueError, match="STAGED"):
+        validated.reject("bad")
+
+
+def test_artifact_candidate_rejects_state_field_mismatch() -> None:
+    staged = create_agent_artifact_candidate(
+        candidate_id="candidate-state-fields",
+        owner_id="owner-1",
+        project_id="project-1",
+        session_id="session-1",
+        turn_run_id="turn-1",
+        name="chart.png",
+        media_type="image/png",
+        content_ref="/workspace/outputs/chart.png",
+        content_hash="a" * 64,
+        size_bytes=24,
+    )
+
+    with pytest.raises(ValueError, match="STAGED"):
+        replace(staged, tool_call_id="call-illegal")
+    rejected = staged.reject("artifact_magic_mismatch")
+    with pytest.raises(ValueError, match="REJECTED"):
+        replace(rejected, storage_key="private/key")
+    validated = staged.validate(
+        tool_call_id="call-1",
+        storage_key="private/key",
+        sandbox_generation=1,
+        sandbox_fencing_token=1,
+    )
+    with pytest.raises(ValueError, match="VALIDATED/COMMITTED"):
+        replace(validated, sandbox_generation=0)
+    with pytest.raises(ValueError, match="committed_at"):
+        replace(validated, status=AgentArtifactCandidateStatus.COMMITTED)
 
 
 def test_agent_turn_is_a_supported_run_type_without_changing_state_machine() -> None:
