@@ -115,6 +115,10 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
   完成，noVNC/公共下载仍未完成；7.4 已把 Native Skills 放在 Sandbox `execute` 不可见的只读虚拟 Backend，
   没有改变物理 Workspace。公共网络与统一 egress 后移到 Phase 6。
 - `max_model_calls` 仍不覆盖 SummarizationMiddleware 内部重试或已在途 Provider 不确定窗口。
+- WorkspaceSnapshot 仍只服务 Runtime 跨 Turn 恢复，不是用户文件列表。Real Deep Agents Runtime 尚未把
+  `/workspace` 文件转换为可下载 Candidate，当前 Agent UI 也没有附件上传或 Candidate 内容下载。ADR-0010
+  已决定由 Phase 6 增加 `/workspace/inbox` Attachment 物化、`/workspace/outputs` 显式
+  `submit_artifact`、独立 AgentArtifact 和业务成功条件提交；不会自动发布整个 Snapshot。
 
 ## 代码入口
 

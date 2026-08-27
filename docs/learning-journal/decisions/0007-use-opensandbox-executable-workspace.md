@@ -7,6 +7,10 @@
 > 2026-08-27 修订：ADR-0008 取代本文关于 Browser/MCP/Skill 实现方式、公共 egress 验收范围和
 > Slice 7.2–7.4 顺序的决定。本文关于 OpenSandbox Lease、WorkspaceSnapshot、宿主隔离、固定镜像和
 > Sandbox `execute` 的决定继续有效。
+>
+> 2026-08-28 修订：ADR-0009 取代本文“首版不支持登录站点”的绝对表述，允许用户在两个 Turn 之间
+> 操作同一 generation 的 Chromium，但不托管凭据或跨 generation 保存登录；ADR-0010 固定显式
+> Attachment/`submit_artifact` 文件交换，不把 WorkspaceSnapshot 直接作为下载资源。
 
 ## 背景
 
@@ -17,8 +21,8 @@ Phase 5 切片 1–6 已建立 `AgentSession`、逐轮 `AgentTurnRun`、`Researc
 
 上述是本 ADR 作出时的基线。切片 7.0 随后完成真实 Runtime enablement；切片 7.1 已完成 OpenSandbox
 薄 Adapter、Session Lease、WorkspaceSnapshot、统一 Tool 预算与 checkpoint pool 的实现和离线/临时
-PostgreSQL 验证。后续 7.3 已接固定 Playwright/arXiv MCP，7.4 已接原生声明式 Skills；真实 OpenSandbox
-proxy/Provider Smoke 尚未运行。
+PostgreSQL 验证。后续 7.3 已接固定 Playwright/arXiv MCP，7.4 已接原生声明式 Skills；2026-08-28 已
+完成本地 OpenSandbox proxy/Provider 功能 Smoke，但 secure runtime 与公网安全仍未验证。
 
 后续能力 Spike 需要允许 Research Agent 在隔离环境中执行 Python 数据处理、生成图表，并让文件工具、
 代码执行和浏览器下载操作同一个 Session Workspace。仅把 Sandbox 当作受限文件后端、同时隐藏
@@ -106,7 +110,8 @@ OpenSandbox 中执行。该能力不等于开放宿主 Shell、宿主 Python 或
   最终 URL、哈希、MIME、大小和恶意文件策略留到 Phase 6；
 - noVNC 在 Phase 5 只可作为可信本地诊断能力。面向用户的画面需要浏览器鉴权代理和 owner/Session 映射，
   留到 Phase 6 UI/安全强化；
-- 首版仍不支持登录站点、Cookie/用户凭据委托、付费墙、CAPTCHA 或对外写操作。
+- Agent 自动化首版仍不接收 Cookie/用户凭据委托，不绕过付费墙/CAPTCHA，也不执行对外写操作；
+  ADR-0009 仅允许用户在两个 Turn 之间亲自操作同一 generation 的 Chromium，登录状态不持久化。
 
 ### MCP 与 Skills
 

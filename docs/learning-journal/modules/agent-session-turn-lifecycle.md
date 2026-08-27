@@ -92,6 +92,10 @@ reconcile/collect、终态 ACK 重放、已有 RUNNING Execution 不重复 execu
 正式 Project Retriever/Matrix Reader/Citation Validator 属于切片 5。Deep Agents、MCP、
 Browser、Sandbox、WorkspaceSnapshot 和 Skills 均未接入。
 
+其中 staged-only Candidate 是本切片的历史实现边界。ADR-0010 已决定 Phase 6 用显式
+`submit_artifact`、独立 AgentArtifact 和业务成功条件提交补全真实文件内容、预览与下载；不会把当前
+descriptor、WorkspaceSnapshot 或 Review Artifact 静默改成正式 Agent 产物。
+
 因此本切片证明的是业务事实和事务闭环可以保留，并不证明平台已经实现或取代 Deep Agents 的消息管理；
 原生两轮 Thread、Checkpoint 和 summarization 必须在切片 4 使用 Fake Chat Model 独立验证。
 

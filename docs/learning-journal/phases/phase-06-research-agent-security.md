@@ -3,16 +3,17 @@
 ## 状态
 
 计划中，尚未开始实现。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25；按 ADR-0007
-调整日期：2026-08-26；按 ADR-0008 调整日期：2026-08-27。
+调整日期：2026-08-26；按 ADR-0008 调整日期：2026-08-27；按 ADR-0009/0010 对齐 Browser 人工控制与
+Agent 文件交换日期：2026-08-28。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
 Playwright MCP、现有 Search MCP 与 Deep Agents 原生 Skills 的最小验证提前到 Phase 5。本阶段不重复
 这些 Spike，而是在其实际证据基础上完成完整 Registry、审批、公共网络/下载安全、UI 和运维强化。
-其中 Slice 7.1 已完成 OpenSandbox/Lease/WorkspaceSnapshot 的实现与离线/临时 PostgreSQL 验证；真实
-OpenSandbox proxy/Provider Smoke 仍未完成；Phase 5 的 7.2 MCP 配置、7.3 固定 Playwright/arXiv MCP
-镜像内回路和 7.4 Native Skills 已完成受限离线验证，但不替代本阶段的公共网络、下载、Prompt
-Injection 与完整治理验证。
+其中 Slice 7.1 已完成 OpenSandbox/Lease/WorkspaceSnapshot 的实现与离线/临时 PostgreSQL 验证；
+2026-08-28 又通过本地 OpenSandbox Server Proxy 完成功能 Smoke。Phase 5 的 7.2 MCP 配置、7.3 固定
+Playwright/arXiv MCP 镜像内回路和 7.4 Native Skills 已完成受限验证，但不替代本阶段的公共网络、下载、
+Prompt Injection、面向用户的 Browser 画面与完整治理验证。
 
 进入条件：Phase 5 已完成并通过 ADR 确认 Deep Agents 的版本策略、部署拓扑、`ResearchAgentRuntime` 契约、MCP 模式、Sandbox Provider、重试所有权和升级方法；Phase 5 的安全、取消、断连和重复副作用验证没有未解决的阻塞项。
 
@@ -21,7 +22,9 @@ Injection 与完整治理验证。
 把 Phase 5 的多轮集成 Spike 扩展为可用、受限、可观察的 Research Workspace Agent。用户可以在一个
 Project 内持续对话，让 Agent 使用授权的 Paper Chunk Index、Review Evidence Matrix 和 Artifact 自主
 分析研究问题，并按需发现公开资源或在隔离 Sandbox 中处理数据；用户可以查看每轮状态、来源、Tool
-调用、预算、审批、错误和 Artifact，并能取消当前 Turn 或拒绝危险操作。
+调用、预算、审批、错误和 Artifact，并能取消当前 Turn 或拒绝危险操作。首个产品增量还允许用户在两个
+Turn 之间操作同一 Session Chromium 完成登录等人工步骤，并能让 Agent 把 Sandbox 中生成的图片、表格
+或报告显式提交为可预览、可下载的正式产物。
 
 ```text
 创建/打开 Project-scoped AgentSession
@@ -57,6 +60,10 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 - 平台安装、版本化和 allowlist 控制的 Research Skills，以及 owner-scoped 声明式 Skill 的安全治理；
 - 基于 Phase 5 OpenSandbox `execute` 与固定依赖的实际 Spike 证据，强化并产品化结构化、受限的数据分析
   与绘图能力。
+- Session/generation 范围的 Browser 画面与跨 Turn 人工控制；用户完成操作后由下一 Turn 的
+  Playwright `browser_snapshot` 读取更新状态；
+- AgentAttachment、`submit_artifact`、AgentArtifactCandidate 与 AgentArtifact 的显式文件交换、预览和
+  下载闭环。
 
 ### 不包含
 
@@ -68,6 +75,8 @@ Runtime 不影响文献导入、RAG 和固定 Review Workflow。
 - 宿主 Shell、宿主 Python、动态包安装、Docker Socket 或宿主文件系统；Sandbox `execute` 仅限
   ADR-0007 的 Session 专属 OpenSandbox；
 - 绕过登录、付费墙、robots/站点限制、CAPTCHA 或下载授权；
+- 平台托管用户名、密码、Cookie、验证码或 Chrome Profile；首版人工 Browser 控制只在两个 Turn 之间
+  发生，不提供运行中 Turn 的并发抢占或自动跨 generation 登录恢复；
 - 自动对外发帖、发邮件、提交表单、修改远程仓库或执行金融/不可逆操作；
 - 无上限自主运行、无限子 Agent、跨 Project Memory 或跨用户共享 Workspace；
 - 把网页/论文中的指令视为系统指令；
@@ -112,9 +121,12 @@ Tool Execution     一次版本化 Tool/MCP 调用及副作用幂等记录
 Approval Request   等待用户批准、编辑或拒绝的动作
 Workspace          Session 逻辑命名空间与 Session/Thread 范围短 TTL Sandbox Lease
 WorkspaceSnapshot  跨 Turn 持久化的内部工作文件与 Manifest
+BrowserControlLease 用户在当前 Session/generation 操作 Chromium 的短时控制权
+AgentAttachment     用户显式授权给 Session/Turn 的输入文件
 Usage/Budget       已消费与剩余额度的业务事实
 Resource Manifest  发现的外部资源及来源验证结果
-Artifact           通过平台校验并持久化的文件
+AgentArtifactCandidate 显式 submit 后、尚未随业务 Turn 提交的文件候选
+Artifact           通过平台校验并持久化的 Review 或 Agent 文件
 ```
 
 - PostgreSQL 保存 Session、Message、Turn Run、Context/Policy/Workspace Snapshot、Attempt、Event、
@@ -124,6 +136,10 @@ Artifact           通过平台校验并持久化的文件
   复用同一 Thread 并只追加新消息，完整产品历史只在 Runtime 损坏或 generation 迁移时受控重建；
 - ContextSnapshot 的消息 sequence 只是审计、对账与重建水位，不进入日常 Prompt 重放；
 - Sandbox Provider 保存临时 Workspace；其文件只有被平台显式取回、校验和提交后才成为 Artifact；
+- BrowserControlLease 只是用户画面/输入的控制权，不替代 SandboxLease。首版只在没有活动 Turn 时进入
+  MANUAL，结束或过期后才能创建下一 Turn；
+- AgentAttachment、AgentArtifactCandidate 和 AgentArtifact 是平台业务事实；Sandbox 路径和
+  WorkspaceSnapshot 不能作为公开下载身份；
 - Valkey/ARQ 只负责投递和实时通知；SDK Trace 只用于调试和诊断；
 - Run Step 复用 Phase 3 的通用业务投影，不逐条复制 SDK 内部节点或完整推理；
 - 一个 Runtime、MCP 或 Sandbox 标识不能脱离 `session_id`、`turn_run_id`、owner 和 Project 映射被公开查询。
@@ -215,6 +231,17 @@ Search MCP。Phase 6 才建设完整 Registry、Catalog 审核/禁用、OAuth/Cr
 
 ## Browser、URL 和下载安全
 
+### 跨 Turn 人工浏览器控制
+
+ADR-0009 固定首版为“Agent Turn 结束 → 用户操作同一 Chromium → 新 Turn 继续”，不在运行中的 Turn 内
+引入 LangGraph Interrupt。平台通过鉴权代理或短时受控票据展示当前 owner/Session/generation 的画面，
+不向 Web 返回原始 VNC/noVNC/CDP/MCP/OpenSandbox endpoint。人工控制和 Agent 控制互斥；平台只记录
+开始、结束、过期和 generation 变化，不记录点击、按键、页面正文、凭据或 Cookie。
+
+登录状态只在当前物理 generation 内 best effort 保留，不进入 WorkspaceSnapshot。default-deny 网络下
+先用 Sandbox 内合成登录页验收；真实固定站点只有在统一 egress、URL/DNS/Redirect/SSRF 策略完成后才可
+显式验证。复杂同 Turn 等待以后再决定是否使用 `WAITING_INPUT + interrupt/resume`。
+
 ### URL Policy
 
 - 只允许 `https`，明确需要时才对固定测试目标开放 `http`；
@@ -260,6 +287,17 @@ Search MCP。Phase 6 才建设完整 Registry、Catalog 审核/禁用、OAuth/Cr
   Turn 终态不自动销毁仍有效的 Session 级 Lease。清理失败进入可观察的补偿队列；
 - Artifact 提交后仍不信任 Workspace，必须由平台重新读取并校验。
 
+### Agent 文件交换与 Artifact
+
+ADR-0010 将用户附件、内部 WorkspaceSnapshot、Candidate 和正式 AgentArtifact 分开：附件通过业务
+Storage 与 ID 授权后物化到 `/workspace/inbox/`；Agent 只有显式调用 `submit_artifact` 才能把
+`/workspace/outputs/` 的普通文件带出 Sandbox。平台在事务外重新读取并校验 path/type/size/MIME/magic/
+hash，再写内容寻址 staging Storage；只有业务 Turn 成功的短事务可以发布不可变 AgentArtifact。
+
+首版支持研究所需的图片、PDF、CSV、Markdown、纯文本和 JSON；未知归档、可执行文件、宏文档、symlink
+和路径穿越拒绝。不自动扫描或发布整个 `/workspace`，也不把 ReviewRun 强绑定的既有 Artifact 表直接
+泛化。Playwright `browser_file_upload` 继续关闭，后续只能通过引用 Attachment ID 的平台 Tool 增加。
+
 ### 受限代码分析
 
 ADR-0007 已批准 Phase 5 Slice 7 在 OpenSandbox 中开放 `execute`，用于研究数据处理与绘图。Phase 6 的
@@ -301,6 +339,13 @@ GET  /api/v1/agent-turn-runs/{run_id}/manifest
 GET  /api/v1/agent-turn-runs/{run_id}/tool-executions
 GET  /api/v1/agent-turn-runs/{run_id}/approvals
 POST /api/v1/agent-turn-runs/{run_id}/approvals/{approval_id}/decisions
+POST /api/v1/agent-sessions/{session_id}/browser-control
+DELETE /api/v1/agent-sessions/{session_id}/browser-control
+GET  /api/v1/agent-sessions/{session_id}/browser-view
+POST /api/v1/agent-sessions/{session_id}/attachments
+DELETE /api/v1/agent-sessions/{session_id}/attachments/{attachment_id}
+GET  /api/v1/agent-turn-runs/{run_id}/artifacts
+GET  /api/v1/agent-artifacts/{artifact_id}/content
 GET  /api/v1/runs/{run_id}/events
 GET  /api/v1/runs/{run_id}/events/stream
 GET  /api/v1/artifacts/{artifact_id}
@@ -328,6 +373,13 @@ agent_workspace_cleanup_requested
 agent_workspace_cleaned
 agent_policy_violation
 agent_no_progress_detected
+agent_browser_control_started
+agent_browser_control_ended
+agent_browser_control_expired
+agent_attachment_added
+agent_artifact_staged
+agent_artifact_committed
+agent_artifact_rejected
 ```
 
 Event Payload 保持小型、版本化和脱敏。高频 Token/流式片段不逐条写 PostgreSQL；聚合 Usage 周期性或在边界事件中提交。
@@ -342,14 +394,16 @@ AgentSession
  ├─ RuntimeThreadBinding
  ├─ SandboxLease
  ├─ WorkspaceSnapshot
+ ├─ BrowserControlLease
+ ├─ AgentAttachment
  └─ AgentTurnRun ── ContextSnapshot / PolicySnapshot
       ├─ RuntimeExecutionBinding
       ├─ RunStep
       ├─ ToolExecution ── ApprovalRequest
       ├─ UsageLedger
       ├─ ResourceManifest ── ManifestItem
-      ├─ Event
-      └─ Artifact
+      ├─ AgentArtifactCandidate ── AgentArtifact
+      └─ Event
 ```
 
 唯一约束至少保护：Session/Thread、Turn/Execution 映射、WorkspaceSnapshot 版本、Session 单活动 Turn、Message 幂等键、Runtime
@@ -362,7 +416,12 @@ Tool Call ID、Tool 副作用幂等键、Approval 单次决定、Manifest 规范
 - Runtime 成功但本地响应丢失：按稳定 Session/Thread 与 Turn/Execution 映射重新读取最终输出，不重新运行 Agent；
 - Tool 超时或断连：先按 ToolExecution ID 对账；只有确定未产生副作用时才重试；
 - MCP/Browser/Sandbox 各自的内部重试不得与平台重试叠加成重试风暴；
-- Artifact 使用 staged → validated → committed 生命周期和内容哈希去重；
+- AgentArtifact 使用 staged → validated → committed 生命周期和内容哈希去重；Review Artifact 保留既有
+  原子导出契约；
+- `submit_artifact` 的 Sandbox/Storage I/O 在事务外；重复 Tool/Job 按稳定 invocation/candidate ID 与内容
+  hash 回读，只有业务 Turn 成功能令正式 AgentArtifact 可见；
+- Browser 人工控制绑定当前 Sandbox generation；旧票据、过期控制或 generation 轮换立即失效，人与
+  Agent 不并发操作 Chromium；
 - 取消请求原子写入业务 Run/Event，随后传播到 Runtime、当前 Tool 和 Sandbox；
 - 取消后不发起新模型、Tool、MCP、Browser 或 Sandbox 操作；晚到结果只用于对账和清理，不能提交业务成功；
 - Approval 等待期间发生权限撤销、策略升级或预算过期时，恢复前重新校验；
@@ -415,21 +474,28 @@ Phase 5 Slice 7 先分别提供 OpenSandbox、MCP 配置、Playwright/Search MCP
 Phase 6 只在这些 Spike 实际通过后按以下顺序强化，不把 ADR-0007/0008 本身当作测试结果：
 
 1. **产品契约与威胁模型**：复核 Session/Turn/Snapshot、Session 级 Sandbox Lease、资产/信任边界、
-   `execute` 攻击面和安全验收；
-2. **Tool Registry 与执行记录**：版本化 Schema、权限、风险、预算、幂等和 ToolExecution 持久化；
-3. **Project/Evidence Context**：强化 Chunk Index、Review Matrix、Artifact 的固定授权快照与隔离测试；
-4. **MCP Registry 与策略拦截**：从 Phase 5 最小 Catalog/Profile 扩展到审核/禁用、Schema 漂移、权限/
+   `execute` 攻击面，并落实 ADR-0009/0010 的状态、API、Event 和安全验收；
+2. **Agent 输出 Artifact**：Candidate/AgentArtifact 迁移、`submit_artifact`、Sandbox/Storage 校验、
+   Effectively Once 提交、图片预览与下载；先完成“Agent 画图并交付”的离线垂直切片；
+3. **Browser 画面与跨 Turn 人工控制**：BrowserControlLease、镜像/画面通道、鉴权代理和右侧 UI；只用
+   Sandbox 内合成登录页验证，不开放公网；
+4. **Agent 输入附件**：Session 上传、Message 引用、ContextSnapshot 冻结、`/workspace/inbox` 物化与
+   Chat UI；不开放任意 Browser 文件上传；
+5. **Tool Registry 与执行记录**：在 Phase 5 基础上补齐版本化 Schema、风险、预算、幂等和持久治理；
+6. **Project/Evidence Context**：强化 Chunk Index、Review Matrix、Artifact 的固定授权快照与隔离测试；
+7. **MCP Registry 与策略拦截**：从 Phase 5 最小 Catalog/Profile 扩展到审核/禁用、Schema 漂移、权限/
    预算/超时/输出限制、OAuth/Credential 和审计；
-5. **Browser/URL/下载安全**：在 Phase 5 同 Sandbox Playwright MCP 基础上补齐 URL Policy、SSRF/Redirect/DNS、
-   Prompt Injection、内容限制、隔离下载和来源记录；
-6. **Approval 与恢复**：业务 Approval、Deep Agents Interrupt/Resume、过期/取消/重复决定和 UI；
-7. **Workspace/Sandbox 强化**：Session Lease/generation 隔离、WorkspaceSnapshot 重建、`execute`、统一
+8. **Browser 公网与下载安全**：补齐 URL Policy、SSRF/Redirect/DNS、Prompt Injection、统一 egress、
+   内容限制、隔离下载和来源记录；通过后才显式验证固定站点的人工登录；
+9. **Approval 与恢复**：业务 Approval、Deep Agents Interrupt/Resume、过期/取消/重复决定和 UI；首版
+   跨 Turn 人工 Browser 控制不依赖该切片；
+10. **Workspace/Sandbox 强化**：Session Lease/generation 隔离、WorkspaceSnapshot 重建、`execute`、统一
    egress、资源限制、TTL 清理和故障补偿；
-8. **Budget 与无进展检测**：步骤/Token/费用/时间/Tool/输出限制和循环终止；
-9. **Agent UI 与 Artifact**：多轮 Chat、Turn Detail、Step、Tool、审批、来源、Manifest、报告和文件查看/下载；
-10. **故障注入与安全测试**：Runtime/MCP/Browser/Sandbox 故障、Prompt Injection、Secret、越权、恶意文件和取消竞争；
-11. **评测与升级保护**：固定 Agent 评测集、Deep Agents 升级契约测试、性能/成本基线和已知限制；
-12. **验收复盘**：Runtime Compose/Profile、隔离 Workspace 恢复边界、演示运行文档、模块学习笔记和
+11. **Budget 与无进展检测**：步骤/Token/费用/时间/Tool/输出限制和循环终止；
+12. **Agent UI 完整化**：整合 Turn Detail、Tool、审批、来源、Manifest、Browser、附件和 Artifact；
+13. **故障注入与安全测试**：Runtime/MCP/Browser/Sandbox 故障、Prompt Injection、Secret、越权、恶意文件和取消竞争；
+14. **评测与升级保护**：固定 Agent 评测集、Deep Agents 升级契约测试、性能/成本基线和已知限制；
+15. **验收复盘**：Runtime Compose/Profile、隔离 Workspace 恢复边界、演示运行文档、模块学习笔记和
     Research Agent Extension 完成报告。Core 数据库/Storage 的生产备份恢复不自动转移到本阶段。
 
 ## 测试方式
@@ -444,7 +510,8 @@ Phase 6 只在这些 Spike 实际通过后按以下顺序强化，不把 ADR-000
   输出限制、取消后不启动新命令、销毁和清理补偿；
 - **PostgreSQL**：唯一约束、条件更新、Approval 单次决定、ToolExecution 去重、Usage 和跨用户隔离；
 - **故障注入**：Worker/Runtime/MCP/Sandbox 退出、响应丢失、重复 Job、取消竞争、Artifact 提交前后崩溃；
-- **E2E**：打开 Agent Session → 项目内分析 → 追问 → 查找公开资源 → 审批下载 → Artifact → 刷新恢复与取消；
+- **E2E**：打开 Agent Session → 项目内分析 → Agent 生成并提交 PNG → 刷新后下载；Agent 导航合成登录页
+  → Turn 结束 → 用户人工操作 → 下一 Turn 识别新状态；后续再加入公开资源、审批下载与取消；
 - **评测**：多轮上下文、项目内分析、资源发现、来源正确性、Groundedness、策略遵守、Prompt Injection 和无进展样本。
 
 普通 CI 必须完全离线且不需要真实模型、外部 MCP、公共网站或付费 Sandbox。真实运行使用显式 Marker/环境开关、专用测试账号、硬预算和可删除 Workspace；只记录实际执行结果。
@@ -474,8 +541,9 @@ Phase 6 只在这些 Spike 实际通过后按以下顺序强化，不把 ADR-000
 2. 首版允许的公共域名类别、Phase 5 现有 Search MCP 通过后进入产品 Catalog 的条目；
 3. Approval 风险矩阵及允许编辑的参数；
 4. Budget 默认值、费用数据不可得时的替代限制和告警阈值；
-5. Workspace TTL、清理补偿和 Artifact 安全扫描策略；
-6. Phase 5 Sandbox `execute` Spike 通过后，哪些计算与绘图能力进入用户可见产品、如何展示和审批；
+5. Workspace TTL、清理补偿、Agent Artifact 单文件/总量上限、MIME/magic 实现和 staging GC 策略；
+6. 当前 pinned Chrome 镜像可复用的 VNC 能力，以及 noVNC/websockify 或等价画面组件的精确版本、认证
+   代理拓扑和镜像/前端锁文件影响；
 7. 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的评测、禁用和内容安全方式；
 8. Deep Agents 子 Agent 和长期 Memory 是否保持永久禁用；首版默认禁用。
 
@@ -488,7 +556,8 @@ Phase 6 只在这些 Spike 实际通过后按以下顺序强化，不把 ADR-000
 - 公开资源可能变化、删除或限制访问，Manifest 必须保留获取时间和来源；
 - 第三方模型、MCP 和 Sandbox Provider 会带来成本、可用性、隐私和供应商风险；
 - Prompt Injection 无法只靠分类器或 Prompt 消除，系统依赖最小权限和基础设施隔离限制后果；
-- 完整浏览器兼容性、复杂登录流程和网页交互不属于首版目标；
+- 首版只支持同一 generation、两个 Turn 之间的人工浏览器操作；复杂同 Turn 登录流程、Cookie/Profile
+  持久化、跨 generation 恢复和凭据委托不属于首版目标；
 - 多 Agent、长期 Memory、宿主执行、动态安装和开放网络保持关闭；OpenSandbox `execute` 不改变 Research
   Agent 的领域定位，也不代表通用 Coding Agent；
 - Research Agent Extension 可以独立禁用，Demo-ready Core Research Backend v1 仍应完整运行。
@@ -508,6 +577,8 @@ Phase 6 只在这些 Spike 实际通过后按以下顺序强化，不把 ADR-000
 
 - [`ADR-0007：采用 OpenSandbox 可执行研究 Workspace`](../decisions/0007-use-opensandbox-executable-workspace.md)
 - [`ADR-0008：复用 Deep Agents 原生 MCP 与 Skills 能力`](../decisions/0008-use-native-mcp-and-skills-capabilities.md)
+- [`ADR-0009：采用跨 Turn 的人工浏览器控制`](../decisions/0009-use-turn-boundary-browser-control.md)
+- [`ADR-0010：采用显式 Agent 文件交换与 Artifact 提交协议`](../decisions/0010-use-explicit-agent-file-exchange.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Going to production](https://docs.langchain.com/oss/python/deepagents/going-to-production)
 - [Deep Agents Backends](https://docs.langchain.com/oss/python/deepagents/backends)

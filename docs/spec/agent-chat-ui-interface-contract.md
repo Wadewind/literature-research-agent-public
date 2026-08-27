@@ -14,6 +14,10 @@ Slice 8 不直接接入或代理官方 Deep Agents UI。前端只消费平台 RE
 Checkpoint、Graph State、Sandbox endpoint 或原始 Tool 输出。Deep Agents UI 只作为消息、Tool 进度与
 文件展示的交互参考。
 
+> 后续边界：ADR-0009/0010 已把 Browser 画面/跨 Turn 人工控制和 Attachment/AgentArtifact 文件交付列入
+> Phase 6。它们继续使用平台业务 API 与 owner/Session/generation 授权，不改变本契约“不连接 SDK UI、
+> 不暴露 Runtime endpoint、WorkspaceSnapshot 不作为用户文件”的原则。
+
 ## 2. 信息架构与路由
 
 Project 工作区导航固定为：
@@ -175,7 +179,8 @@ GET  /api/v1/agent-turn-runs/{run_id}
 
 Turn 详情继续返回冻结的 `review_output_id`、`project_index_refs`、状态与 staged candidates。候选仅展示
 `candidate_id/name/media_type/content_hash/size_bytes/status`；Slice 8 不新增候选内容读取或正式 Artifact
-提交协议。
+提交协议。Phase 6 按 ADR-0010 另增 `submit_artifact`、AgentArtifact 内容 API 和附件引用，不回写
+Slice 8 的历史完成范围。
 
 ### 5.5 复用：配置、Evidence、Run 与 Review
 

@@ -66,4 +66,8 @@ OpenSandbox/Lease/WorkspaceSnapshot 推进；ADR-0008 又将剩余顺序固定�
 [Agent Native Skills](modules/agent-native-skills.md)：平台/owner 声明式 Skill 采用不可变版本、首 Turn 后
 Session manifest 锁定和 `/skills/` 只读虚拟 Backend，并直接复用 Deep Agents SkillsMiddleware。真实
 OpenSandbox proxy 的本地功能 Smoke 已于 2026-08-28 通过；真实 Provider、公共网络与生产安全验证仍待
-完成。
+完成。Phase 6 的首批产品化方向已由
+[ADR-0009：跨 Turn 人工浏览器控制](decisions/0009-use-turn-boundary-browser-control.md)和
+[ADR-0010：显式 Agent 文件交换](decisions/0010-use-explicit-agent-file-exchange.md)固定：先完成可下载的
+Agent 绘图 Artifact 与同 generation 合成页面人工操作，再处理输入附件和公共网络安全；WorkspaceSnapshot
+不直接成为用户文件，平台也不托管登录凭据。

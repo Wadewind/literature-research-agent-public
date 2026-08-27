@@ -1,8 +1,8 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v11
+> 状态：Proposed v12
 >
-> 日期：2026-08-27
+> 日期：2026-08-28
 >
 > 定位：面向单人、AI 辅助开发的总体实施文档；用于确定产品边界、总体架构、模块职责、阶段顺序和学习目标
 >
@@ -51,6 +51,11 @@
 > 校验 required Tool 不扩权。`/skills/` 是 Sandbox `execute` 不可见的只读虚拟 Backend，Adapter 直接
 > 使用 `create_deep_agent(skills=...)`；graph revision 升为 `deep-agent-graph.v5`。真实 Provider/
 > OpenSandbox Smoke、附件/脚本 Skill、fork/rewind 与完整内容治理仍未完成。
+>
+> v12 变更：ADR-0009/0010 固定 Phase 6 的首批产品化增量。Browser 首版允许用户在两个 Turn 之间通过
+> 平台鉴权画面操作同一 Session Chromium，不保存凭据、不与 Agent 并发控制，也不跨 Sandbox generation
+> 恢复登录；Agent 文件区分 Attachment、WorkspaceSnapshot、Candidate 与 AgentArtifact，只有
+> 显式 `submit_artifact` 的 `/workspace/outputs` 文件经过平台校验和业务成功提交后才能预览或下载。
 
 ## 1. 文档用途
 
@@ -653,6 +658,12 @@ WorkspaceSnapshot 与 Artifact 必须区分：前者保存 Agent 跨 Turn 继续
 和 Manifest，不默认对用户展示；后者是经过平台校验、具有业务所有权且可查看或下载的正式产物。
 临时文件可以随 Sandbox Lease 丢弃。
 
+Phase 6 的 Agent 文件交付进一步区分：用户输入使用业务 `AgentAttachment` ID，在事务外物化到
+`/workspace/inbox/`；Agent 输出必须显式调用 `submit_artifact`，且只允许
+`/workspace/outputs/` 的普通文件进入 staged Candidate。平台重新校验路径、大小、MIME/magic、哈希和
+当前 fence，只有 Turn 业务成功才发布独立 AgentArtifact。现有 Review Artifact 聚合继续绑定
+ReviewRun，不为 Agent 增量进行高风险泛化；两者复用 Storage 和公开下载语义。
+
 ### 7.16 Observability
 
 负责：
@@ -991,7 +1002,11 @@ Demo-ready Core v1 只调用固定学术 API，不提供任意 URL 抓取。后�
 时，必须考虑 SSRF、DNS 重绑定、Redirect、内网地址阻断、下载大小与类型、恶意文件、Prompt
 Injection 和网络外泄。
 
-Agent 浏览器首版只访问公开资源，优先发现论文官方项目页、代码仓库、开放数据集和补充材料。涉及登录、用户凭据、付费墙、CAPTCHA、对外提交或不可逆操作时必须拒绝或进入人工审批，不能通过自动化规避站点限制。
+Agent 浏览器自动路径首版只访问经过平台策略允许的资源，优先发现论文官方项目页、代码仓库、开放数据集
+和补充材料。ADR-0009 允许用户本人在两个 Turn 之间操作同一 Session Chromium 完成固定页面登录；
+账号、密码、Cookie 和验证码不交给 Agent 或平台存储，人工与 Agent 控制互斥，登录状态只在当前 Sandbox
+generation 内 best effort 保留。该人工能力不允许自动绕过付费墙、CAPTCHA 或站点限制，也不批准对外
+提交或不可逆操作；真实网站仍必须先通过 Phase 6 统一 egress 与 URL 安全验收。
 
 ### 12.4 代码执行
 
@@ -1069,6 +1084,11 @@ Phase 5 Slice 8 的最小 REST/SSE、桌面信息架构、Evidence Margin、首 
 连接 LangGraph Deployment/Thread State，本项目不接入或代理该数据层；现有 Vite React 只消费平台业务
 API。移动 Drawer、Browser/noVNC、Workspace 文件管理、fork/rewind 和候选 Artifact 正式提交均不属于
 该切片。
+
+Phase 6 按 ADR-0009/0010 增加两个平台业务 UI，而不是接入 SDK UI：右侧 Browser 面板通过 owner/Session/
+generation 鉴权代理提供短时人工控制；成果区通过 AgentArtifact API 展示图片预览和稳定下载，并为消息
+提供 Attachment ID 上传。Web 不接收原始 Sandbox 路径，也不看到 VNC/noVNC/CDP/MCP/OpenSandbox
+endpoint；WorkspaceSnapshot 仍不是文件管理器或下载列表。
 
 Run Detail 是核心页面，应展示：
 

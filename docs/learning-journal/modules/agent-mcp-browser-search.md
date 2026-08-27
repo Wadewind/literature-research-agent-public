@@ -136,6 +136,12 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
   Session/Secret/宿主隔离、default-deny 网络、平台 Policy 和结果校验；
 - graph 创建前的只读 resolver/session/discovery 仍可能因重复 Job 重复执行，但不缓存跨 generation 连接，
   Tool 副作用仍受 invocation 账本约束。
+- 当前派生镜像和 Web UI 没有面向用户的 noVNC 画面、Browser 控制权状态或鉴权代理；用户不能操作
+  Session Chromium，也没有 Cookie/Profile 跨 generation 恢复。ADR-0009 已将首版固定为两个 Turn
+  之间、同一 generation 的人工控制，先以 Sandbox 内合成登录页验证；公共登录仍由 Phase 6 统一 egress
+  和 URL 安全阻塞。
+- `browser_file_upload` 继续不在 Catalog allowlist。用户附件和网页上传必须经过 ADR-0010 的业务
+  Attachment ID 与后续平台包装 Tool，不能直接让模型选择 Workspace 路径。
 
 ## 60 秒面试说明
 

@@ -1018,8 +1018,12 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
 1. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
-   逐命令审批；
-2. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
+   逐命令审批。
+
+原第 2 项已于 2026-08-28 由 ADR-0010 决定：Phase 5 的 staged descriptor 保持当前受限契约；Phase 6
+通过显式 `submit_artifact`、独立 AgentArtifact、内容寻址 staging 和业务成功条件提交完成正式下载，
+不把 WorkspaceSnapshot 或 ReviewRun Artifact 直接复用为用户文件。ADR-0009 同时决定 Browser/noVNC
+首版采用两个 Turn 之间的人工控制，不回填 Phase 5 Slice 8，也不要求首版 LangGraph Interrupt。
 
 OpenSandbox Python SDK 已在 7.1 固定为 `opensandbox==0.1.15`；固定 base image digest、10 分钟 TTL、
 60 分钟 generation、1 CPU/2 GiB、60 秒命令与 64 KiB inline 输出已经实现。derived image 的发布 digest
@@ -1063,6 +1067,8 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
   虚拟只读文件边界；它不支持附件、脚本、二进制、动态依赖、Profile 热切换、fork/rewind、内容审核 UI
   或真实 Provider/OpenSandbox Smoke。owner instructions 仍是不可信提示，权限子集校验不等于已消除
   Prompt Injection；
+- Browser 画面、人工控制、Agent Attachment、Real Runtime Candidate 收集和可下载 AgentArtifact 均按
+  ADR-0009/0010 进入 Phase 6；当前 UI 的 staged Candidate 仍只有元数据，不能据此宣称文件交付已完成；
 - Worker 已改为 1..4 连接的 checkpoint pool，并为每个 Runtime operation 创建独立 Saver/graph；这解决
   singleton Saver 的全局实例锁串行，不代表数据库容量、性能或故障切换已完成生产评测；
 - Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界
