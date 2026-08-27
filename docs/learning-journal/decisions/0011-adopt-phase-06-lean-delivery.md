@@ -83,10 +83,15 @@ Sandbox 必须具备实际可验证的 Session 隔离、非 root 固定镜像、
 5. 固定能力治理、Project Context 与硬预算；
 6. Sandbox 资源、TTL、清理和统一 egress 强化；
 7. 固定 arXiv 公网访问、下载、来源与 Prompt Injection 验证；
-8. UI/E2E、故障验证、评测、运行文档和复盘。
+8. UI/E2E、故障验证、评测、运行文档和复盘；最终 UI 必须遵循
+   `docs/spec/web-ui-app-shell-redesign.md`。若该重设计尚未完成，先按其 4 个前端切片分别完成 App Shell、
+   PageBar、工作区空间回收和视觉 token 刷新，再整合 Phase 6 功能 UI。
 
 每个切片必须保持普通 CI 离线。真实 OpenSandbox、真实模型和真实 arXiv 只在显式 Smoke 中运行，并记录
 固定版本、配置、预算、实际结果与限制。
+
+App Shell 重设计是纯前端契约，不改变本 ADR 的 API、数据库、Runtime 或安全边界；Phase 6 前置功能切片
+不得依赖即将删除的旧全局 Header、`ProjectWorkspaceHeader` 或 `ProjectNav`。
 
 ## 后果
 

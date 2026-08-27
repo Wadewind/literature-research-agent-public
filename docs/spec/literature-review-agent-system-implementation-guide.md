@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v13
+> 状态：Proposed v14
 >
 > 日期：2026-08-28
 >
@@ -61,6 +61,10 @@
 > 人工控制、固定 Catalog/Profile、硬预算和 Sandbox 生命周期，并必须完成固定 `arxiv.org`/
 > `export.arxiv.org` 的统一 egress、URL/SSRF 与 PDF 下载安全；完整 Approval Center、开放互联网、
 > OAuth/Credential、通用 Registry、生产级 Sandbox 平台和精确计费延期。
+>
+> v14 变更：Phase 6 最终 UI 强制遵循 `web-ui-app-shell-redesign.md`：统一使用左侧 `AppSidebar` 与轻量
+> `PageBar`，删除旧全局 Header、大 Hero 项目页头和重复模式入口。Phase 6 前置功能组件保持壳层无关；
+> 最终整合前若重设计尚未实施，先按其 4 个纯前端切片分别完成并同步 UI 契约。
 
 ## 1. 文档用途
 
@@ -1674,6 +1678,9 @@ Workspace、Sandbox、arXiv 访问和文件交付的安全与可靠性；不建�
 - 在 ADR-0007 已验证的 OpenSandbox `execute` 基础上强化隔离、网络、资源、审计和用户可见治理；
 - AgentAttachment、WorkspaceSnapshot、AgentArtifactCandidate 与 AgentArtifact 的显式输入/内部状态/输出
   边界，以及 `submit_artifact` 预览下载闭环。
+- 最终 Agent UI 遵循 [`Web UI 应用壳与视觉重设计`](web-ui-app-shell-redesign.md)：左侧固定 Sidebar、轻量
+  PageBar、桌面优先三栏工作区和浅色编辑风；功能切片不得重新依赖将被删除的旧 Header、
+  `ProjectWorkspaceHeader` 或 `ProjectNav`。
 
 完整 MCP/Tool Registry、Catalog 管理后台、OAuth/Credential、通用审批中心、外部写操作、开放互联网、
 动态依赖、多 Agent/长期 Memory、公网多租户和生产级 Sandbox 运维平台不属于精简交付。
@@ -1688,6 +1695,8 @@ Workspace、Sandbox、arXiv 访问和文件交付的安全与可靠性；不建�
 - Runtime 取消后不再发起新操作，重复执行不会重复提交最终 Artifact；
 - Sandbox 默认不接触宿主文件和 Secret，网络与资源策略有测试证据；
 - SDK 升级由契约测试保护，公开 API 不暴露 SDK 内部模型；
+- App Shell 重设计按其独立前端切片完成，`project-workspace-ui-contract.md` 被取代条款同步更新，最终
+  Browser、附件、Artifact、Tool 和 Evidence UI 不与新壳层冲突；
 - Core 与 Agent 两组用户旅程、评测、运维文档和已知限制均完成。
 
 ## 18. 学习笔记规划

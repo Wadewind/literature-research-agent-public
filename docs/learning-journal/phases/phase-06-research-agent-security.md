@@ -4,7 +4,8 @@
 
 计划中，尚未开始实现。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25；按 ADR-0007
 调整日期：2026-08-26；按 ADR-0008 调整日期：2026-08-27；按 ADR-0009/0010 对齐 Browser 人工控制与
-Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目精简交付日期：2026-08-28。
+Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目精简交付日期：2026-08-28；对齐
+`docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
@@ -59,6 +60,25 @@ ADR-0011 将本阶段定位为本地、单人演示的受限 Research Workspace 
 以下内容明确延期：通用 Approval Center、任意外部写操作、任意用户 MCP/Tool/网络配置、OAuth/Credential
 生命周期、开放互联网、动态包安装、多 Agent/长期 Memory、Sandbox 集群调度/预热/自动扩缩容、精确计费、
 公网多租户、SLA 与完整灾难恢复。新增这些能力前必须另行更新 Spec/ADR。
+
+### UI 实施约束
+
+Phase 6 所有新增 UI 必须遵守 [`Web UI 应用壳与视觉重设计`](../../spec/web-ui-app-shell-redesign.md)，该文档
+是强制契约而非视觉参考：最终界面采用左侧固定 `AppSidebar`、全站轻量 `PageBar`、桌面优先的统一页面壳，
+不恢复全局顶部 Header、大 Hero 项目页头或重复的项目模式入口。浅色编辑风、零圆角、三栏工作区与会话
+内部 rail 的边界保持不变。
+
+- 切片 2–4 可以新增 Artifact、Browser 和 Attachment 的独立功能组件与必要入口，但不得在这些后端垂直
+  切片中顺便进行全站 App Shell 重构；组件应避免依赖将被删除的 `ProjectWorkspaceHeader`、`ProjectNav`
+  或旧 76px Header 高度；
+- 最终 UI 整合前必须检查 App Shell 重设计是否已经完成。若未完成，切片 8 先按该 Spec 的应用壳骨架、
+  轻页头替换、工作区空间回收、视觉 token 刷新四个顺序子切片分别实现和验证，再整合 Phase 6 功能；
+- App Shell 重设计保持纯前端，不改变 Phase 6 API、数据库或 Runtime 契约；实施轻页头替换时同步更新
+  `docs/spec/project-workspace-ui-contract.md` 中被取代的共享 Project Chrome 条款；
+- Phase 6 的 Turn 步骤时间线、Evidence/PDF/Artifact 右栏 tab 和 Composer 能力配置只能在 UI Spec 规定的
+  对应切片评估、实现，不能重新引入与其冲突的页面级布局；
+- 每个 UI 子切片保持独立可回退提交，并实际运行 Vitest、TypeScript build；具备本地后端时再运行
+  Playwright E2E 和桌面截图走查，环境不具备时必须明确记录。
 
 ## 范围
 
@@ -511,9 +531,11 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
 7. **固定 arXiv 公网与下载安全**：只开放版本化精确主机 allowlist，补齐 URL/IP/DNS/Redirect/SSRF、
    HTTPS、Prompt Injection、下载大小/MIME/magic/hash、隔离临时区和来源记录；离线 Fixture 通过后才
    显式运行真实 arXiv 搜索/页面/PDF Smoke，并同时验证非 allowlist 目标被拒绝；
-8. **产品整合、验证与复盘**：整合 Turn Detail、Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；
-   完成关键故障/取消/重复/越权测试、小型 Agent 评测、Deep Agents 升级契约、本地演示运行文档、模块
-   学习笔记和 Research Agent Extension 完成报告。Core 数据库/Storage 的生产备份恢复不转入本阶段。
+8. **产品整合、验证与复盘**：严格遵循 `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
+   4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新，再整合 Turn Detail、
+   Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；随后完成关键故障/取消/重复/越权测试、小型
+   Agent 评测、Deep Agents 升级契约、本地演示运行文档、模块学习笔记和 Research Agent Extension 完成
+   报告。Core 数据库/Storage 的生产备份恢复不转入本阶段。
 
 ## 测试方式
 
@@ -597,6 +619,7 @@ Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何�
 - [`ADR-0009：采用跨 Turn 的人工浏览器控制`](../decisions/0009-use-turn-boundary-browser-control.md)
 - [`ADR-0010：采用显式 Agent 文件交换与 Artifact 提交协议`](../decisions/0010-use-explicit-agent-file-exchange.md)
 - [`ADR-0011：采用 Phase 6 精简交付范围`](../decisions/0011-adopt-phase-06-lean-delivery.md)
+- [`Web UI 应用壳与视觉重设计`](../../spec/web-ui-app-shell-redesign.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [Deep Agents Going to production](https://docs.langchain.com/oss/python/deepagents/going-to-production)
 - [Deep Agents Backends](https://docs.langchain.com/oss/python/deepagents/backends)
