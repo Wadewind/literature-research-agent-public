@@ -38,11 +38,11 @@ class _Backend:
     def configure_mcp_service(self, service_name: str, *, allowed_host: str) -> None:
         self.events.append(f"configure:{service_name}:{allowed_host}")
 
-    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str]]:
+    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str], str]:
         assert port == 8932
         assert self.events == ["prepare:arxiv-search"]
         self.events.append("endpoint:8932")
-        return self.endpoint, {"X-Sandbox-Route": self.header}
+        return self.endpoint, {"X-Sandbox-Route": self.header}, "sandbox-internal:49152"
 
 
 class _FailingBackend(_Backend):
@@ -60,7 +60,7 @@ class _FailingBackend(_Backend):
             raise RuntimeError(f"secret command endpoint: {allowed_host}")
         super().configure_mcp_service(service_name, allowed_host=allowed_host)
 
-    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str]]:
+    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str], str]:
         if self.fail_on == "endpoint":
             raise RuntimeError("secret endpoint/header")
         return super().get_mcp_endpoint(port)
@@ -139,19 +139,19 @@ async def test_resolver_starts_fixed_service_and_never_caches_old_generation() -
 
     assert first.connection == {
         "transport": "streamable_http",
-        "url": "http://sandbox-one.invalid/private/mcp",
+        "url": "http://sandbox-one.invalid/private/mcp/",
         "headers": {"X-Sandbox-Route": "first-secret"},
     }
-    assert second.connection["url"] == "http://sandbox-two.invalid/private/mcp"
+    assert second.connection["url"] == "http://sandbox-two.invalid/private/mcp/"
     assert first_backend.events == [
         "prepare:arxiv-search",
         "endpoint:8932",
-        "configure:arxiv-search:sandbox-one.invalid",
+        "configure:arxiv-search:sandbox-internal:49152",
     ]
     assert second_backend.events == [
         "prepare:arxiv-search",
         "endpoint:8932",
-        "configure:arxiv-search:sandbox-two.invalid",
+        "configure:arxiv-search:sandbox-internal:49152",
     ]
     assert "first-secret" not in repr(first)
     assert "sandbox-one" not in repr(first)

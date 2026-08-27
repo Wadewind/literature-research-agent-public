@@ -139,7 +139,8 @@ interceptor 的 `begin` 在一个短事务中认领 effect，外部调用完成�
 ## 已知限制
 
 - 生产 Catalog 现包含固定 Playwright/arXiv 两项，但默认 Session Profile 仍为空；用户必须显式选择平台
-  条目。真实 OpenSandbox endpoint/header 代理回路尚未运行，不把 Docker 内能力验证当作 Provider 验证。
+  条目。切片完成时尚未运行真实 OpenSandbox endpoint/header 代理回路；2026-08-28 后续本地功能 Smoke
+  已验证认证 Server Proxy 与精确直连 authority 配置，但不把它当作真实 Provider、公共网络或生产安全验证。
 - Profile 参数首版只支持有界字符串；复杂枚举、数字或对象 Schema 留到真实 Catalog 有证据时扩展。
 - 没有 stateful 第三方 Server、Sandbox 内 stdio/HTTP Server、连接轮换、真实断连或多 Server 压力测试。
 - 没有公共网络、OAuth/Credential Vault、Secret 委托、统一 egress 或第三方隐私/费用治理。

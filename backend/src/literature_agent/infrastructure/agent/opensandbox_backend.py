@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import posixpath
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from deepagents.backends.protocol import (
     ExecuteResponse,
@@ -26,6 +28,9 @@ from literature_agent.domain.workspace_snapshot import is_workspace_file_path
 _PLATFORM_MCP_SERVICES = frozenset({"playwright", "arxiv-search"})
 _PLATFORM_MCP_PORTS = frozenset({8931, 8932})
 _MCP_ALLOWED_HOST = re.compile(r"^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
+# OpenSandbox API 以十进制整数承载 chmod 的八进制数字，而不是 Python 位掩码值。
+_WORKSPACE_DIRECTORY_MODE = 700
+_WORKSPACE_FILE_MODE = 600
 
 
 class OpenSandboxBackend(BaseSandbox):
@@ -39,12 +44,14 @@ class OpenSandboxBackend(BaseSandbox):
         *,
         command_timeout_seconds: int = 60,
         max_inline_bytes: int = 64 * 1024,
+        direct_endpoint_getter: Callable[[int], Any] | None = None,
     ) -> None:
         if command_timeout_seconds <= 0 or max_inline_bytes <= 0:
             raise ValueError("Sandbox 命令超时和输出上限必须为正数")
         self._sandbox = sandbox
         self._command_timeout_seconds = command_timeout_seconds
         self._max_inline_bytes = max_inline_bytes
+        self._direct_endpoint_getter = direct_endpoint_getter or sandbox.get_endpoint
 
     @property
     def id(self) -> str:
@@ -89,7 +96,7 @@ class OpenSandboxBackend(BaseSandbox):
             try:
                 self._sandbox.files.create_directories(
                     [
-                        WriteEntry(path=path, mode=0o700)
+                        WriteEntry(path=path, mode=_WORKSPACE_DIRECTORY_MODE)
                         for path in sorted(parents, key=lambda item: (item.count("/"), item))
                     ]
                 )
@@ -104,7 +111,7 @@ class OpenSandboxBackend(BaseSandbox):
                 responses.append(FileUploadResponse(path=path, error="upload_failed"))
                 continue
             try:
-                self._sandbox.files.write_file(path, content, mode=0o600)
+                self._sandbox.files.write_file(path, content, mode=_WORKSPACE_FILE_MODE)
             except Exception:
                 responses.append(FileUploadResponse(path=path, error="upload_failed"))
             else:
@@ -167,12 +174,37 @@ class OpenSandboxBackend(BaseSandbox):
         if execution.exit_code != 0:
             raise RuntimeError("Sandbox MCP Service 启动失败")
 
-    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str]]:
+    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str], str]:
         """解析当前 Sandbox generation 的私有 endpoint；调用者不得持久化。"""
         if port not in _PLATFORM_MCP_PORTS:
             raise ValueError("MCP 端口未在平台镜像中注册")
         endpoint = self._sandbox.get_endpoint(port)
-        return str(endpoint.endpoint), dict(endpoint.headers)
+        direct_endpoint = self._direct_endpoint_getter(port)
+        endpoint_url = self._normalize_endpoint(str(endpoint.endpoint))
+        direct_url = self._normalize_endpoint(str(direct_endpoint.endpoint))
+        allowed_host = self._endpoint_authority(direct_url)
+        return endpoint_url, dict(endpoint.headers), allowed_host
+
+    def _normalize_endpoint(self, endpoint: str) -> str:
+        if "://" in endpoint:
+            return endpoint
+        protocol = str(self._sandbox.connection_config.protocol)
+        if endpoint.startswith("/"):
+            domain = str(self._sandbox.connection_config.domain)
+            return f"{protocol}://{domain}{endpoint}"
+        return f"{protocol}://{endpoint}"
+
+    @staticmethod
+    def _endpoint_authority(endpoint: str) -> str:
+        parts = urlsplit(endpoint)
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+        ):
+            raise ValueError("OpenSandbox MCP endpoint 非法")
+        return parts.netloc
 
     def close(self) -> None:
         """只关闭本地 HTTP 资源；Session Lease 的远端实例继续存在。"""
@@ -223,7 +255,10 @@ class OpenSandboxProvider:
             volumes=[],
             connection_config=self._connection(),
         )
-        return OpenSandboxBackend(sandbox)
+        return OpenSandboxBackend(
+            sandbox,
+            direct_endpoint_getter=lambda port: self._get_direct_endpoint(sandbox.id, port),
+        )
 
     async def connect(self, sandbox_id: str) -> OpenSandboxBackend:
         sandbox = await asyncio.to_thread(
@@ -231,7 +266,22 @@ class OpenSandboxProvider:
             sandbox_id,
             connection_config=self._connection(),
         )
-        return OpenSandboxBackend(sandbox)
+        return OpenSandboxBackend(
+            sandbox,
+            direct_endpoint_getter=lambda port: self._get_direct_endpoint(sandbox.id, port),
+        )
+
+    def _get_direct_endpoint(self, sandbox_id: str, port: int) -> Any:
+        connection = self._connection().model_copy(update={"use_server_proxy": False})
+        sandbox = self.sandbox_cls.connect(
+            sandbox_id,
+            connection_config=connection,
+            skip_health_check=True,
+        )
+        try:
+            return sandbox.get_endpoint(port)
+        finally:
+            sandbox.close()
 
     async def renew(self, sandbox_id: str, *, ttl_seconds: int) -> None:
         sandbox = await asyncio.to_thread(

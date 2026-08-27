@@ -243,7 +243,9 @@ Context/Policy 闭包复核，但这不把 Fake 测试冒充为授权证据。
   条件更新和 response replay 提供 Effectively Once 防线，但外部副作用与账本提交之间不宣称 Exactly Once；
 - 7.3 已在不改变五方法 Port 的前提下填充固定 Playwright/arXiv Catalog 并接入当前 Lease Resolver；
   endpoint/header 仍只存在于 infrastructure。7.4 也没有改变 Port：Policy 只增加 SDK-neutral
-  Skill refs，Backend/SkillsMiddleware 只存在于 Adapter。真实 OpenSandbox proxy Smoke 尚未运行。
+  Skill refs，Backend/SkillsMiddleware 只存在于 Adapter。切片完成时尚未运行真实 OpenSandbox proxy
+  Smoke；2026-08-28 后续本地功能 Smoke 已验证真实 Lease、认证 Server Proxy、Playwright/arXiv MCP
+  discovery、本地 Browser/下载与 Workspace 回收，不包含真实 Provider 或公共网络验证。
 
 ## 已知限制
 
@@ -255,8 +257,8 @@ Context/Policy 闭包复核，但这不把 Fake 测试冒充为授权证据。
   Claim/Citation，但生产 Worker 尚未切换；
 - Worker 生产默认尚未切到 Deep Agents；真实 Adapter 已在 ARQ Worker 进程拓扑下完成跨进程恢复 Spike，
   并可组装两个真实 Project Tool、OpenSandbox/WorkspaceSnapshot 与 MCP 配置基础；7.3 已接入固定
-  Playwright/arXiv MCP，并在无网络容器验证本地 Browser/下载；7.4 已接原生声明式 Skills，真实
-  OpenSandbox proxy 与 Provider/Skill 组合尚未验证；
+  Playwright/arXiv MCP，并在无网络容器验证本地 Browser/下载；7.4 已接原生声明式 Skills。2026-08-28
+  已补充真实 OpenSandbox proxy 功能 Smoke；真实 Provider、公共网络以及 Provider/Skill 组合仍未验证；
 - Fake 状态仍位于进程内；真实恢复结论只适用于显式配置持久 RuntimeExecution + PostgreSQL Checkpointer
   的 Deep Adapter，不反向改变 Fake 语义；
 - 已验证平台能停止消费 Fake 流、事务外传播取消并拒绝结果；尚未验证真实 Deep Agents、模型/Tool 或

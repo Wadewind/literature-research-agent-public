@@ -69,13 +69,15 @@ Schema/hash 漂移、重复名称、游标循环或超过 32 页/256 Tool 时 fa
 
 Playwright MCP 对未允许 Host 实际返回 403，而 OpenSandbox 只有在端口已监听后才能创建 endpoint。
 本模块没有使用 `--allowed-hosts '*'`：recipe 先以仅 loopback allowlist bootstrap；Resolver 在端口监听后
-取得 endpoint，再把 URL 的精确 authority 交给同一脚本锁，允许 bootstrap 仅一次收敛到 exact authority。
+取得 Server Proxy endpoint，并通过 OpenSandbox SDK 公共 API 额外解析同一 generation 的直连随机
+authority。后者正是 Server Proxy 转发给 MCP 时使用的 `Host`，脚本锁只允许 bootstrap 一次收敛到该
+exact authority。
 最终 Server 只允许该 authority 和本地 loopback authority；相同 authority 重试幂等，之后 authority
 改变则 fail-closed，不能继续默默复用旧进程。并发 resolver 最终也只能由脚本锁保留一个登记进程。
 
-该防线假设 OpenSandbox proxy 保留或以稳定方式转发由 endpoint 推导出的 Host。本机没有运行
-OpenSandbox server，因此这一假设尚未实测；默认跳过的真实 Smoke 将其作为明确验收门，而不是用
-wildcard 绕过。
+`opensandbox-server==0.2.2` 会丢弃外部 `Host`，并在 default-deny egress sidecar 下转发到宿主随机映射
+authority；因此不能直接把 Server Proxy URL 的 authority 加入 allowlist。2026-08-28 的真实 Smoke 已
+验证上述双 endpoint 解析，Playwright MCP 不再返回 403，且未用 wildcard 绕过。
 
 ## 事务、取消与副作用
 
@@ -98,15 +100,16 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
 - resolver/backend 离线测试覆盖 owner/Session/Project/Turn scope、版本/config hash、generation 不缓存、
   固定 service/port/authority、Provider/recipe 错误脱敏；
 - recipe 状态机离线测试覆盖 bootstrap → exact 只重启一次、exact 幂等、authority 变化拒绝和并发
-  configure 收敛；派生镜像实际构建成功，manifest list digest 为
-  `sha256:8bce8142249c100045deff8ddb407902608e5bd04621094d10952b3e89cba466`；
+  configure 收敛；2026-08-28 重建的本地派生镜像 manifest list digest 为
+  `sha256:b9961b04fe4d61c28c2ef0552c495c4ed249638fb9659de36d177d61b46e7366`；
 - `--network none` 容器实际由 `/entrypoint` 启动 Chromium；4 路并发 bootstrap/configure 最终只保留一个
   Playwright MCP 进程，同 authority 重试成功，authority 变化按预期失败；
 - 同一无网络容器中，Playwright MCP 通过 CDP navigate/click Sandbox 内合成页面，并把
   `paper.txt` 写入 `/workspace/downloads`；arXiv MCP 只验证启动、完整 discovery 和投影，不执行公网搜索；
-- 最后一次 Domain/Adapter/Sandbox/Worker 定向离线集合为 `109 passed, 1 skipped in 2.29s`。skip 是
-  `AGENT_RUN_OPENSANDBOX_MCP_TESTS=1` 控制的真实 OpenSandbox 回路；开发机没有 OpenSandbox server，
-  因此没有运行、没有伪造通过结论。
+- 2026-08-28 以本地 `opensandbox-server==0.2.2`、`execd:v1.0.21`、`egress:v1.1.4` 和 Python SDK
+  `opensandbox==0.1.15` 运行 `AGENT_RUN_OPENSANDBOX_MCP_TESTS=1`，真实回路结果为
+  `1 passed in 12.13s`；未调用模型或公网 arXiv。相关离线 Adapter/MCP/Runtime/Worker 回归为
+  `52 passed in 2.18s`。
 - PostgreSQL Application/API/Workspace Repository 相关回归为 `10 passed in 17.40s`，确认非空生产
   Catalog 没有改变 Profile owner/Session/CAS、逐 Turn Policy 冻结和 Workspace 持久边界。
 
@@ -123,7 +126,8 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
 
 ## 已知限制
 
-- 尚未验证真实 OpenSandbox proxy Host/header、endpoint 稳定性和 Server 连接；本地 Docker 回路不能替代；
+- 已验证本地 Docker OpenSandbox proxy Host/header 和单 generation endpoint；未验证远程/Kubernetes
+  Provider、跨主机 endpoint、secure runtime 或长时间稳定性；
 - Sandbox 仍默认禁网，未验证真实 arXiv 查询、公共浏览、redirect/SSRF、统一 egress 或下载扫描；
 - OpenSandbox 创建固定传入 `entrypoint=['/entrypoint']`，以保留 pinned Chrome 镜像的 Chromium/execd
   启动 recipe；该值是平台镜像契约，不允许用户配置；
@@ -139,5 +143,5 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
 Catalog 条目；每轮从当前 Session Sandbox lease 解析私有 endpoint，完整分页发现能力，然后只校验和
 转换审核 allowlist。Playwright MCP 连接同一个 Sandbox Chromium，下载进入同一 Workspace；arXiv 只暴露
 两个只读 Tool。Server 新增 Tool 不会自动授权，Schema 漂移会 fail-closed。所有 MCP 调用继续经过平台的
-owner scope、取消、fence、预算和 effect 账本。无网络容器回路已经通过，但 OpenSandbox proxy Host/header
-仍是显式 Smoke 门槛，所以我把受限通过和生产安全结论严格分开。”
+owner scope、取消、fence、预算和 effect 账本。本地 OpenSandbox Proxy、同 Chromium 和下载回路已经
+通过，但 secure runtime、公共网络与生产安全仍未验证，所以我把功能受限通过和安全结论严格分开。”

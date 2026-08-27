@@ -252,7 +252,8 @@ Injection 后果；网络策略必须覆盖全部 Sandbox 进程；需要处理 
 - 7.2：MCP Catalog/Profile、owner/Session 隔离、Schema/hash 漂移拒绝、client 生命周期、interceptor、
   预算/取消/输出限制和执行记录；
 - 7.3：Playwright MCP/CDP 与文件工具指向同一 Sandbox，本地导航/下载写入同一 Workspace、endpoint 不
-  泄漏，并明确记录现有 Search MCP 的版本、运行位置和外部边界；
+  泄漏，并明确记录现有 Search MCP 的版本、运行位置和外部边界；2026-08-28 已补跑本地 OpenSandbox
+  Server Proxy 功能 Smoke，但不据此宣称 secure runtime 或公网安全；
 - 7.4：平台安装与 owner-scoped 声明式 Skill 的版本/哈希、只读加载、Session 隔离和权限不扩张。
 
 普通自动测试继续完全离线、确定性、零模型/网站/外部 MCP/付费 Sandbox 费用。真实 Provider、

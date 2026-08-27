@@ -23,6 +23,7 @@ from mcp.types import Tool
 from literature_agent.domain.mcp_configuration import canonical_json_hash
 from literature_agent.infrastructure.agent.mcp_catalog import PLATFORM_MCP_CATALOG
 from literature_agent.infrastructure.agent.opensandbox_backend import OpenSandboxProvider
+from literature_agent.infrastructure.agent.sandbox_mcp import McpSandboxServerRecipe
 from literature_agent.infrastructure.config import Settings
 
 pytestmark = pytest.mark.skipif(
@@ -51,9 +52,15 @@ ThreadingHTTPServer(('127.0.0.1', 8765), Handler).serve_forever()
 
 
 @asynccontextmanager
-async def _mcp_session(endpoint: str, headers: dict[str, str]) -> AsyncIterator[ClientSession]:
+async def _mcp_session(
+    endpoint: str,
+    headers: dict[str, str],
+    mcp_path: str,
+) -> AsyncIterator[ClientSession]:
     parts = urlsplit(endpoint)
-    url = urlunsplit((parts.scheme, parts.netloc, f"{parts.path.rstrip('/')}/mcp", parts.query, ""))
+    url = urlunsplit(
+        (parts.scheme, parts.netloc, f"{parts.path.rstrip('/')}{mcp_path}", parts.query, "")
+    )
     client = MultiServerMCPClient(
         {
             "smoke": {
@@ -117,14 +124,22 @@ async def test_real_opensandbox_browser_download_and_catalog_projection() -> Non
         catalog = {entry.catalog_id: entry for entry in PLATFORM_MCP_CATALOG.entries}
         for service_name, port in (("playwright", 8931), ("arxiv-search", 8932)):
             await asyncio.to_thread(backend.prepare_mcp_service, service_name)
-            endpoint, headers = await asyncio.to_thread(backend.get_mcp_endpoint, port)
-            authority = urlsplit(endpoint).netloc
+            endpoint, headers, authority = await asyncio.to_thread(
+                backend.get_mcp_endpoint,
+                port,
+            )
             await asyncio.to_thread(
                 backend.configure_mcp_service,
                 service_name,
                 allowed_host=authority,
             )
-            async with _mcp_session(endpoint, headers) as session:
+            recipe = McpSandboxServerRecipe(
+                catalog_id=service_name,
+                version=catalog[service_name].version,
+                service_name=service_name,
+                port=port,
+            )
+            async with _mcp_session(endpoint, headers, recipe.mcp_path) as session:
                 tools = await _all_tools(session)
                 actual = {tool.name: canonical_json_hash(tool.inputSchema) for tool in tools}
                 expected = {

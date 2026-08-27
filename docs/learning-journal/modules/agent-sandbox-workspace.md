@@ -105,14 +105,14 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 
 ## 已知限制
 
-- 7.3 已实际构建派生镜像，并在 `--network none` Docker 容器完成本地 MCP/Chromium/下载回路；仍未运行
-  真实 OpenSandbox Smoke，因此不能宣称 Provider 网络 default-deny、CPU/内存、宿主/Secret 不可见、
-  opaque endpoint/header 或远端销毁补偿已在真实环境验证。
+- 7.3 已实际构建派生镜像，并在 `--network none` Docker 容器及本地 OpenSandbox Server Proxy 完成
+  MCP/Chromium/下载回路；仍不能宣称 secure runtime、CPU/内存强制、宿主/Secret 不可见或远端销毁
+  补偿已在生产环境验证。
 - OpenSandbox Python SDK 与自定义 Adapter 仍是 alpha Spike；没有孤儿 Lease 定时清理器、磁盘/PID
   运行时测量、公开部署或生产 SLA。
 - 7.3 已把固定 Playwright/arXiv MCP 接到当前 Lease，execute/resume 的 MCP session 包围 graph，并在
-  Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。真实 OpenSandbox 代理 Smoke、
-  noVNC/公共下载仍未完成；7.4 已把 Native Skills 放在 Sandbox `execute` 不可见的只读虚拟 Backend，
+  Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。本地 OpenSandbox 代理 Smoke 已
+  完成，noVNC/公共下载仍未完成；7.4 已把 Native Skills 放在 Sandbox `execute` 不可见的只读虚拟 Backend，
   没有改变物理 Workspace。公共网络与统一 egress 后移到 Phase 6。
 - `max_model_calls` 仍不覆盖 SummarizationMiddleware 内部重试或已在途 Provider 不确定窗口。
 

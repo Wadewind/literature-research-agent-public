@@ -22,8 +22,8 @@ from literature_agent.infrastructure.agent.sandbox_workspace import (
 )
 
 _FIXED_SANDBOX_MCP_SERVICES = {
-    ("playwright", "0.0.79"): ("playwright", 8931),
-    ("arxiv-search", "0.6.2"): ("arxiv-search", 8932),
+    ("playwright", "0.0.79"): ("playwright", 8931, "/mcp"),
+    ("arxiv-search", "0.6.2"): ("arxiv-search", 8932, "/mcp/"),
 }
 
 
@@ -32,7 +32,7 @@ class SandboxMcpBackend(Protocol):
 
     def prepare_mcp_service(self, service_name: str) -> None: ...
     def configure_mcp_service(self, service_name: str, *, allowed_host: str) -> None: ...
-    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str]]: ...
+    def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str], str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,8 +46,13 @@ class McpSandboxServerRecipe:
 
     def __post_init__(self) -> None:
         expected = _FIXED_SANDBOX_MCP_SERVICES.get((self.catalog_id, self.version))
-        if expected != (self.service_name, self.port):
+        if expected is None or expected[:2] != (self.service_name, self.port):
             raise ValueError("Sandbox MCP recipe 未经平台注册")
+
+    @property
+    def mcp_path(self) -> str:
+        """返回与固定 Catalog 版本绑定的 Streamable HTTP path。"""
+        return _FIXED_SANDBOX_MCP_SERVICES[(self.catalog_id, self.version)][2]
 
     @property
     def config_hash(self) -> str:
@@ -107,11 +112,10 @@ class SandboxMcpConnectionResolver:
                 typed_backend.prepare_mcp_service,
                 recipe.service_name,
             )
-            endpoint, headers = await asyncio.to_thread(
+            endpoint, headers, allowed_host = await asyncio.to_thread(
                 typed_backend.get_mcp_endpoint,
                 recipe.port,
             )
-            allowed_host = _endpoint_authority(endpoint)
             await asyncio.to_thread(
                 typed_backend.configure_mcp_service,
                 recipe.service_name,
@@ -131,13 +135,13 @@ class SandboxMcpConnectionResolver:
             server_name=recipe.catalog_id,
             connection={
                 "transport": "streamable_http",
-                "url": _mcp_url(endpoint),
+                "url": _mcp_url(endpoint, recipe.mcp_path),
                 "headers": dict(headers),
             },
         )
 
 
-def _mcp_url(endpoint: str) -> str:
+def _mcp_url(endpoint: str, mcp_path: str) -> str:
     """仅接受 OpenSandbox 返回的 HTTP(S) endpoint，并追加固定 MCP path。"""
     parts = urlsplit(endpoint)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
@@ -146,25 +150,8 @@ def _mcp_url(endpoint: str) -> str:
             "MCP 能力暂时不可用",
             RuntimeErrorKind.TEMPORARY,
         )
-    path = f"{parts.path.rstrip('/')}/mcp"
+    path = f"{parts.path.rstrip('/')}{mcp_path}"
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
-
-
-def _endpoint_authority(endpoint: str) -> str:
-    """从 Provider endpoint 提取启动时所需的精确 Host allowlist。"""
-    parts = urlsplit(endpoint)
-    if (
-        parts.scheme not in {"http", "https"}
-        or not parts.hostname
-        or parts.username is not None
-        or parts.password is not None
-    ):
-        raise _error(
-            "runtime_mcp_unavailable",
-            "MCP 能力暂时不可用",
-            RuntimeErrorKind.TEMPORARY,
-        )
-    return parts.netloc
 
 
 def _error(

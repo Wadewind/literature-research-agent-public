@@ -40,13 +40,14 @@ class _Files:
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
         self.created_directories: list[list[WriteEntry]] = []
+        self.write_options: dict[str, dict[str, object]] = {}
 
     def create_directories(self, entries) -> None:
         self.created_directories.append(entries)
 
     def write_file(self, path: str, data: bytes, **kwargs) -> None:
-        del kwargs
         self.data[path] = data
+        self.write_options[path] = kwargs
 
     def read_bytes(self, path: str) -> bytes:
         return self.data[path]
@@ -62,6 +63,12 @@ class _Sandbox:
     def __init__(self) -> None:
         self.commands = _Commands()
         self.files = _Files()
+        self.connection_config = type(
+            "ConnectionConfig",
+            (),
+            {"protocol": "http", "domain": "sandbox-server.invalid:8080"},
+        )()
+        self.endpoint = "http://sandbox-proxy.invalid/private"
 
     def get_endpoint(self, port: int):
         assert port == 8931
@@ -69,7 +76,7 @@ class _Sandbox:
             "Endpoint",
             (),
             {
-                "endpoint": "http://sandbox-proxy.invalid/private",
+                "endpoint": self.endpoint,
                 "headers": {"X-Sandbox-Route": "opaque"},
             },
         )()
@@ -101,6 +108,7 @@ def test_upload_and_download_only_accept_workspace_paths() -> None:
     assert uploaded[1].error == "invalid_path"
     assert downloaded[0].content == b"note"
     assert downloaded[1].error == "invalid_path"
+    assert sandbox.files.write_options["/workspace/note.md"]["mode"] == 600
 
 
 def test_upload_creates_nested_parent_directories_before_write() -> None:
@@ -121,6 +129,8 @@ def test_upload_creates_nested_parent_directories_before_write() -> None:
         "/workspace/nested",
         "/workspace/nested/deeper",
     ]
+    assert all(item.mode == 700 for item in entries)
+    assert all(options["mode"] == 600 for options in sandbox.files.write_options.values())
 
 
 def test_platform_mcp_service_and_endpoint_are_fixed() -> None:
@@ -131,7 +141,7 @@ def test_platform_mcp_service_and_endpoint_are_fixed() -> None:
     backend = OpenSandboxBackend(sandbox)
 
     backend.prepare_mcp_service("playwright")
-    endpoint, headers = backend.get_mcp_endpoint(8931)
+    endpoint, headers, allowed_host = backend.get_mcp_endpoint(8931)
     backend.configure_mcp_service("playwright", allowed_host="sandbox-proxy.invalid")
 
     assert [call[0] for call in sandbox.commands.calls] == [
@@ -144,6 +154,50 @@ def test_platform_mcp_service_and_endpoint_are_fixed() -> None:
     )
     assert endpoint == "http://sandbox-proxy.invalid/private"
     assert headers == {"X-Sandbox-Route": "opaque"}
+    assert allowed_host == "sandbox-proxy.invalid"
+
+
+def test_mcp_endpoint_adds_provider_protocol_when_sdk_omits_scheme() -> None:
+    sandbox = _Sandbox()
+    sandbox.endpoint = "127.0.0.1:8080/v1/sandboxes/private/proxy/8931"
+    backend = OpenSandboxBackend(sandbox)
+
+    endpoint, _, allowed_host = backend.get_mcp_endpoint(8931)
+
+    assert endpoint == "http://127.0.0.1:8080/v1/sandboxes/private/proxy/8931"
+    assert allowed_host == "127.0.0.1:8080"
+
+
+def test_mcp_endpoint_uses_exact_direct_authority_for_proxy_host_allowlist() -> None:
+    sandbox = _Sandbox()
+    direct_endpoint = type(
+        "Endpoint",
+        (),
+        {"endpoint": "127.0.0.1:54178/proxy/8931", "headers": {"secret": "hidden"}},
+    )()
+    backend = OpenSandboxBackend(
+        sandbox,
+        direct_endpoint_getter=lambda port: direct_endpoint if port == 8931 else None,
+    )
+
+    endpoint, headers, allowed_host = backend.get_mcp_endpoint(8931)
+
+    assert endpoint == "http://sandbox-proxy.invalid/private"
+    assert headers == {"X-Sandbox-Route": "opaque"}
+    assert allowed_host == "127.0.0.1:54178"
+
+
+def test_mcp_endpoint_rejects_direct_authority_with_userinfo() -> None:
+    sandbox = _Sandbox()
+    direct_endpoint = type(
+        "Endpoint",
+        (),
+        {"endpoint": "http://user@127.0.0.1:54178/proxy/8931", "headers": {}},
+    )()
+    backend = OpenSandboxBackend(sandbox, direct_endpoint_getter=lambda _port: direct_endpoint)
+
+    with pytest.raises(ValueError, match="MCP endpoint"):
+        backend.get_mcp_endpoint(8931)
 
 
 def test_platform_mcp_service_rejects_unregistered_recipe_and_port() -> None:

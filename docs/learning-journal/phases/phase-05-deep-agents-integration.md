@@ -20,8 +20,9 @@ AgentSession/SDK Thread 专属的短 TTL Lease 中向模型开放 Sandbox `execu
 切片 7.0“Real Deep Agent Runtime Enablement”已完成实现：生产 Worker
 默认继续使用 Fake，只有显式选择 `deep_agents` 才装配固定 DeepSeek 模型、持久 Checkpointer、Project
 Context 与 RuntimeExecution control。切片 7.1“OpenSandbox/Lease/WorkspaceSnapshot”已于 2026-08-26
-完成实现与离线/临时 PostgreSQL 验证；尚未运行真实 OpenSandbox Smoke，不能宣称远端隔离、资源限制或
-镜像运行已经验证。
+完成实现与离线/临时 PostgreSQL 验证；2026-08-28 又在本地 `opensandbox-server==0.2.2`、
+Python SDK `opensandbox==0.1.15` 上完成显式 OpenSandbox 功能 Smoke。该结果验证本地 Docker Provider
+回路和固定镜像运行，不验证 secure runtime、宿主/Secret 隔离或公网生产安全。
 2026-08-27 由 ADR-0008 将剩余能力 Spike 调整为：先建立 MCP Configuration Foundation，再使用
 Playwright MCP 连接同一 OpenSandbox Chromium 并适配一个现有 Search MCP，最后验证 Deep Agents 原生
 Skills。Phase 5 不再自研 Browser Tool 或 MCP Server；公共网络与统一 egress 安全后移到 Phase 6。
@@ -32,9 +33,9 @@ ClientSession 生命周期、Schema/hash 校验与平台 interceptor。该切片
 测试替代。
 切片 7.3“Playwright MCP 与 Search MCP Spike”已于 2026-08-27 完成实现与离线/无网络容器验证：
 固定 `@playwright/mcp==0.0.79` 和 `arxiv-mcp-server==0.6.2`，将两个 Server 预装到
-Session Sandbox，并把审核后的 Tool 子集接入生产 Catalog/Worker。由于本机没有运行 OpenSandbox
-server，opaque endpoint/header 与代理 Host 保留语义仍是显式 Smoke 门槛；本切片只形成受限通过结论，
-不宣称公共浏览、真实 arXiv 搜索或下载安全。
+Session Sandbox，并把审核后的 Tool 子集接入生产 Catalog/Worker。2026-08-28 的显式 Smoke 已验证
+API-key 鉴权的本地 OpenSandbox Server Proxy、同 Sandbox Chromium/Playwright MCP、arXiv MCP Schema
+和 Workspace 下载；仍只形成受限通过结论，不宣称公共浏览、真实 arXiv 搜索或下载安全。
 切片 7.4“Deep Agents Native Skills”已于 2026-08-27 完成实现与离线/临时 PostgreSQL 验证：首个
 平台 Skill `evidence-led-synthesis` 与 owner-scoped 声明式 Skill 使用不可变版本和 SHA-256；Session
 Skill Profile 只允许首 Turn 前配置并永久锁定，每轮 Policy 冻结精确引用；`/skills/` 使用只读虚拟
@@ -886,8 +887,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   `19 passed in 1.02s`，最终完整非集成回归为 `1013 passed, 4 skipped in 596.88s`；
 - 固定镜像 recipe 使用已核实的 `opensandbox/chrome` index digest，构建时预装固定 Python 数据分析依赖；
   OpenSandbox server 保持外部显式前提，不加入普通 compose，Worker 不获得 Docker Socket；
-- 本切片没有运行真实 OpenSandbox Smoke，因此上述 Provider 参数的**装配与离线契约**已验证，但镜像构建、
-  远端默认禁网、CPU/内存、宿主/Secret 不可见、TTL 销毁与丢失恢复尚不是实测安全结论；详见
+- 切片 7.1 完成时没有运行真实 OpenSandbox Smoke；2026-08-28 后续本地功能 Smoke 已验证镜像创建、
+  文件/执行与销毁，但远端默认禁网、CPU/内存、宿主/Secret 不可见和丢失恢复仍不是实测安全结论；详见
   [`agent-sandbox-workspace.md`](../modules/agent-sandbox-workspace.md)。
 
 切片 7.2 实现证据（2026-08-27）：
@@ -958,9 +959,10 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 - `--network none` 的真实派生容器完成 MCP 启动幂等、完整 discovery/schema、合成页面 navigate/click
   和 `/workspace/downloads/paper.txt` 下载；其中 4 路并发 bootstrap/configure 最终收敛到单一进程，
   exact authority 变化按预期 fail-closed；未调用公网 arXiv。最终 Domain/Adapter/Sandbox/Worker
-  定向离线回归为 `109 passed, 1 skipped in 2.29s`，skip 是需要显式
-  `AGENT_RUN_OPENSANDBOX_MCP_TESTS=1` 的真实 OpenSandbox 回路；该回路因本机 OpenSandbox server 缺席
-  未运行。因此“同进程/同镜像回路通过”和“真实 OpenSandbox proxy 回路通过”必须分开陈述。详见
+  定向离线回归为 `109 passed, 1 skipped in 2.29s`。2026-08-28 又以
+  `AGENT_RUN_OPENSANDBOX_MCP_TESTS=1` 实际运行真实 OpenSandbox 回路，结果为
+  `1 passed in 12.13s`；相关 Adapter/MCP/Runtime/Worker 回归为 `52 passed in 2.18s`。该 Smoke 不访问
+  公网 arXiv、不调用模型，且与 secure runtime/公共网络安全验证分开陈述。详见
   [`agent-mcp-browser-search.md`](../modules/agent-mcp-browser-search.md)。
 
 切片 7.4 实现证据（2026-08-27）：
@@ -1015,15 +1017,13 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 以下问题不会改变 ADR-0005 的核心映射，可在对应切片通过测试决定：
 
-1. 7.3 已固定 `@playwright/mcp==0.0.79`、`arxiv-mcp-server==0.6.2` 及其 Sandbox
-   运行位置；仍需在真实 OpenSandbox server 上执行显式 endpoint/header/Host Smoke；
-2. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
+1. Phase 5 是否实现最小审批 API，还是只验证 Runtime Interrupt 契约；离线 Sandbox `execute` 已决定不
    逐命令审批；
-3. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
+2. staged Agent candidate 经何种校验和提交协议成为正式通用 Artifact。
 
 OpenSandbox Python SDK 已在 7.1 固定为 `opensandbox==0.1.15`；固定 base image digest、10 分钟 TTL、
 60 分钟 generation、1 CPU/2 GiB、60 秒命令与 64 KiB inline 输出已经实现。derived image 的发布 digest
-和真实 OpenSandbox Smoke 结果仍需在部署验证时记录。
+和生产部署 digest 仍需在部署验证时记录；本地开发镜像的功能 Smoke 不替代发布制品签名或生产验证。
 
 切片 6 的部署、数据库和恢复决策已由 ADR-0006 固化：ARQ Worker 内运行、当前 PostgreSQL/checkpoint
 schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runtime/Graph revision 才自动恢复。
@@ -1037,7 +1037,8 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - Session 级并发首版采用单活动 Turn，不提供分支、排队或多人协作；
 - 实时网站、真实模型和 Sandbox Provider 不作为默认 CI 事实；
 - 7.1 已用离线 Adapter/真实 PostgreSQL 验证 Lease、fence、默认禁网配置和 WorkspaceSnapshot 重建契约，
-  但未运行真实 OpenSandbox Smoke；不得据此宣称远端隔离、资源限制或宿主/Secret 不可见已实测。
+  并用本地 OpenSandbox Docker 回路验证创建、执行、文件与销毁；Server 启动日志明确显示未配置
+  secure runtime，因此不得宣称强隔离、资源强制或宿主/Secret 不可见已实测。
   Playwright MCP/CDP 与本地下载属于 7.3；公共浏览、统一 egress、来源/下载安全属于 Phase 6；
 - 切片 2 Fake 只接收 Snapshot 引用，不读取 Chunk 或 Matrix 正文；候选只保存 descriptor，不写文件；
 - Worker 生产默认仍使用 Fake Runtime，但切片 7.0 已增加显式 `deep_agents` 模式并装配真实 Provider、
@@ -1053,9 +1054,8 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
   `max_model_calls` 仍不覆盖 `SummarizationMiddleware` 最多 3 次内部 Provider 尝试，也不消除已在途
   Provider/Tool 请求的不确定窗口；
 - 切片 7.3 已让生产 Catalog/Resolver 支持固定 Playwright/arXiv MCP，并在 default-deny Docker
-  容器中运行真实 Server、Playwright/CDP、本地页面和 Workspace 下载；但尚未在真实 OpenSandbox
-  server 上验证 opaque endpoint/header 与代理 Host 语义，也没有运行公共网络、真实 arXiv 搜索或付费
-  服务。成功外部调用与
+  容器及真实本地 OpenSandbox Server Proxy 中运行 Playwright/CDP、本地页面、Schema 校验和 Workspace
+  下载；没有运行公共网络、真实 arXiv 搜索或付费服务。成功外部调用与
   ToolExecution 成功提交之间仍有在途不确定窗口，重复时对 orphan RUNNING fail-safe 拒绝而非盲目重放；
   graph 构造前的只读 session/discovery 尚无 graph RuntimeExecution permit，跨进程重复 Job 可能重复该
   discovery，但每个边界前会检查业务取消，且不会绕过 Tool invocation effect 去重；

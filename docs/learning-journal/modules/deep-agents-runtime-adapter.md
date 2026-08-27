@@ -157,7 +157,9 @@ manifest 始终一致；旧 graph revision 继续 fail-closed。
 prefixed Tool、Schema 漂移、显式 client 关闭、LangGraph `tool_call_id` 成功重放/冲突、取消/
 缺调用 ID/预算零调用、SDK 生命周期错误脱敏、输出超限、handler 后 fence 丢失不写
 旧 owner 终态，以及 graph 工厂异常清理。该结论记录 7.2 当时生产 Catalog 为空；7.3 已接入固定
-Playwright/arXiv Catalog 与 Sandbox resolver，但仍未运行真实 OpenSandbox proxy 回路。
+Playwright/arXiv Catalog 与 Sandbox resolver，但切片完成时仍未运行真实 OpenSandbox proxy 回路。
+2026-08-28 后续本地功能 Smoke 已验证真实 Lease、认证 Server Proxy、MCP discovery、本地 Browser/下载
+与 Workspace 回收；该结论不包含真实 Provider、公共网络或生产安全验证。
 
 受控命令沙箱内运行 Deep Agents 异步链时曾出现 selector 假性等待；相同完全离线命令在沙箱外会正常
 给出断言失败或通过结果。该现象只描述开发工具环境，不是产品 Sandbox 的能力或安全验证。
@@ -180,9 +182,9 @@ Playwright/arXiv Catalog 与 Sandbox resolver，但仍未运行真实 OpenSandbo
   `runtime_turn_not_interrupted`；
 - 成功、失败、取消及 orphan RUNNING 已有持久 RuntimeExecution 和第二 OS 进程恢复证据；只允许相同
   Runtime/Graph/SDK revision 自动恢复，跨版本迁移尚未实现；
-- 没有真实 Provider/OpenSandbox Smoke、Usage 账单闭环、流式 token 或正式 Artifact。
-  7.3 已在无网络派生容器验证真实 Playwright/arXiv MCP 与本地 Browser/下载回路，但没有验证公共网络或
-  OpenSandbox proxy；7.1 已用固定 Capability Profile 和 checkpoint State 对 Project/文件/execute Tool 强制统一
+- 没有真实 Provider Smoke、Usage 账单闭环、流式 token 或正式 Artifact。2026-08-28 已补充真实
+  OpenSandbox proxy 功能 Smoke；7.3 已在默认禁网的派生容器验证真实 Playwright/arXiv MCP discovery
+  与本地 Browser/下载回路，但没有访问公共网络；7.1 已用固定 Capability Profile 和 checkpoint State 对 Project/文件/execute Tool 强制统一
   `max_tool_calls`，主 Agent Loop 已强制 `max_model_calls`，但 summarization 内部调用与 Provider 在途窗口
   不在模型预算内；Native Skills 已在 7.4 通过离线原生两轮测试，但未做真实 Provider/Sandbox Smoke；
 - Worker 已使用 checkpoint pool，并为每次 Runtime operation 创建独立 Saver/graph；完成后的 collect/

@@ -170,10 +170,10 @@ authority 重试幂等，之后 authority 变化则 fail-closed。resolver 不�
 client 或 Server 连接，并把 Provider/recipe 原始异常收敛为不含连接与 Secret 的 Runtime 错误。
 
 已在 `--network none` 派生 Docker 容器中运行真实 Server，完成完整 discovery、同 Chromium 合成页面
-navigate/click 和 Workspace 下载；没有调用公网 arXiv。由于开发机没有运行 OpenSandbox server，真实
-opaque endpoint/header、代理是否保留推导出的 Host 仍未验证，已提供默认跳过的显式 Smoke。故 7.3
-结论为“镜像内能力与平台装配受限通过”，不是 OpenSandbox 代理链路、公共浏览、真实 arXiv 搜索或下载
-安全通过。
+navigate/click 和 Workspace 下载；没有调用公网 arXiv。2026-08-28 又以本地
+`opensandbox-server==0.2.2` 运行默认跳过的显式 Smoke，验证 API-key 鉴权的 Server Proxy、精确随机
+Host allowlist、Playwright/arXiv MCP path 和 Workspace 下载。故 7.3 结论仍为“本地功能链路受限通过”，
+不是公共浏览、真实 arXiv 搜索、secure runtime 或下载安全通过。
 
 ## Slice 7.4 落地证据
 
