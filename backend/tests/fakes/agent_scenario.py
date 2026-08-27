@@ -28,8 +28,14 @@ from literature_agent.infrastructure.persistence.agent_repository import (
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
+from literature_agent.infrastructure.persistence.claim_set_repository import (
+    SqlalchemyClaimSetRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
+)
+from literature_agent.infrastructure.persistence.evidence_repository import (
+    SqlalchemyEvidenceRepository,
 )
 from literature_agent.infrastructure.persistence.idempotency_repository import (
     SqlalchemyIdempotencyRepository,
@@ -149,6 +155,8 @@ def make_agent_service(
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
         mcp_profile_repo_factory=SqlalchemyMcpProfileRepository,
         mcp_catalog=mcp_catalog,
         skill_repo_factory=SqlalchemySkillRepository,

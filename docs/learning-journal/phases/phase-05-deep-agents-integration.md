@@ -40,6 +40,11 @@ server，opaque endpoint/header 与代理 Host 保留语义仍是显式 Smoke �
 Skill Profile 只允许首 Turn 前配置并永久锁定，每轮 Policy 冻结精确引用；`/skills/` 使用只读虚拟
 Backend，Deep Agents 原生 `SkillsMiddleware` 在同一 SDK Thread 复用 metadata，Sandbox `execute`
 不可见且不能改写 Skill。未新增依赖，也未运行真实 Provider/OpenSandbox Smoke。
+切片 8“最小 Agent Chat UI”已于 2026-08-27 完成实现与离线验收：新增 Project-scoped Session 列表和
+带持久 Claim/Citation/Evidence 摘要的 Message 读模型，并用独立 React 路由提供 Session、能力配置、
+两轮 Turn、通用 Run 恢复/取消、筛选后 Event、Evidence Margin 与 staged candidate 展示。默认
+Playwright 旅程使用 Fake Runtime 且阻断非 localhost 请求；本切片未接入官方 Deep Agents UI、
+Browser/noVNC、Workspace 文件管理、fork/rewind 或正式 Artifact 提交。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -527,7 +532,10 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
      MCP；不自研 MCP Server，不把公共网络与统一 egress 作为本切片通过条件；
    - **7.4 Native Skills（已完成实现）**：验证平台安装 Skill 与 owner-scoped 声明式 Skill 的只读 Backend、
      不可变版本/哈希、首 Turn 后 Session manifest 锁定、Sandbox 不可改写和权限不扩张；
-8. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
+8. **最小 Agent Chat UI（已完成）**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；前后端接口、
+   桌面三栏、Evidence Margin、首 Turn 前能力配置和非范围以
+   [`agent-chat-ui-interface-contract.md`](../../spec/agent-chat-ui-interface-contract.md) 为准；不直接接入
+   官方 Deep Agents UI，移动 Drawer 不作为本切片验收条件；
 9. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
 
 ## 测试方式
@@ -552,6 +560,34 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
 
 普通自动测试必须完全离线，不访问真实模型、实时网站、外部 MCP 或付费 Sandbox。真实 Provider/Runtime
 Smoke 必须显式启用、限制预算，并记录版本、命令、耗时和结果。
+
+切片 8 实际验证（2026-08-27）：
+
+- 后端 Session 列表先验证 owner/Project 再执行单次稳定倒序查询；Message 读模型只装配与当前
+  Session 的 `turn_run_id/claim_set_id` 一致、且 `Evidence.project_id/run_id` 同时属于当前
+  Project/Turn 的持久引用；Claim/Evidence Repository 是必需装配，不能静默降级为“无引用”；
+- API/Application/Executor/PostgreSQL Repository 定向扩大回归 `30 passed`，Agent 两轮与可靠性集成
+  回归 `4 passed`，后端非集成全量回归 `952 passed, 5 skipped`；生产代码全量 `pyright` 为
+  `0 errors`，`ruff check src` 与本切片测试通过；
+- 主审补强后的 Citation/Session/API/PostgreSQL 定向回归 `15 passed`，两轮集成 `1 passed`；同
+  Project 跨 Turn 损坏引用测试在修复前精确返回多余 Evidence，增加 run 闭包后转绿；
+- 前端 Vitest 全量 `128 passed`，`tsc -b && vite build` 通过；缺失 Agent 意图/展示模块时的首轮
+  Vitest 得到 2 个模块解析失败，最小实现后转绿；
+- Project/Session identity 变化通过 React key 创建新的交互状态边界，旧消息意图、Run、Matrix、
+  Evidence 和能力草稿不会沿用；Session 响应不属于路由 Project 时停止子查询和渲染。能力双写使用
+  `allSettled` 等待后统一失效 Profile，部分成功后按服务端 revision 重算 dirty，同时保留失败草稿；
+- 主审修正后 Playwright Fake Runtime 旅程 `1 passed (36.2s)`，覆盖创建 Session、首轮前 Skill 配置、选择真实
+  `review_output_id` 对应 Matrix、第一轮、刷新恢复、第二轮、Project Index 与 staged candidate；旅程
+  阻断非 localhost 请求并断言无 page error；
+- 主智能体最终独立验证中，API/Application/引用闭包/PostgreSQL Repository/两轮集成合并定向回归为
+  `31 passed in 80.51s`，定向 Ruff、全量 Pyright、前端 `128 passed` 与 production build 均通过；
+  Phase 4 取消场景复测为 `1 passed (10.7s)`。有头 `playwright-cli` 在 1440×1000 下确认三栏实际为
+  `220px / 586px / 350px`，工作区 `scrollWidth == clientWidth == 1192`，且能力面板没有暴露 MCP endpoint、
+  transport、env 或 Secret；
+- Fake 的固定结果为证据不足且执行过快，因此浏览器旅程没有稳定制造运行中取消或非空 Agent
+  Citation；取消按钮/终态收束由通用 Run 单元测试覆盖，持久 Claim/Citation/Evidence 投影由后端
+  cited-runtime 测试覆盖。有头检查发现的唯一 Console error 是既有 `/favicon.ico` 404，不影响业务
+  请求或本切片 E2E，未在 Slice 8 中顺便扩大为站点资产修复。
 
 切片 1 实际验证（2026-08-25）：
 

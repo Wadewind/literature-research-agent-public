@@ -146,3 +146,13 @@ describe("applyEvent", () => {
       .toBe(true);
   });
 });
+
+it("Agent 具名事件可订阅且 Agent 终态关闭事件流", () => {
+  expect(KNOWN_EVENT_TYPES).toContain("agent_tool_started");
+  expect(KNOWN_EVENT_TYPES).toContain("agent_turn_succeeded");
+  const state = applyEvent(
+    createEventStreamState(),
+    makeEvent(1, "agent_turn_succeeded"),
+  );
+  expect(state.closed).toBe(true);
+});

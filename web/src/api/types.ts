@@ -269,3 +269,102 @@ export interface ReviewArtifact {
   metadata: Record<string, unknown>;
   created_at: string;
 }
+
+export interface AgentSession {
+  session_id: string;
+  project_id: string;
+  title: string | null;
+  status: string;
+  active_turn_run_id: string | null;
+  created_at: string;
+  last_activity_at: string;
+}
+
+export interface AgentMessage {
+  message_id: string;
+  session_id: string;
+  sequence: number;
+  role: "user" | "assistant";
+  content: string;
+  turn_run_id: string;
+  claim_set_id: string | null;
+  created_at: string;
+  claims: Claim[] | null;
+}
+
+export interface AgentCandidate {
+  candidate_id: string;
+  name: string;
+  media_type: string;
+  content_hash: string;
+  size_bytes: number;
+  status: string;
+}
+
+export interface AgentTurn {
+  run_id: string;
+  session_id: string;
+  project_id: string;
+  status: string;
+  user_message_id: string;
+  context_snapshot_id: string;
+  policy_snapshot_id: string;
+  review_output_id: string;
+  project_index_refs: Array<{
+    paper_id: string;
+    paper_version_id: string;
+    chunk_set_id: string;
+  }>;
+  candidates: AgentCandidate[];
+}
+
+export interface McpCatalogParameter {
+  name: string;
+  required: boolean;
+  max_length: number;
+}
+
+export interface McpCatalogEntry {
+  catalog_id: string;
+  version: string;
+  display_name: string;
+  parameters: McpCatalogParameter[];
+  tools: Array<{ name: string; input_schema_hash: string }>;
+}
+
+export interface McpProfileSelection {
+  catalog_id: string;
+  version: string;
+  parameters: Record<string, string>;
+}
+
+export interface McpProfile {
+  session_id: string;
+  revision: number;
+  config_hash: string;
+  selections: McpProfileSelection[];
+}
+
+export interface AgentSkill {
+  skill_id: string;
+  source: "platform" | "owner";
+  version: number;
+  name: string;
+  description: string;
+  instructions: string;
+  required_tool_names: string[];
+  content_hash: string;
+}
+
+export interface SkillProfileSelection {
+  source: "platform" | "owner";
+  skill_id: string;
+  version: number;
+}
+
+export interface SkillProfile {
+  session_id: string;
+  revision: number;
+  config_hash: string;
+  selections: SkillProfileSelection[];
+}

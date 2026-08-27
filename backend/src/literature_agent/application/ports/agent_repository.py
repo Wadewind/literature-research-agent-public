@@ -18,6 +18,9 @@ class AgentRepository(Protocol):
     """保存 Agent 业务事实；不暴露 Runtime SDK 类型。"""
 
     async def add_session(self, value: AgentSession) -> AgentSession: ...
+    async def list_sessions_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[AgentSession]: ...
     async def get_session_scoped(self, session_id: str, owner_id: str) -> AgentSession | None: ...
     async def get_session_scoped_for_update(
         self, session_id: str, owner_id: str

@@ -56,6 +56,8 @@ describe("errorMessage", () => {
     ["project_archived", "项目已归档，当前为只读状态"],
     ["paper_archived", "文献已归档，请先恢复后再操作"],
     ["review_cannot_cancel", "Review 当前状态不能取消，请刷新后查看最新状态"],
+    ["agent_session_busy", "当前会话已有研究任务在执行，请等待完成或先停止本轮"],
+    ["skill_profile_locked", "首轮研究已经开始；更换研究方法需要新建会话"],
   ])("稳定业务码 %s 映射为操作指引", (detail, expected) => {
     expect(errorMessage(new ApiError(detail === "invalid_scope" ? 422 : 409, detail))).toBe(
       expected,

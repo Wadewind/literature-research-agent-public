@@ -1,8 +1,10 @@
 """SqlalchemyAgentRepository 的真实 PostgreSQL 幂等行为测试。"""
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import update
 
 from literature_agent.domain.evidence import AnswerStatus, create_claim_set
 from literature_agent.domain.exceptions import RunConcurrentModificationError
@@ -18,6 +20,7 @@ from literature_agent.infrastructure.persistence.agent_repository import (
 from literature_agent.infrastructure.persistence.claim_set_repository import (
     SqlalchemyClaimSetRepository,
 )
+from literature_agent.infrastructure.persistence.models import AgentSessionORM
 from tests.fakes.agent_scenario import make_agent_service, seed_agent_scenario
 from tests.integration.conftest import db_engine as db_engine
 
@@ -80,6 +83,45 @@ async def test_repository_reads_exact_binding_generation_and_converges_candidate
         alias = replace(candidate, candidate_id="repository-candidate-alias")
         assert await repo.get_or_add_candidate(alias) == saved
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_repository_lists_project_sessions_in_stable_activity_order(db_engine) -> None:
+    """列表必须在单个 owner/Project 内稳定倒序，且空 Project 返回空列表。"""
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    first = await service.create_session(
+        scenario.actor, scenario.project.project_id, title="较早会话"
+    )
+    second = await service.create_session(
+        scenario.actor, scenario.project.project_id, title="最近会话"
+    )
+    base = datetime(2026, 8, 27, tzinfo=UTC)
+
+    async with scenario.factory() as session:
+        repo = SqlalchemyAgentRepository(session)
+        # 直接更新领域时间只为固定排序契约；不依赖创建调用的时钟先后。
+        await session.execute(
+            update(AgentSessionORM)
+            .where(AgentSessionORM.session_id == first.session_id)
+            .values(last_activity_at=base)
+        )
+        await session.execute(
+            update(AgentSessionORM)
+            .where(AgentSessionORM.session_id == second.session_id)
+            .values(last_activity_at=base + timedelta(minutes=1))
+        )
+        await session.commit()
+
+    async with scenario.factory() as session:
+        repo = SqlalchemyAgentRepository(session)
+        listed = await repo.list_sessions_scoped(
+            scenario.project.project_id, scenario.actor.owner_id
+        )
+        empty = await repo.list_sessions_scoped("missing-project", scenario.actor.owner_id)
+
+    assert [value.session_id for value in listed] == [second.session_id, first.session_id]
+    assert empty == []
 
 
 @pytest.mark.asyncio

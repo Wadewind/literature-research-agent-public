@@ -1,4 +1,6 @@
-"""Phase 5 切片 2：Agent Session API 契约。"""
+"""Phase 5 Agent Session API 契约。"""
+
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
@@ -9,12 +11,21 @@ from literature_agent.api.agent_sessions import (
     router,
 )
 from literature_agent.api.dependencies import get_actor
-from literature_agent.application.agent_session_service import PostAgentMessageResult
+from literature_agent.application.agent_session_service import (
+    AgentCitationView,
+    AgentClaimView,
+    AgentMessageView,
+    PostAgentMessageResult,
+)
 from literature_agent.application.mcp_configuration_service import McpProfileView
 from literature_agent.application.skill_configuration_service import SkillProfileView
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.mcp_configuration import create_mcp_profile
-from literature_agent.domain.research_agent import create_agent_session
+from literature_agent.domain.research_agent import (
+    AgentMessageRole,
+    create_agent_message,
+    create_agent_session,
+)
 from literature_agent.domain.skill_configuration import (
     create_owner_skill,
     create_skill_version,
@@ -33,6 +44,57 @@ class _Service:
 
     async def create_session(self, actor, project_id, *, title):
         return create_agent_session(owner_id=actor.owner_id, project_id=project_id, title=title)
+
+    async def list_sessions(self, actor, project_id):
+        return [
+            create_agent_session(
+                owner_id=actor.owner_id, project_id=project_id, title="最近研究"
+            )
+        ]
+
+    async def list_message_views(self, actor, session_id):
+        del actor
+        user = create_agent_message(
+            session_id=session_id,
+            last_sequence=0,
+            role=AgentMessageRole.USER,
+            content="问题",
+            turn_run_id="run-1",
+            idempotency_key="key-1",
+        )
+        assistant = replace(
+            create_agent_message(
+                session_id=session_id,
+                last_sequence=1,
+                role=AgentMessageRole.ASSISTANT,
+                content="结论",
+                turn_run_id="run-1",
+                idempotency_key="assistant:run-1",
+            ),
+            claim_set_id="claim-set-1",
+        )
+        return [
+            AgentMessageView(user, None),
+            AgentMessageView(
+                assistant,
+                (
+                    AgentClaimView(
+                        "结论",
+                        (
+                            AgentCitationView(
+                                "evidence-1",
+                                "paper-1",
+                                "version-1",
+                                "Results",
+                                3,
+                                3,
+                                "有界证据摘录",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ]
 
     async def post_message(self, actor, session_id, **kwargs):
         type(self).post_calls += 1
@@ -114,6 +176,37 @@ def test_agent_api_returns_201_and_202_and_rejects_runtime_configuration() -> No
             headers={"Idempotency-Key": "key-2"},
         )
         assert rejected.status_code == 422
+
+
+def test_agent_api_lists_project_sessions_and_returns_persisted_claim_summaries() -> None:
+    app = create_app()
+    app.dependency_overrides[get_actor] = lambda: ActorContext(owner_id="owner-1")
+    app.dependency_overrides[get_agent_session_service] = _Service
+    with TestClient(app) as client:
+        sessions = client.get("/api/v1/projects/project-1/agent-sessions")
+        messages = client.get("/api/v1/agent-sessions/session-1/messages")
+
+    assert sessions.status_code == 200
+    assert sessions.json()[0]["title"] == "最近研究"
+    assert messages.status_code == 200
+    assert messages.json()[0]["claims"] is None
+    assert messages.json()[1]["claim_set_id"] == "claim-set-1"
+    assert messages.json()[1]["claims"] == [
+        {
+            "text": "结论",
+            "citations": [
+                {
+                    "evidence_id": "evidence-1",
+                    "paper_id": "paper-1",
+                    "version_id": "version-1",
+                    "section_path": "Results",
+                    "page_start": 3,
+                    "page_end": 3,
+                    "excerpt": "有界证据摘录",
+                }
+            ],
+        }
+    ]
 
 
 def test_agent_message_requires_bounded_idempotency_key_as_http_400() -> None:

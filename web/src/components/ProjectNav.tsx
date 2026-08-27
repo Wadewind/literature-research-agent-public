@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 
 interface ProjectNavProps {
   projectId: string;
-  active: "library" | "chat" | "reviews";
+  active: "library" | "chat" | "reviews" | "agent";
 }
 
 export default function ProjectNav({ projectId, active }: ProjectNavProps) {
@@ -12,10 +12,13 @@ export default function ProjectNav({ projectId, active }: ProjectNavProps) {
         文献库
       </Link>
       <Link className={active === "chat" ? "active" : ""} to={`/projects/${projectId}#project-chat`}>
-        Chat
+        文献问答
       </Link>
       <Link className={active === "reviews" ? "active" : ""} to={`/projects/${projectId}/reviews`}>
-        Reviews
+        综述
+      </Link>
+      <Link className={active === "agent" ? "active" : ""} to={`/projects/${projectId}/agent`}>
+        研究助手
       </Link>
     </nav>
   );

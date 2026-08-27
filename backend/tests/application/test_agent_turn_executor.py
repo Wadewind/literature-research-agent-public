@@ -426,7 +426,7 @@ async def test_executor_calls_runtime_after_read_transaction_and_commits_result_
 
 
 @pytest.mark.asyncio
-async def test_cited_runtime_result_commits_message_claims_and_citations_atomically(
+async def test_cited_runtime_result_commits_message_claims_and_omits_cross_turn_citations(
     db_engine,
 ) -> None:
     scenario = await seed_agent_scenario(db_engine)
@@ -500,6 +500,35 @@ async def test_cited_runtime_result_commits_message_claims_and_citations_atomica
         assert await claim_repo.list_citations(claims[0].claim_id) == [
             Citation(claims[0].claim_id, evidence.evidence_id)
         ]
+        cross_turn_evidence = create_evidence(
+            run_id=scenario.matrix.review_run_id,
+            project_id=scenario.project.project_id,
+            paper_id=evidence.paper_id,
+            version_id=evidence.version_id,
+            parse_revision_id=evidence.parse_revision_id,
+            chunk_id=evidence.chunk_id,
+            section_path=evidence.section_path,
+            page_start=evidence.page_start,
+            page_end=evidence.page_end,
+            excerpt="同 Project、不同 Turn 的损坏引用",
+        )
+        await SqlalchemyEvidenceRepository(session).add_many([cross_turn_evidence])
+        await session.flush()
+        await claim_repo.add_citations(
+            [Citation(claims[0].claim_id, cross_turn_evidence.evidence_id)]
+        )
+        await session.commit()
+
+    views = await service.list_message_views(scenario.actor, agent_session.session_id)
+    assert views[0].claims is None
+    assert views[-1].message.claim_set_id == assistant.claim_set_id
+    assert views[-1].claims is not None
+    assert views[-1].claims[0].text == "该结论有证据支持"
+    assert [item.evidence_id for item in views[-1].claims[0].citations] == [
+        evidence.evidence_id
+    ]
+    assert views[-1].claims[0].citations[0].paper_id == evidence.paper_id
+    assert views[-1].claims[0].citations[0].excerpt == "Agent 引用证据"
 
 
 @pytest.mark.asyncio

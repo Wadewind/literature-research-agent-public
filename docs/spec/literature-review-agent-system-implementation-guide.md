@@ -1062,6 +1062,12 @@ Research Agent 页面在业务 Session、Message、Turn 和 Event 契约稳定�
 当前活动 Turn、审批、来源和 Artifact 展示；Browser、Workspace 与工具细节只展示筛选后的业务摘要，
 不复制 SDK 自带 UI 或暴露其内部状态模型。
 
+Phase 5 Slice 8 的最小 REST/SSE、桌面信息架构、Evidence Margin、首 Turn 前能力配置和非范围见
+[`agent-chat-ui-interface-contract.md`](agent-chat-ui-interface-contract.md)。官方 Deep Agents UI 依赖直接
+连接 LangGraph Deployment/Thread State，本项目不接入或代理该数据层；现有 Vite React 只消费平台业务
+API。移动 Drawer、Browser/noVNC、Workspace 文件管理、fork/rewind 和候选 Artifact 正式提交均不属于
+该切片。
+
 Run Detail 是核心页面，应展示：
 
 - 当前状态；

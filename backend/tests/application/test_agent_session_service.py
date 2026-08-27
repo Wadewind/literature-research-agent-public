@@ -2,9 +2,11 @@
 
 import pytest
 
+from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import (
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
+    ProjectNotFoundError,
 )
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
@@ -18,6 +20,26 @@ from literature_agent.infrastructure.persistence.outbox_repository import (
 from literature_agent.infrastructure.persistence.run_repository import SqlalchemyRunRepository
 from tests.fakes.agent_scenario import make_agent_service, seed_agent_scenario
 from tests.integration.conftest import db_engine as db_engine
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_requires_owned_project_and_returns_project_scope(db_engine) -> None:
+    """Application 先校验 Project，再只返回该 Project 的 Session。"""
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    created = await service.create_session(
+        scenario.actor, scenario.project.project_id, title="研究会话"
+    )
+
+    listed = await service.list_sessions(scenario.actor, scenario.project.project_id)
+
+    assert [value.session_id for value in listed] == [created.session_id]
+    with pytest.raises(ProjectNotFoundError):
+        await service.list_sessions(
+            ActorContext(owner_id="other-owner"), scenario.project.project_id
+        )
+    with pytest.raises(ProjectNotFoundError):
+        await service.list_sessions(scenario.actor, "missing-project")
 
 
 @pytest.mark.asyncio

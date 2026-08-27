@@ -21,6 +21,15 @@ const BUSINESS_ERROR_MESSAGES: Record<string, string> = {
   conversation_not_found: "资源不存在或无权访问",
   evidence_not_found: "资源不存在或无权访问",
   review_cannot_cancel: "Review 当前状态不能取消，请刷新后查看最新状态",
+  agent_session_not_found: "研究会话不存在或无权访问",
+  agent_turn_not_found: "研究 Turn 不存在或无权访问",
+  agent_session_busy: "当前会话已有研究任务在执行，请等待完成或先停止本轮",
+  review_output_not_found: "所选 Evidence Matrix 不存在或不属于当前项目",
+  mcp_profile_revision_conflict: "研究能力配置已变化，请刷新后重新选择",
+  mcp_profile_invalid: "研究能力配置无效，请检查所填参数",
+  skill_profile_locked: "首轮研究已经开始；更换研究方法需要新建会话",
+  skill_revision_conflict: "研究方法配置已变化，请刷新后重新选择",
+  skill_configuration_invalid: "研究方法与当前允许的能力不兼容",
 };
 
 /** 读取响应错误体中的 detail 字段（FastAPI 错误格式）。 */

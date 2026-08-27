@@ -182,6 +182,8 @@ async def test_two_turns_reuse_runtime_session_and_persist_staged_candidates(db_
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
     )
     runtime = _TransactionAssertingRuntime(tracked_factory)
     agent_executor = AgentTurnExecutor(

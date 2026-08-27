@@ -62,6 +62,28 @@ class SqlalchemyAgentRepository(AgentRepository):
         )
         return value
 
+    async def list_sessions_scoped(
+        self, project_id: str, owner_id: str
+    ) -> list[AgentSession]:
+        rows = (
+            (
+                await self._session.execute(
+                    select(AgentSessionORM)
+                    .where(
+                        AgentSessionORM.project_id == project_id,
+                        AgentSessionORM.owner_id == owner_id,
+                    )
+                    .order_by(
+                        AgentSessionORM.last_activity_at.desc(),
+                        AgentSessionORM.session_id.desc(),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [_session(row) for row in rows]
+
     async def get_session_scoped(self, session_id: str, owner_id: str) -> AgentSession | None:
         row = (
             await self._session.execute(

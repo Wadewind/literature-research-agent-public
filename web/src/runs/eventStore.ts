@@ -66,5 +66,13 @@ export const KNOWN_EVENT_TYPES = [
   "model_generation_started",
   "model_generation_completed",
   "citation_validation_completed",
+  "agent_message_accepted",
+  "agent_runtime_bound",
+  "agent_tool_started",
+  "agent_tool_succeeded",
+  "agent_tool_completed",
+  "agent_tool_failed",
+  "agent_artifact_staged",
+  "run_retry_scheduled",
   ...TERMINAL_EVENT_TYPES,
 ] as const;

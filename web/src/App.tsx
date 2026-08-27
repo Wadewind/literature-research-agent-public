@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import DocumentPage from "./pages/DocumentPage";
+import AgentPage from "./pages/AgentPage";
 import ConversationPage from "./pages/ConversationPage";
 import LibraryPage from "./pages/LibraryPage";
 import PersonalLibraryPage from "./pages/PersonalLibraryPage";
@@ -23,13 +24,15 @@ export default function App() {
           <NavLink to="/" end>项目</NavLink>
           <NavLink to="/library">个人文献库</NavLink>
         </nav>
-        <span className="phase-chip">PHASE 04</span>
+        <span className="phase-chip">RESEARCH AGENT · SPIKE</span>
       </header>
       <main className="app-main">
         <Routes>
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/library" element={<PersonalLibraryPage />} />
           <Route path="/projects/:projectId" element={<LibraryPage />} />
+          <Route path="/projects/:projectId/agent" element={<AgentPage />} />
+          <Route path="/projects/:projectId/agent/:sessionId" element={<AgentPage />} />
           <Route path="/projects/:projectId/reviews" element={<ReviewsPage />} />
           <Route
             path="/projects/:projectId/reviews/:runId"

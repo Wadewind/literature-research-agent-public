@@ -1,4 +1,4 @@
-# Phase 1–4 Web UI
+# Phase 1–5 Web UI
 
 ## 解决的问题
 
@@ -7,6 +7,9 @@ Project、单篇或多篇论文进入带引用的 RAG 对话，并创建、追�
 Review Claim 均可沿 Citation → Evidence → PDF 页码回溯。Phase 4 切片 3 完成 Review 的 List/
 Create/Detail/Stage/Sources 基础旅程，切片 4 已接入结构化 HITL、Matrix、Section/Citation 与
 Artifact 下载。
+Phase 5 切片 8 在同一 Project 工作区加入持续 Research Agent：用户可创建 Session，在首轮前选择
+Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连续研究；刷新后由 REST 恢复业务消息、
+引用和候选成果，由同一通用 Run/SSE 基础设施恢复执行进度。
 
 ## 边界和执行流程
 
@@ -19,6 +22,9 @@ Artifact 下载。
 
 - Project 工作区用同一语义导航连接 Library、Chat 与 Reviews；现有 Chat 页面和 Conversation 模型
   保持不变，没有为 Review 重建另一套对话产品。
+- Project 工作区现在用“文献库 / 文献问答 / 综述 / 研究助手”区分三种产品模式。Research Agent 使用
+  独立 `AgentSession/AgentTurnRun`，不会把 RAG Conversation 冒充为持续 Agent Thread，也不复制官方
+  Deep Agents UI 的数据层。
 - Review List 读取紧凑的 Project-scoped API；Create 的本地 state 只保存研究问题与幂等意图，成功后
   才清空。列表仅在至少一个 Review 非终态时以 5 秒间隔刷新，空列表和全终态列表关闭轮询。Detail
   并行读取详情和 Sources，`useRunEvents(runId)` 收到业务 Event 后只失效 `review`、`reviews` 与
@@ -35,6 +41,13 @@ Artifact 下载。
 - Matrix 与 Section 只渲染版本化 ReviewOutput。Section API 每个 key 只返回最新版本，页面按 Outline
   顺序重排；Evidence ID 点击后再调用现有 Project-scoped Evidence API 获取 PaperVersion 与页码，
   PDF 链接使用受限 file endpoint。Artifact 只使用 Project-scoped content endpoint。
+- Agent 页并行读取 Project、Session、消息、Review Matrix、MCP/Skill Catalog 与 Profile；TanStack
+  Query 持有服务端状态，本地只保存输入意图、能力配置草稿和当前选中的 Evidence。每条消息使用稳定
+  `Idempotency-Key`，活动 Turn 时禁发；SSE 只显示允许列表中的业务活动，终态后失效 Session、Message
+  和 Turn Query，正文、Claim、Citation 和 candidate 始终从 REST 读取。
+- 桌面端是 Session rail / Conversation / Evidence Margin 三栏。Evidence Margin 展示本轮 Matrix、
+  Project Index 引用数、持久 Claim/Citation/Evidence 和 staged candidate 元数据；前端不解析回答正文
+  中的引用标记，也不读取 candidate 内容。
 
 - 前端不持有任何业务事实：列表与状态全部来自 PostgreSQL 支撑的 REST API；SSE 事件流由后端从 PostgreSQL 重放/推送（见 `run-event.md`）。
 - `/library` 展示 owner 范围的个人文献资产及其 Project 收录范围；Project 页面并行读取当前收录与个人库，可直接收录已有 PaperVersion。移出 Project 只删除 `ProjectPaper`，不会删除 PDF 或解析结果。
@@ -71,6 +84,15 @@ Artifact 下载。
 - **样式决策**：沿用 Literature Atlas 冷灰纸面、深蓝、朱红、Inter + IBM Plex Mono 和零圆角；唯一
   新签名元素是横向“研究阶段脊柱”，编号与连接线只表达真实 Workflow 顺序。移动端允许 rail 横向
   滚动，键盘 focus、语义 `nav/ol/aria-current` 与 reduced motion 沿用全局约束。
+- **Agent UI 不接 SDK 数据层**：产品 Session、Message、Run、Evidence 和 candidate 都来自平台 API；
+  Deep Agents Thread/Checkpoint/内部文件不进入浏览器。这样保留原生 Agent 上下文管理，同时不绕过
+  owner/Project 权限、业务恢复和审计事实。
+- **能力配置是安全的产品语言**：界面只展示平台维护的能力名称、声明参数和研究方法，不暴露 MCP
+  endpoint/transport/command/env、SDK Thread、Sandbox 或 Secret。Skill 在第一条产品消息后只读；MCP
+  可按既有 Profile/Policy 契约调整，未保存草稿会阻止发送。
+- **Evidence Matrix 通过 Output ID 固化**：界面以成功 Review 的研究问题供用户选择，先读取当前
+  Project 的 Matrix，再把响应中的 `output_id` 提交给 Agent Turn；正常后续轮可沿用上一轮已冻结的
+  `review_output_id`，不会让浏览器猜测“最新 Matrix”。
 
 ## 失败、重试与取消行为
 
@@ -81,6 +103,9 @@ Artifact 下载。
 - 取消按钮仅在 `queued`/`running`/`retry_wait`/`waiting_input`/`waiting_dependency` 可用；
   `cancel_requested` 后按钮消失、轮询直至 `cancelled`；
 - SSE 断线由 EventSource 自动重连 + Last-Event-ID 重放，同时每次 error 事件触发一次 Run 查询刷新兜底。
+- Agent Turn 复用相同恢复机制：刷新先读取 Session 当前活动指针或最后一条 Message 的 `turn_run_id`，
+  再由 `GET /runs/{id}` 与具名 SSE 收束；取消调用通用 Run cancel。UI 只展示筛选后的阶段标签，不保存
+  Event payload、模型思考、Prompt 或 Tool 原始输出。
 - Review 创建失败保留研究问题与 Idempotency-Key，相同内容重试不会创建第二个 Run；只有成功响应后
   才清空意图并进入 Detail。归档 Project 禁用创建并说明历史只读语义。
 - Review 取消按钮只在通用 Run 状态表允许的状态出现，调用 Project-scoped cancel；
@@ -122,12 +147,32 @@ Artifact 下载。
 - E2E harness 现在显式选择 Fake Parser/Embedding/Chat/arXiv、清除 Provider Key 并关闭 Worker Metrics
   端口；不会读取 `.env`。首轮全套暴露 Phase 2 旧测试仍查找已被 Project 工作区导航替代的“返回项目
   文献库”链接，更新为当前 `文献库` 导航契约后单测通过；未修改产品行为。
+- Phase 5 切片 8：主审修正后 Vitest 全量 `128 passed`，新增稳定 Agent 消息意图、Session identity/
+  Project 闭包、发送/Skill 锁定/Project Index/
+  candidate 展示规则和 Agent Run 具名事件/终态；`npm run build` 通过。Playwright 新增 1 条完全离线
+  Agent 旅程，完成创建 Session、首轮前 Skill 配置、Matrix 选择、第一轮、刷新、第二轮、Evidence
+  Margin 与 staged candidate 展示，最终 `1 passed`；旅程阻断非 localhost 请求并断言无 page error。
+  后端相关 API/Application/Executor/PostgreSQL Repository 为 `30 passed`，两轮/可靠性集成为
+  `4 passed`，非集成全量回归为 `952 passed, 5 skipped`。全量 `ruff check .` 仍报告 50 个既有
+  Alembic migration 格式问题；本切片覆盖的
+  `src`/测试定向 Ruff 通过，全量 Pyright 为 0 errors。
+- 主审补强后，同 Project 跨 Turn Citation 在修复前真实红灯、增加 Evidence run 闭包后相关后端
+  定向 `15 passed`、两轮集成 `1 passed`；前端 build 与 Phase 5 E2E `1 passed (36.2s)`。切换
+  Project/Session 会重建本地交互状态；Session/路由 Project 不匹配时停止子查询和渲染；能力部分成功
+  后等待所有请求收束并重新读取两个 Profile，失败草稿仍保留。
+- 主智能体最终独立合并回归为后端 `31 passed in 80.51s`、前端 `128 passed`、定向 Ruff 通过、Pyright
+  0 errors 与 production build 通过；Phase 4 取消 E2E 复测 `1 passed (10.7s)`。有头 `playwright-cli`
+  在 1440×1000 下确认三栏计算宽度为 `220px / 586px / 350px` 且无横向溢出，空态、能力 Catalog、
+  Session rail 与 Evidence Margin 均可访问。唯一 Console error 是既有 `/favicon.ico` 404；业务 API
+  请求均为本地 200，本切片未顺便修改站点资产。
 
 ## 代码入口
 
 - 页面：`web/src/pages/`（ProjectsPage、PersonalLibraryPage、LibraryPage、ConversationPage、RunDetailPage、DocumentPage）
 - Review 页面：`web/src/pages/ReviewsPage.tsx`、`ReviewDetailPage.tsx`、
   `web/src/components/ReviewResults.tsx`
+- Agent 页面：`web/src/pages/AgentPage.tsx`、`web/src/components/AgentSessionRail.tsx`、
+  `AgentCapabilityPanel.tsx`、`AgentEvidenceMargin.tsx`；纯交互规则位于 `web/src/agent/`。
 - Project 工作区导航：`web/src/components/ProjectNav.tsx`
 - Review 纯展示/意图：`web/src/reviews/reviewPresentation.ts`、`reviewIntent.ts`、
   `reviewHumanInput.ts`、`reviewResults.ts`、`reviewListRefresh.ts`
@@ -137,7 +182,7 @@ Artifact 下载。
 - 后端消费端点：`backend/src/literature_agent/api/conversations.py`、`documents.py`、`papers.py`、`projects.py`
 - Review 后端读路径：`backend/src/literature_agent/api/reviews.py`、
   `application/review_query_service.py`、`infrastructure/persistence/review_repository.py`
-- E2E：`web/e2e/phase-01.spec.ts`、`phase-02.spec.ts`、`phase-04.spec.ts`、`web/e2e/run.sh`、
+- E2E：`web/e2e/phase-01.spec.ts`、`phase-02.spec.ts`、`phase-04.spec.ts`、`phase-05.spec.ts`、`web/e2e/run.sh`、
   `web/playwright.config.ts`、`deploy/compose/e2e.yml`
 
 ## 已知限制
@@ -156,11 +201,19 @@ Artifact 下载。
   容器部署。
 - E2E 使用全套 Fake Adapter 保持确定性；真实 Docling、arXiv 和 Provider 由独立 opt-in Smoke/报告
   覆盖，不把 Fake 浏览器旅程包装成真实生成质量。
+- Agent UI 当前不提供 Browser/noVNC、Workspace 文件管理、fork/rewind、candidate 内容查看/正式
+  Artifact 提交或移动端 Drawer；窄屏只避免阻断性溢出。Fake Runtime 固定回答没有 Citation 且完成
+  很快，因此 E2E 不把非空 Agent Citation 或运行中取消作为稳定断言；相应业务边界由后端和通用 Run
+  分层测试覆盖。
 
 ## 60 秒面试说明
 
-这个 UI 同时表达资源模型、可靠执行和引用可信性：Project 工作区统一连接文献、Chat 和 Review；
+这个 UI 同时表达资源模型、可靠执行和引用可信性：Project 工作区统一连接文献、Chat、Review 和
+Research Agent；
 问答与 Review 创建都用可重试的幂等意图，SSE 只提示 TanStack Query 重新读取 PostgreSQL 事实。
 Review Detail 不在浏览器复制状态机，而是把固定 `review.v1` 顺序与服务端 `current_stage` 映射成研究
 阶段脊柱，并展示 Step、部分失败 Source、等待和取消。RAG 仍从 Claim/Citation 回到 Evidence 与 PDF
-页码；Project/Paper 归档保留历史，并把个人资产归档、移出 Project 与禁止新 Workflow 明确区分。
+页码；Agent 把每条用户消息建模为独立 Turn，却复用同一 Session/SDK Thread，并通过 REST 恢复产品
+消息、能力快照、Evidence Margin 和候选成果。浏览器不接触 SDK Checkpoint、Secret 或原始 Tool 输出，
+也不从正文猜引用；Project/Paper 归档保留历史，并把个人资产归档、移出 Project 与禁止新 Workflow
+明确区分。

@@ -10,8 +10,10 @@ from typing import TypeVar
 from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.ports.agent_repository import AgentRepository
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
+from literature_agent.application.ports.claim_set_repository import ClaimSetRepository
 from literature_agent.application.ports.event_notifier import EventNotifier, NoopEventNotifier
 from literature_agent.application.ports.event_repository import EventRepository
+from literature_agent.application.ports.evidence_repository import EvidenceRepository
 from literature_agent.application.ports.idempotency_repository import (
     IdempotencyRecord,
     IdempotencyRepository,
@@ -80,6 +82,35 @@ class AgentTurnView:
     candidates: tuple[AgentArtifactCandidate, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class AgentCitationView:
+    """Agent 消息中经过 Project 闭包校验的 Evidence 摘要。"""
+
+    evidence_id: str
+    paper_id: str
+    version_id: str
+    section_path: str | None
+    page_start: int | None
+    page_end: int | None
+    excerpt: str
+
+
+@dataclass(frozen=True, slots=True)
+class AgentClaimView:
+    """Assistant Claim 及其已验证引用。"""
+
+    text: str
+    citations: tuple[AgentCitationView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentMessageView:
+    """产品消息及其持久化 Claim/Citation 投影。"""
+
+    message: AgentMessage
+    claims: tuple[AgentClaimView, ...] | None
+
+
 class AgentSessionService[TSession: Session]:
     """负责平台授权、快照固化和原子 Turn 提交。"""
 
@@ -97,6 +128,8 @@ class AgentSessionService[TSession: Session]:
         run_repo_factory: Callable[[TSession], RunRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
         outbox_repo_factory: Callable[[TSession], OutboxRepository],
+        claim_set_repo_factory: Callable[[TSession], ClaimSetRepository],
+        evidence_repo_factory: Callable[[TSession], EvidenceRepository],
         mcp_profile_repo_factory: Callable[[TSession], McpProfileRepository] | None = None,
         mcp_catalog: McpCatalog | None = None,
         skill_repo_factory: Callable[[TSession], SkillRepository] | None = None,
@@ -114,6 +147,8 @@ class AgentSessionService[TSession: Session]:
         self._run_repo_factory = run_repo_factory
         self._event_repo_factory = event_repo_factory
         self._outbox_repo_factory = outbox_repo_factory
+        self._claim_set_repo_factory = claim_set_repo_factory
+        self._evidence_repo_factory = evidence_repo_factory
         self._mcp_profile_repo_factory = mcp_profile_repo_factory
         self._mcp_catalog = mcp_catalog or McpCatalog()
         self._skill_repo_factory = skill_repo_factory
@@ -145,12 +180,91 @@ class AgentSessionService[TSession: Session]:
                 raise AgentSessionNotFoundError(session_id)
             return value
 
+    async def list_sessions(
+        self, actor: ActorContext, project_id: str
+    ) -> list[AgentSession]:
+        async with self._session_factory() as session:
+            project = await self._project_repo_factory(session).get_by_id(project_id)
+            if project is None or project.owner_id != actor.owner_id:
+                raise ProjectNotFoundError(project_id)
+            return await self._agent_repo_factory(session).list_sessions_scoped(
+                project_id, actor.owner_id
+            )
+
     async def list_messages(self, actor: ActorContext, session_id: str) -> list[AgentMessage]:
         async with self._session_factory() as session:
             repo = self._agent_repo_factory(session)
             if await repo.get_session_scoped(session_id, actor.owner_id) is None:
                 raise AgentSessionNotFoundError(session_id)
             return await repo.list_messages_scoped(session_id, actor.owner_id)
+
+    async def list_message_views(
+        self, actor: ActorContext, session_id: str
+    ) -> list[AgentMessageView]:
+        """列出产品消息，并仅投影当前 Project 内持久化引用。"""
+        async with self._session_factory() as session:
+            repo = self._agent_repo_factory(session)
+            agent_session = await repo.get_session_scoped(session_id, actor.owner_id)
+            if agent_session is None:
+                raise AgentSessionNotFoundError(session_id)
+            messages = await repo.list_messages_scoped(session_id, actor.owner_id)
+            claim_repo = self._claim_set_repo_factory(session)
+            evidence_repo = self._evidence_repo_factory(session)
+            views: list[AgentMessageView] = []
+            for message in messages:
+                if (
+                    message.role is not AgentMessageRole.ASSISTANT
+                    or message.claim_set_id is None
+                ):
+                    views.append(AgentMessageView(message=message, claims=None))
+                    continue
+                claim_set = await claim_repo.get_by_run_id(message.turn_run_id)
+                if claim_set is None or claim_set.claim_set_id != message.claim_set_id:
+                    views.append(AgentMessageView(message=message, claims=None))
+                    continue
+                claims = await claim_repo.list_claims(message.claim_set_id)
+                citations_by_claim = {
+                    claim.claim_id: await claim_repo.list_citations(claim.claim_id)
+                    for claim in claims
+                }
+                evidence_by_id = {
+                    value.evidence_id: value
+                    for value in await evidence_repo.list_by_ids(
+                        [
+                            citation.evidence_id
+                            for citations in citations_by_claim.values()
+                            for citation in citations
+                        ]
+                    )
+                    if value.project_id == agent_session.project_id
+                    and value.run_id == message.turn_run_id
+                }
+                views.append(
+                    AgentMessageView(
+                        message=message,
+                        claims=tuple(
+                            AgentClaimView(
+                                text=claim.text,
+                                citations=tuple(
+                                    AgentCitationView(
+                                        evidence_id=evidence.evidence_id,
+                                        paper_id=evidence.paper_id,
+                                        version_id=evidence.version_id,
+                                        section_path=evidence.section_path,
+                                        page_start=evidence.page_start,
+                                        page_end=evidence.page_end,
+                                        excerpt=evidence.excerpt,
+                                    )
+                                    for citation in citations_by_claim[claim.claim_id]
+                                    if (evidence := evidence_by_id.get(citation.evidence_id))
+                                    is not None
+                                ),
+                            )
+                            for claim in claims
+                        ),
+                    )
+                )
+            return views
 
     async def post_message(
         self,

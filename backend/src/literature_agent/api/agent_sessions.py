@@ -41,7 +41,13 @@ from literature_agent.infrastructure.persistence.agent_repository import Sqlalch
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
+from literature_agent.infrastructure.persistence.claim_set_repository import (
+    SqlalchemyClaimSetRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import SqlalchemyEventRepository
+from literature_agent.infrastructure.persistence.evidence_repository import (
+    SqlalchemyEvidenceRepository,
+)
 from literature_agent.infrastructure.persistence.idempotency_repository import (
     SqlalchemyIdempotencyRepository,
 )
@@ -91,6 +97,21 @@ class MessageCreateRequest(BaseModel):
         return value
 
 
+class CitationResponse(BaseModel):
+    evidence_id: str
+    paper_id: str
+    version_id: str
+    section_path: str | None
+    page_start: int | None
+    page_end: int | None
+    excerpt: str
+
+
+class ClaimResponse(BaseModel):
+    text: str
+    citations: list[CitationResponse]
+
+
 class MessageResponse(BaseModel):
     message_id: str
     session_id: str
@@ -98,7 +119,9 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     turn_run_id: str
+    claim_set_id: str | None
     created_at: datetime
+    claims: list[ClaimResponse] | None
 
 
 class PostMessageResponse(BaseModel):
@@ -218,6 +241,8 @@ async def get_agent_session_service(request: Request) -> AgentSessionService:
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
         outbox_repo_factory=SqlalchemyOutboxRepository,
+        claim_set_repo_factory=SqlalchemyClaimSetRepository,
+        evidence_repo_factory=SqlalchemyEvidenceRepository,
         mcp_profile_repo_factory=SqlalchemyMcpProfileRepository,
         mcp_catalog=PLATFORM_MCP_CATALOG,
         skill_repo_factory=SqlalchemySkillRepository,
@@ -479,6 +504,18 @@ async def create_agent_skill_version(
 
 
 @router.get(
+    "/projects/{project_id}/agent-sessions", response_model=list[SessionResponse]
+)
+async def list_sessions(
+    project_id: str, actor: ActorDep, service: ServiceDep
+) -> list[SessionResponse]:
+    try:
+        return [_session(value) for value in await service.list_sessions(actor, project_id)]
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.get(
     "/agent-sessions/{session_id}/skill-profile",
     response_model=SkillProfileResponse,
 )
@@ -544,16 +581,39 @@ async def list_messages(
     session_id: str, actor: ActorDep, service: ServiceDep
 ) -> list[MessageResponse]:
     try:
-        values = await service.list_messages(actor, session_id)
+        values = await service.list_message_views(actor, session_id)
         return [
             MessageResponse(
-                message_id=x.message_id,
-                session_id=x.session_id,
-                sequence=x.sequence,
-                role=x.role.value,
-                content=x.content,
-                turn_run_id=x.turn_run_id,
-                created_at=x.created_at,
+                message_id=x.message.message_id,
+                session_id=x.message.session_id,
+                sequence=x.message.sequence,
+                role=x.message.role.value,
+                content=x.message.content,
+                turn_run_id=x.message.turn_run_id,
+                claim_set_id=x.message.claim_set_id,
+                created_at=x.message.created_at,
+                claims=(
+                    [
+                        ClaimResponse(
+                            text=claim.text,
+                            citations=[
+                                CitationResponse(
+                                    evidence_id=citation.evidence_id,
+                                    paper_id=citation.paper_id,
+                                    version_id=citation.version_id,
+                                    section_path=citation.section_path,
+                                    page_start=citation.page_start,
+                                    page_end=citation.page_end,
+                                    excerpt=citation.excerpt,
+                                )
+                                for citation in claim.citations
+                            ],
+                        )
+                        for claim in x.claims
+                    ]
+                    if x.claims is not None
+                    else None
+                ),
             )
             for x in values
         ]
