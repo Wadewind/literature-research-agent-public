@@ -1069,6 +1069,8 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
   Prompt Injection；
 - Browser 画面、人工控制、Agent Attachment、Real Runtime Candidate 收集和可下载 AgentArtifact 均按
   ADR-0009/0010 进入 Phase 6；当前 UI 的 staged Candidate 仍只有元数据，不能据此宣称文件交付已完成；
+- Phase 6 后续范围已由 ADR-0011 收敛：固定 arXiv 公网/下载安全、硬预算与 Sandbox 最小治理必须完成，
+  通用 Approval、开放互联网、OAuth/Credential、完整 Registry 和生产级 Sandbox 平台不作为交付条件；
 - Worker 已改为 1..4 连接的 checkpoint pool，并为每个 Runtime operation 创建独立 Saver/graph；这解决
   singleton Saver 的全局实例锁串行，不代表数据库容量、性能或故障切换已完成生产评测；
 - Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界
@@ -1083,6 +1085,10 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
 - `../decisions/0005-interactive-research-agent-session-model.md`
 - `../decisions/0006-run-deep-agents-inside-arq-worker.md`
 - `../decisions/0007-use-opensandbox-executable-workspace.md`
+- `../decisions/0008-use-native-mcp-and-skills-capabilities.md`
+- `../decisions/0009-use-turn-boundary-browser-control.md`
+- `../decisions/0010-use-explicit-agent-file-exchange.md`
+- `../decisions/0011-adopt-phase-06-lean-delivery.md`
 - `../decisions/0008-use-native-mcp-and-skills-capabilities.md`
 - [`Phase 5 Runtime 恢复缺口台账`](../reports/phase-05-runtime-recovery-gap-log.md)
 - [Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)

@@ -70,4 +70,7 @@ OpenSandbox proxy 的本地功能 Smoke 已于 2026-08-28 通过；真实 Provid
 [ADR-0009：跨 Turn 人工浏览器控制](decisions/0009-use-turn-boundary-browser-control.md)和
 [ADR-0010：显式 Agent 文件交换](decisions/0010-use-explicit-agent-file-exchange.md)固定：先完成可下载的
 Agent 绘图 Artifact 与同 generation 合成页面人工操作，再处理输入附件和公共网络安全；WorkspaceSnapshot
-不直接成为用户文件，平台也不托管登录凭据。
+不直接成为用户文件，平台也不托管登录凭据。后续范围由
+[ADR-0011：Phase 6 精简交付](decisions/0011-adopt-phase-06-lean-delivery.md)收敛：必须完成固定 arXiv 的统一
+egress、URL/SSRF 与 PDF 下载安全，以及最小硬预算、Sandbox 清理和资源限制；通用 Approval Center、
+开放互联网、OAuth/Credential、完整 Registry 和生产级 Sandbox 平台明确延期。

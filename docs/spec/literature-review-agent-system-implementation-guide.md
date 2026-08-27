@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v12
+> 状态：Proposed v13
 >
 > 日期：2026-08-28
 >
@@ -56,6 +56,11 @@
 > 平台鉴权画面操作同一 Session Chromium，不保存凭据、不与 Agent 并发控制，也不跨 Sandbox generation
 > 恢复登录；Agent 文件区分 Attachment、WorkspaceSnapshot、Candidate 与 AgentArtifact，只有
 > 显式 `submit_artifact` 的 `/workspace/outputs` 文件经过平台校验和业务成功提交后才能预览或下载。
+>
+> v13 变更：ADR-0011 将 Phase 6 收敛为适合本地个人项目的精简交付：保留 Agent 文件交换、Browser
+> 人工控制、固定 Catalog/Profile、硬预算和 Sandbox 生命周期，并必须完成固定 `arxiv.org`/
+> `export.arxiv.org` 的统一 egress、URL/SSRF 与 PDF 下载安全；完整 Approval Center、开放互联网、
+> OAuth/Credential、通用 Registry、生产级 Sandbox 平台和精确计费延期。
 
 ## 1. 文档用途
 
@@ -1651,29 +1656,35 @@ Smoke、Capability Profile 和后续 Sandbox/Tool 门槛通过前，只能称为
 #### 目标
 
 基于 Phase 5 验证通过的会话与 Runtime 边界，将 Project-scoped Agent Chat 扩展为可用、受限、可观察的
-Research Workspace Agent，并系统验证 Browser、MCP、Tool、版本化 Skills、Workspace 和 Sandbox 的安全与可靠性。
+Research Workspace Agent，并以一个可演示的固定用户故事验证 Browser、MCP、Tool、版本化 Skills、
+Workspace、Sandbox、arXiv 访问和文件交付的安全与可靠性；不建设通用 Agent 安全平台。
 
 #### 主要内容
 
-- Agent Session 多轮 Chat、Turn 详情、事件、审批、取消、来源和 Artifact UI；
+- Agent Session 多轮 Chat、Turn 详情、事件、取消、来源和 Artifact UI；
 - Project Chunk Index、Review Evidence Matrix 与 Artifact Context 工具；
-- Paper/Evidence、公开项目页、代码仓库、数据集和补充材料工具；
-- Browser/URL Allow Policy、Redirect/SSRF 防护和下载隔离；
-- Runtime Tool Policy、预算、重复或无进展检测；
+- Paper/Evidence 与固定 arXiv 搜索、摘要页和 PDF 下载工具；
+- 精确 arXiv allowlist、覆盖 Sandbox 全部进程的统一 egress、URL/DNS/IP/Redirect/SSRF 防护、下载隔离
+  和来源记录；
+- 固定 Catalog/Profile、Runtime Tool Policy、硬预算和确定性循环保护；
 - Workspace/Sandbox 生命周期、文件传输和资源限制；
-- Agent Event、Usage、ToolExecution 和 Artifact 审计；
-- Runtime 升级兼容测试、故障注入和 Agent 评测集；
+- Agent Event、Usage、必要 ToolExecution 摘要和 Artifact 审计；
+- Runtime 升级兼容测试、关键故障验证和小型 Agent 评测集；
 - 平台安装、版本化、allowlist 控制的 Research Skills 与 owner-scoped 声明式 Skill 治理；
 - 在 ADR-0007 已验证的 OpenSandbox `execute` 基础上强化隔离、网络、资源、审计和用户可见治理；
-- 完整 MCP/Tool Registry、已审核 Catalog 选择、OAuth/Credential、审批中心与安全专项验证。
+- AgentAttachment、WorkspaceSnapshot、AgentArtifactCandidate 与 AgentArtifact 的显式输入/内部状态/输出
+  边界，以及 `submit_artifact` 预览下载闭环。
+
+完整 MCP/Tool Registry、Catalog 管理后台、OAuth/Credential、通用审批中心、外部写操作、开放互联网、
+动态依赖、多 Agent/长期 Memory、公网多租户和生产级 Sandbox 运维平台不属于精简交付。
 
 #### 阶段出口
 
 - Agent 只能访问当前 Session/Turn 授权的 Project Context、工具、网络目标和 Workspace；
 - 多轮 Message、Turn、ContextSnapshot、Thread 与 Artifact 的所有权和恢复语义有测试证据；
-- 不绕过登录、付费墙或 CAPTCHA，危险下载和不可逆操作必须审批；
+- 不绕过登录、付费墙或 CAPTCHA；外部写入和不可逆操作不开放，固定 arXiv 下载必须通过文件策略；
 - 网页、论文和仓库内容按不可信输入处理，Prompt Injection 不会获得平台 Secret 或数据库权限；
-- 最大步骤、Token、费用、墙钟时间、Tool Call 和输出大小限制生效；
+- 最大步骤、Token、墙钟时间、Tool Call、下载和输出大小限制生效；
 - Runtime 取消后不再发起新操作，重复执行不会重复提交最终 Artifact；
 - Sandbox 默认不接触宿主文件和 Secret，网络与资源策略有测试证据；
 - SDK 升级由契约测试保护，公开 API 不暴露 SDK 内部模型；
@@ -1814,11 +1825,13 @@ Agent Extension 另需覆盖：
 - Deep Agents 的升级策略和兼容范围（首个 Adapter 版本已固定为 `0.7.8`）；
 - ADR-0006 已固定 ARQ Worker 内 Runtime；仍需确定真实 Provider/Sandbox 的进程资源和部署参数；
 - SDK Checkpoint/Store/压缩的升级策略，以及已固定 TTL/generation/fence 后的孤儿 Lease 清理；
-- Phase 5 MCP Catalog/Profile 通过后进入产品的条目、公共网络和下载安全策略；
+- Phase 5 固定 Playwright/arXiv MCP 进入精简产品 Profile；ADR-0011 已固定首批公网范围，具体统一 egress
+  实现、官方 Redirect 主机核对和下载限制参数仍在对应切片确定；
 - 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的基础版本/Profile 已由 Slice 7.4 固定；内容
   审核、归档/删除、配额、附件/脚本与 Prompt Injection 专项治理仍推迟；
 - OpenSandbox derived image 发布 digest、Server 部署和已固定 TTL/资源参数的真实强制效果；
-- Phase 5 `execute` Spike 通过后，哪些能力可以进入用户可见产品和审批矩阵。
+- Phase 5 `execute` Spike 通过后，ADR-0011 已固定离线计算、固定 arXiv 只读访问和受支持新 Artifact 可
+  自动执行；外部写操作与需要凭据的能力保持禁止，不在本阶段建设审批矩阵。
 
 Agent 产品形态和核心映射不再属于推迟项：ADR-0005 已固定 Project-scoped 持续研究对话、
 `AgentSession : SDK Thread = 1:1`、`AgentTurnRun : SDK Execution = 1:1`，以及每轮 ContextSnapshot 和
@@ -1863,7 +1876,8 @@ Demo-ready Core v1 完成需要同时满足：
   PostgreSQL 重放完整产品历史；
 - AgentSession、Message、AgentTurnRun、SDK Thread/Execution、Workspace、Event 和 Artifact 的所有权清晰；
 - Agent 能以最小授权方式使用 Project Chunk Index 与 Review Evidence Matrix；
-- Browser、Tool、下载和代码执行受 Schema、权限、审批、预算、网络与资源策略限制；
+- Browser、Tool、固定 arXiv 下载和代码执行受 Schema、权限、硬预算、网络与资源策略限制；外部写操作
+  不开放；
 - Runtime 重试、取消、断连、恢复和重复副作用有测试证据；
 - Agent 不能接触未授权 Project 数据、平台数据库、宿主文件或 Secret；
 - Agent 评测、运维文档、模块笔记和已知限制完成。
