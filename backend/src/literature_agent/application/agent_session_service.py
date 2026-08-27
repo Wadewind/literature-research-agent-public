@@ -24,6 +24,7 @@ from literature_agent.application.ports.project_repository import ProjectReposit
 from literature_agent.application.ports.review_repository import ReviewRepository
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
+from literature_agent.application.ports.skill_repository import SkillRepository
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import (
@@ -36,10 +37,12 @@ from literature_agent.domain.exceptions import (
     ProjectArchivedError,
     ProjectNotFoundError,
     ProjectNotIndexedError,
+    SkillConfigurationInvalidError,
 )
 from literature_agent.domain.mcp_configuration import McpCatalog
 from literature_agent.domain.queue_outbox import create_outbox_entry
 from literature_agent.domain.research_agent import (
+    PROJECT_RESEARCH_WORKSPACE_TOOLS,
     AgentArtifactCandidate,
     AgentMessage,
     AgentMessageRole,
@@ -56,6 +59,7 @@ from literature_agent.domain.research_agent import (
 )
 from literature_agent.domain.review import ReviewOutputType
 from literature_agent.domain.run import Run, RunStatus, RunType, create_run
+from literature_agent.domain.skill_configuration import SkillCatalog, SkillSource, SkillVersion
 
 TSession = TypeVar("TSession", bound=Session)
 
@@ -95,6 +99,8 @@ class AgentSessionService[TSession: Session]:
         outbox_repo_factory: Callable[[TSession], OutboxRepository],
         mcp_profile_repo_factory: Callable[[TSession], McpProfileRepository] | None = None,
         mcp_catalog: McpCatalog | None = None,
+        skill_repo_factory: Callable[[TSession], SkillRepository] | None = None,
+        platform_skills: tuple[SkillVersion, ...] = (),
         event_notifier: EventNotifier | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -110,6 +116,8 @@ class AgentSessionService[TSession: Session]:
         self._outbox_repo_factory = outbox_repo_factory
         self._mcp_profile_repo_factory = mcp_profile_repo_factory
         self._mcp_catalog = mcp_catalog or McpCatalog()
+        self._skill_repo_factory = skill_repo_factory
+        self._platform_skills = platform_skills
         self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def create_session(
@@ -264,12 +272,43 @@ class AgentSessionService[TSession: Session]:
                 mcp_refs = self._mcp_catalog.resolve_profile(profile)
             except ValueError as exc:
                 raise McpProfileInvalidError(str(exc)) from exc
+            skill_refs = ()
+            if self._skill_repo_factory is not None:
+                skill_repo = self._skill_repo_factory(session)
+                skill_profile = await skill_repo.get_profile(session_id, actor.owner_id)
+                owner_versions = []
+                if skill_profile is not None:
+                    for selection in skill_profile.selections:
+                        if selection.source is SkillSource.OWNER:
+                            value = await skill_repo.get_owner_version(
+                                selection.skill_id, selection.version, actor.owner_id
+                            )
+                            if value is None:
+                                raise SkillConfigurationInvalidError(
+                                    "Skill Profile 引用的 owner 版本不可用"
+                                )
+                            owner_versions.append(value)
+                allowed_tools = PROJECT_RESEARCH_WORKSPACE_TOOLS + tuple(
+                    tool.name for ref in mcp_refs for tool in ref.tools
+                )
+                try:
+                    skill_refs = SkillCatalog(
+                        platform_skills=self._platform_skills,
+                        owner_skills=tuple(owner_versions),
+                    ).resolve_profile(
+                        skill_profile,
+                        owner_id=actor.owner_id,
+                        allowed_tool_names=allowed_tools,
+                    )
+                except ValueError as exc:
+                    raise SkillConfigurationInvalidError(str(exc)) from exc
             policy = create_project_research_workspace_policy_snapshot(
                 owner_id=actor.owner_id,
                 project_id=project.project_id,
                 session_id=session_id,
                 turn_run_id=run.run_id,
                 mcp_refs=mcp_refs,
+                skill_refs=skill_refs,
             )
             turn = create_agent_turn_run(
                 turn_run_id=run.run_id,
@@ -319,6 +358,7 @@ class AgentSessionService[TSession: Session]:
                         "review_output_id": review_output_id,
                         "project_index_count": len(refs),
                         "mcp_catalog_count": len(mcp_refs),
+                        "skill_count": len(skill_refs),
                     },
                 )
             )

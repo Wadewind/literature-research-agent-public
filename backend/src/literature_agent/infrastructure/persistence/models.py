@@ -162,6 +162,7 @@ class AgentPolicySnapshotORM(Base):
     turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), unique=True, nullable=False)
     allowed_tool_names: Mapped[list] = mapped_column(JSONB, nullable=False)
     allowed_skill_names: Mapped[list] = mapped_column(JSONB, nullable=False)
+    skill_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     mcp_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     network_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     sandbox_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -190,6 +191,66 @@ class AgentMcpProfileORM(Base):
         CheckConstraint("revision >= 1", name="ck_agent_mcp_profiles_revision"),
         UniqueConstraint(
             "session_id", "revision", name="uq_agent_mcp_profiles_session_revision"
+        ),
+    )
+
+
+class AgentOwnerSkillORM(Base):
+    """owner 范围的稳定 Skill 身份。"""
+
+    __tablename__ = "agent_owner_skills"
+    skill_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_agent_owner_skills_owner_name"),
+        UniqueConstraint(
+            "skill_id", "owner_id", name="uq_agent_owner_skills_identity_owner"
+        ),
+    )
+
+
+class AgentOwnerSkillVersionORM(Base):
+    """owner Skill 的不可变声明式内容版本。"""
+
+    __tablename__ = "agent_owner_skill_versions"
+    skill_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    description: Mapped[str] = mapped_column(String(1024), nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    required_tool_names: Mapped[list] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["skill_id", "owner_id"],
+            ["agent_owner_skills.skill_id", "agent_owner_skills.owner_id"],
+            name="fk_agent_owner_skill_versions_identity_owner",
+        ),
+        CheckConstraint("version >= 1", name="ck_agent_owner_skill_versions_version"),
+    )
+
+
+class AgentSkillProfileORM(Base):
+    """首个 Turn 前可配置、带 CAS revision 的 Session Skill Profile。"""
+
+    __tablename__ = "agent_skill_profiles"
+    profile_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), nullable=False
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    selections: Mapped[list] = mapped_column(JSONB, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_agent_skill_profiles_revision"),
+        UniqueConstraint(
+            "session_id", "revision", name="uq_agent_skill_profiles_session_revision"
         ),
     )
 

@@ -9,6 +9,7 @@ from enum import StrEnum
 from uuid import uuid4
 
 from literature_agent.domain.mcp_configuration import McpPolicyRef
+from literature_agent.domain.skill_configuration import SkillPolicyRef
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _AGENT_TITLE_MAX_LENGTH = 200
@@ -20,6 +21,12 @@ _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
 _AGENT_CANDIDATE_MAX_SIZE_BYTES = 1_000_000
 
 PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v1"
+PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = (
+    "agent-policy.project-research-workspace-mcp.v1"
+)
+PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = (
+    "agent-policy.project-research-capabilities.v1"
+)
 PROJECT_RESEARCH_WORKSPACE_TOOLS = (
     "search_project_chunks",
     "read_review_evidence_matrix",
@@ -234,6 +241,7 @@ class PolicySnapshot:
     turn_run_id: str
     allowed_tool_names: tuple[str, ...]
     allowed_skill_names: tuple[str, ...]
+    skill_refs: tuple[SkillPolicyRef, ...]
     mcp_refs: tuple[McpPolicyRef, ...]
     network_enabled: bool
     sandbox_enabled: bool
@@ -490,6 +498,7 @@ def create_policy_snapshot(
     policy_version: str = "agent-policy.v1",
     allowed_tool_names: tuple[str, ...] = (),
     allowed_skill_names: tuple[str, ...] = (),
+    skill_refs: tuple[SkillPolicyRef, ...] = (),
     mcp_refs: tuple[McpPolicyRef, ...] = (),
     network_enabled: bool = False,
     sandbox_enabled: bool = False,
@@ -507,6 +516,15 @@ def create_policy_snapshot(
         raise ValueError("调用预算不能小于 0")
     _reject_duplicate_names(allowed_tool_names, "Tool")
     _reject_duplicate_names(allowed_skill_names, "Skill")
+    skill_names = tuple(ref.name for ref in skill_refs)
+    _reject_duplicate_names(skill_names, "Skill Policy")
+    if set(skill_names) != set(allowed_skill_names):
+        raise ValueError("Skill Policy 引用必须与 Skill allowlist 一致")
+    required_skill_tools = {
+        tool_name for ref in skill_refs for tool_name in ref.required_tool_names
+    }
+    if not required_skill_tools.issubset(allowed_tool_names):
+        raise ValueError("Skill 所需 Tool 必须包含在 Policy Tool allowlist")
     mcp_tool_names = tuple(tool.name for ref in mcp_refs for tool in ref.tools)
     _reject_duplicate_names(mcp_tool_names, "MCP Tool")
     if not set(mcp_tool_names).issubset(allowed_tool_names):
@@ -519,6 +537,19 @@ def create_policy_snapshot(
         "turn_run_id": turn_run_id,
         "allowed_tool_names": list(allowed_tool_names),
         "allowed_skill_names": list(allowed_skill_names),
+        "skill_refs": [
+            {
+                "profile_id": ref.profile_id,
+                "profile_revision": ref.profile_revision,
+                "skill_id": ref.skill_id,
+                "source": ref.source.value,
+                "version": ref.version,
+                "name": ref.name,
+                "content_hash": ref.content_hash,
+                "required_tool_names": list(ref.required_tool_names),
+            }
+            for ref in skill_refs
+        ],
         "mcp_refs": [
             {
                 "profile_id": ref.profile_id,
@@ -548,6 +579,7 @@ def create_policy_snapshot(
         turn_run_id=turn_run_id,
         allowed_tool_names=tuple(allowed_tool_names),
         allowed_skill_names=tuple(allowed_skill_names),
+        skill_refs=tuple(skill_refs),
         mcp_refs=tuple(mcp_refs),
         network_enabled=network_enabled,
         sandbox_enabled=sandbox_enabled,
@@ -566,6 +598,7 @@ def create_project_research_workspace_policy_snapshot(
     session_id: str,
     turn_run_id: str,
     mcp_refs: tuple[McpPolicyRef, ...] = (),
+    skill_refs: tuple[SkillPolicyRef, ...] = (),
 ) -> PolicySnapshot:
     """由服务端选择 Slice 7.1 唯一固定的可执行研究能力档案。"""
     return create_policy_snapshot(
@@ -574,13 +607,16 @@ def create_project_research_workspace_policy_snapshot(
         session_id=session_id,
         turn_run_id=turn_run_id,
         policy_version=(
-            "agent-policy.project-research-workspace-mcp.v1"
+            PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION
+            if skill_refs
+            else PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION
             if mcp_refs
             else PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION
         ),
         allowed_tool_names=PROJECT_RESEARCH_WORKSPACE_TOOLS
         + tuple(tool.name for ref in mcp_refs for tool in ref.tools),
-        allowed_skill_names=(),
+        allowed_skill_names=tuple(ref.name for ref in skill_refs),
+        skill_refs=skill_refs,
         mcp_refs=mcp_refs,
         network_enabled=False,
         sandbox_enabled=True,

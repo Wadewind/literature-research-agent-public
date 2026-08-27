@@ -4,7 +4,11 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from literature_agent.domain.mcp_configuration import McpPolicyRef, McpPolicyToolRef
 from literature_agent.domain.research_agent import (
+    PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION,
+    PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION,
+    PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION,
     AgentMessageRole,
     AgentSessionStatus,
     ArtifactContextRef,
@@ -18,9 +22,11 @@ from literature_agent.domain.research_agent import (
     create_agent_turn_run,
     create_context_snapshot,
     create_policy_snapshot,
+    create_project_research_workspace_policy_snapshot,
     release_active_turn,
 )
 from literature_agent.domain.run import RunType, create_run
+from literature_agent.domain.skill_configuration import SkillPolicyRef, SkillSource
 
 
 def test_agent_session_is_project_scoped_and_has_single_active_turn() -> None:
@@ -204,6 +210,48 @@ def test_policy_snapshot_is_immutable_and_defaults_to_denied_capabilities() -> N
     assert snapshot.snapshot_hash
     with pytest.raises(FrozenInstanceError):
         snapshot.max_tool_calls = 4  # type: ignore[misc]
+
+
+def test_workspace_policy_version_only_changes_for_the_added_capability() -> None:
+    mcp_ref = McpPolicyRef(
+        profile_id="mcp-profile",
+        profile_revision=1,
+        catalog_id="fixture-search",
+        version="1.0.0",
+        config_hash="a" * 64,
+        tools=(McpPolicyToolRef("fixture-search_search", "b" * 64),),
+    )
+    skill_ref = SkillPolicyRef(
+        profile_id="skill-profile",
+        profile_revision=1,
+        skill_id="evidence-led-synthesis",
+        source=SkillSource.PLATFORM,
+        version=1,
+        name="evidence-led-synthesis",
+        content_hash="c" * 64,
+        required_tool_names=("search_project_chunks",),
+    )
+    def create_workspace_policy(
+        *,
+        mcp_refs: tuple[McpPolicyRef, ...] = (),
+        skill_refs: tuple[SkillPolicyRef, ...] = (),
+    ):
+        return create_project_research_workspace_policy_snapshot(
+            owner_id="owner-1",
+            project_id="project-1",
+            session_id="session-1",
+            turn_run_id="turn-1",
+            mcp_refs=mcp_refs,
+            skill_refs=skill_refs,
+        )
+
+    workspace = create_workspace_policy()
+    mcp_only = create_workspace_policy(mcp_refs=(mcp_ref,))
+    with_skill = create_workspace_policy(mcp_refs=(mcp_ref,), skill_refs=(skill_ref,))
+
+    assert workspace.policy_version == PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION
+    assert mcp_only.policy_version == PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION
+    assert with_skill.policy_version == PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION
 
 
 def test_runtime_bindings_are_opaque_and_scoped() -> None:

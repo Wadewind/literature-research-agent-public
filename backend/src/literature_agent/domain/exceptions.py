@@ -226,6 +226,30 @@ class McpProfileInvalidError(ValueError):
     """MCP 选择不属于平台 Catalog 或安全参数不合法。"""
 
 
+class SkillNotFoundError(Exception):
+    """Skill 不存在或当前 owner 不可见。"""
+
+
+class SkillVersionConflictError(Exception):
+    """owner Skill 的最新版本与调用方 CAS 水位不一致。"""
+
+
+class SkillProfileRevisionConflictError(Exception):
+    """Session Skill Profile revision 已变化，拒绝覆盖。"""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(f"AgentSession {session_id} 的 Skill Profile revision 已变化")
+
+
+class SkillProfileLockedError(Exception):
+    """Session 已创建首个消息/Turn，Skill manifest 永久锁定。"""
+
+
+class SkillConfigurationInvalidError(ValueError):
+    """Skill 内容、版本、选择或所需权限非法。"""
+
+
 class ProjectNotIndexedError(Exception):
     """提问范围内没有任何 ready ChunkSet，快速失败。"""
 

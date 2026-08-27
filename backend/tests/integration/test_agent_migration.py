@@ -11,9 +11,12 @@ from testcontainers.community.postgres import PostgresContainer
 from literature_agent.infrastructure.persistence.models import (
     AgentContextSnapshotORM,
     AgentMcpProfileORM,
+    AgentOwnerSkillORM,
+    AgentOwnerSkillVersionORM,
     AgentPolicySnapshotORM,
     AgentRuntimeExecutionORM,
     AgentSandboxLeaseORM,
+    AgentSkillProfileORM,
     AgentTurnRunORM,
     AgentWorkspaceSnapshotORM,
 )
@@ -116,6 +119,45 @@ def test_mcp_profile_and_policy_snapshot_remain_sdk_neutral() -> None:
         "env",
         "secret",
     }.isdisjoint(AgentMcpProfileORM.__table__.columns.keys())
+
+
+def test_native_skill_versions_profiles_and_policy_refs_remain_sdk_neutral() -> None:
+    """Skill 内容是 owner 业务事实，Profile 与逐 Turn 引用不保存 SDK path。"""
+    identity_targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentOwnerSkillVersionORM.__table__.foreign_keys
+    }
+    profile_targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentSkillProfileORM.__table__.foreign_keys
+    }
+    assert identity_targets == {
+        "agent_owner_skills.skill_id",
+        "agent_owner_skills.owner_id",
+    }
+    assert profile_targets == {"agent_sessions.session_id"}
+    assert {
+        "skill_id",
+        "owner_id",
+        "name",
+    } <= set(AgentOwnerSkillORM.__table__.columns.keys())
+    assert {
+        "skill_id",
+        "version",
+        "owner_id",
+        "instructions",
+        "required_tool_names",
+        "content_hash",
+    } <= set(AgentOwnerSkillVersionORM.__table__.columns.keys())
+    assert "skill_refs" in AgentPolicySnapshotORM.__table__.columns
+    assert {
+        "path",
+        "frontmatter",
+        "script",
+        "binary",
+        "env",
+        "secret",
+    }.isdisjoint(AgentOwnerSkillVersionORM.__table__.columns.keys())
 
 
 def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:

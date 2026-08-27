@@ -17,7 +17,8 @@ Phase 5 切片 1–6 已建立 `AgentSession`、逐轮 `AgentTurnRun`、`Researc
 
 上述是本 ADR 作出时的基线。切片 7.0 随后完成真实 Runtime enablement；切片 7.1 已完成 OpenSandbox
 薄 Adapter、Session Lease、WorkspaceSnapshot、统一 Tool 预算与 checkpoint pool 的实现和离线/临时
-PostgreSQL 验证。Browser、MCP 和 Skill 尚未接入；真实 OpenSandbox Smoke 尚未运行。
+PostgreSQL 验证。后续 7.3 已接固定 Playwright/arXiv MCP，7.4 已接原生声明式 Skills；真实 OpenSandbox
+proxy/Provider Smoke 尚未运行。
 
 后续能力 Spike 需要允许 Research Agent 在隔离环境中执行 Python 数据处理、生成图表，并让文件工具、
 代码执行和浏览器下载操作同一个 Session Workspace。仅把 Sandbox 当作受限文件后端、同时隐藏

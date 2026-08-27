@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v9
+> 状态：Proposed v11
 >
 > 日期：2026-08-27
 >
@@ -45,6 +45,12 @@
 > 分页发现后只投影审核 Tool 子集，当前 Lease resolver 不缓存 endpoint/client。无网络镜像内 MCP/
 > Chromium/下载回路已验证。OpenSandbox 连接固定保留 Chrome `/entrypoint`，MCP 采用 loopback bootstrap
 > → endpoint → exact Host 收敛；真实 OpenSandbox proxy Host/header、公共浏览和真实 arXiv 搜索仍未验证。
+>
+> v11 变更：Slice 7.4 已完成 Deep Agents 原生 Skills 业务包装。Session Skill Profile 只在首 Turn 前
+> 以 CAS 配置并永久锁定；平台生成不可变、内容寻址的声明式 `SKILL.md`，每轮 Policy 冻结精确引用并
+> 校验 required Tool 不扩权。`/skills/` 是 Sandbox `execute` 不可见的只读虚拟 Backend，Adapter 直接
+> 使用 `create_deep_agent(skills=...)`；graph revision 升为 `deep-agent-graph.v5`。真实 Provider/
+> OpenSandbox Smoke、附件/脚本 Skill、fork/rewind 与完整内容治理仍未完成。
 
 ## 1. 文档用途
 
@@ -609,7 +615,8 @@ Agent 扩展阶段负责：
 - 危险操作和下载前审批；
 - Sandbox 与 Artifact Workspace 边界。
 - 平台安装 Skills 的 allowlist、版本、能力声明和审计，以及 owner-scoped 声明式 Markdown/文本 Skill
-  的只读物化与内容哈希；用户不能上传可执行脚本、二进制或动态依赖。
+  的只读物化与内容哈希；用户不能上传可执行脚本、二进制或动态依赖。API 不提供独立 Secret 字段或注入
+  机制，但普通文本 Secret 扫描与内容审核仍属于 Phase 6，用户不得在声明式文本中提交 Secret。
 - 平台安装并固定版本的 MCP Catalog、owner/Session Profile 选择、名称/Schema/版本哈希校验和调用
   interceptor；用户只能填写 Catalog 声明的非敏感安全参数，不能提交 endpoint、transport、command、
   env、包版本、认证信息、Sandbox 镜像或网络配置。
@@ -1527,6 +1534,14 @@ Slice 7.3 已进一步完成固定 Playwright/arXiv MCP 的生产 Catalog、Sand
 并在无网络派生容器验证同 Chromium 合成页面和 Workspace 下载。由于开发环境没有运行 OpenSandbox
 server，opaque endpoint/header 与代理 Host 语义仍是显式 Smoke 门槛；该证据不扩张为公共浏览、真实
 arXiv 搜索或下载安全结论。
+Slice 7.4 已完成平台 `evidence-led-synthesis` 与 owner-scoped 声明式 Skill：PostgreSQL 保存不可变版本、
+Session Profile 和逐 Turn 冻结引用；首个 Message 后 Profile 永久锁定；Worker 在事务外把精确版本物化到
+`/skills/` 只读 Backend，直接交给 Deep Agents 原生 SkillsMiddleware。同一 Thread 两轮 metadata 缓存、
+写入拒绝、Sandbox execute 不可见和 required Tool 不扩权均通过离线测试；两轮测试会重建 Runtime/graph
+并仅共享 checkpointer/thread。版本允许以 A→B→A 追加回退，Profile hash 对 selection 规范排序。该证据
+不包含真实 Provider/OpenSandbox Smoke、可执行/附件 Skill、Prompt Injection 专项或完整治理产品。
+Policy version 继续兼容既有分支：workspace-only 和 MCP-only 分别沿用原版本，只有 `skill_refs` 非空时
+切换到 `project-research-capabilities.v1`。
 
 `PolicySnapshot.max_model_calls` 在 7.0 精确定义为逐 Turn 主 Agent Loop 模型调用预算：调用前预留计数并
 随同步 checkpoint 持久化，已确认 checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确定窗口，
@@ -1772,7 +1787,8 @@ Agent Extension 另需覆盖：
 - ADR-0006 已固定 ARQ Worker 内 Runtime；仍需确定真实 Provider/Sandbox 的进程资源和部署参数；
 - SDK Checkpoint/Store/压缩的升级策略，以及已固定 TTL/generation/fence 后的孤儿 Lease 清理；
 - Phase 5 MCP Catalog/Profile 通过后进入产品的条目、公共网络和下载安全策略；
-- 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的版本和内容安全治理；
+- 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的基础版本/Profile 已由 Slice 7.4 固定；内容
+  审核、归档/删除、配额、附件/脚本与 Prompt Injection 专项治理仍推迟；
 - OpenSandbox derived image 发布 digest、Server 部署和已固定 TTL/资源参数的真实强制效果；
 - Phase 5 `execute` Spike 通过后，哪些能力可以进入用户可见产品和审批矩阵。
 

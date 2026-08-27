@@ -337,6 +337,8 @@ class DeepAgentsResearchAgentRuntime:
         runtime_owner_id: str | None = None,
         lease_heartbeat_interval_seconds: float = 5.0,
         before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None = None,
+        skill_backend: BackendProtocol | None = None,
+        skill_sources: Sequence[str] = (),
     ) -> None:
         if lease_heartbeat_interval_seconds <= 0:
             raise ValueError("Runtime lease heartbeat interval 必须为正数")
@@ -350,13 +352,28 @@ class DeepAgentsResearchAgentRuntime:
         self._before_succeed = before_succeed
 
         backend = backend or StateBackend()
-        if supports_execution(backend) and not isinstance(backend, CompositeBackend):
+        if skill_sources and skill_backend is None:
+            raise ValueError("Skill sources 缺少只读 Backend")
+        routes: dict[str, BackendProtocol] = {}
+        default_backend = backend
+        artifacts_root = "/"
+        if isinstance(backend, CompositeBackend):
+            default_backend = backend.default
+            routes.update(backend.routes)
+            artifacts_root = backend.artifacts_root
+        if supports_execution(backend):
+            routes.setdefault("/conversation_history/", StateBackend())
+            routes.setdefault("/large_tool_results/", StateBackend())
+        if skill_sources:
+            if "/skills/" in routes:
+                raise ValueError("/skills/ Backend route 不能重复")
+            assert skill_backend is not None
+            routes["/skills/"] = skill_backend
+        if routes:
             backend = CompositeBackend(
-                default=backend,
-                routes={
-                    "/conversation_history/": StateBackend(),
-                    "/large_tool_results/": StateBackend(),
-                },
+                default=default_backend,
+                routes=routes,
+                artifacts_root=artifacts_root,
             )
         self._register_restricted_harness_profile(model)
         project_tools = self._project_context_tools(project_context)
@@ -411,7 +428,7 @@ class DeepAgentsResearchAgentRuntime:
                 ),
             ),
             subagents=[],
-            skills=None,
+            skills=list(skill_sources) if skill_sources else None,
             memory=None,
             backend=backend,
             context_schema=_TurnContext,

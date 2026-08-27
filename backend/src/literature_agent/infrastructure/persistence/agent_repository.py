@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +27,7 @@ from literature_agent.domain.research_agent import (
     RuntimeTurnBinding,
     same_agent_artifact_candidate_fact,
 )
+from literature_agent.domain.skill_configuration import SkillPolicyRef, SkillSource
 from literature_agent.infrastructure.persistence.models import (
     AgentArtifactCandidateORM,
     AgentContextSnapshotORM,
@@ -147,6 +148,13 @@ class SqlalchemyAgentRepository(AgentRepository):
         )
         return value
 
+    async def has_messages(self, session_id: str) -> bool:
+        return bool(
+            await self._session.scalar(
+                select(exists().where(AgentMessageORM.session_id == session_id))
+            )
+        )
+
     async def list_messages_scoped(self, session_id: str, owner_id: str) -> list[AgentMessage]:
         rows = (
             (
@@ -245,6 +253,19 @@ class SqlalchemyAgentRepository(AgentRepository):
                 turn_run_id=value.turn_run_id,
                 allowed_tool_names=list(value.allowed_tool_names),
                 allowed_skill_names=list(value.allowed_skill_names),
+                skill_refs=[
+                    {
+                        "profile_id": ref.profile_id,
+                        "profile_revision": ref.profile_revision,
+                        "skill_id": ref.skill_id,
+                        "source": ref.source.value,
+                        "version": ref.version,
+                        "name": ref.name,
+                        "content_hash": ref.content_hash,
+                        "required_tool_names": list(ref.required_tool_names),
+                    }
+                    for ref in value.skill_refs
+                ],
                 mcp_refs=[
                     {
                         "profile_id": ref.profile_id,
@@ -479,6 +500,19 @@ def _policy(row: AgentPolicySnapshotORM) -> PolicySnapshot:
         row.turn_run_id,
         tuple(row.allowed_tool_names),
         tuple(row.allowed_skill_names),
+        tuple(
+            SkillPolicyRef(
+                profile_id=ref["profile_id"],
+                profile_revision=ref["profile_revision"],
+                skill_id=ref["skill_id"],
+                source=SkillSource(ref["source"]),
+                version=ref["version"],
+                name=ref["name"],
+                content_hash=ref["content_hash"],
+                required_tool_names=tuple(ref["required_tool_names"]),
+            )
+            for ref in row.skill_refs
+        ),
         tuple(
             McpPolicyRef(
                 profile_id=ref["profile_id"],

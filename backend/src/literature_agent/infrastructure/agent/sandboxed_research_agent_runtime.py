@@ -27,6 +27,9 @@ from literature_agent.infrastructure.agent.sandbox_workspace import (
     SandboxWorkspaceLease,
     SandboxWorkspaceManager,
 )
+from literature_agent.infrastructure.agent.skill_backend import (
+    SkillRuntimeMaterialization,
+)
 
 
 class CheckpointExecutionFactory(Protocol):
@@ -52,6 +55,16 @@ RuntimeWithToolsFactory = Callable[
     ],
     ResearchAgentRuntime,
 ]
+RuntimeWithCapabilitiesFactory = Callable[
+    [
+        BaseCheckpointSaver[str],
+        BackendProtocol,
+        Callable[[RuntimeTurnRequest], Awaitable[None]] | None,
+        tuple[BaseTool, ...],
+        SkillRuntimeMaterialization,
+    ],
+    ResearchAgentRuntime,
+]
 
 
 class RuntimeMcpToolLoader(Protocol):
@@ -60,6 +73,12 @@ class RuntimeMcpToolLoader(Protocol):
     def open(
         self, request: RuntimeTurnRequest, lease: SandboxWorkspaceLease
     ) -> AbstractAsyncContextManager[tuple[BaseTool, ...]]: ...
+
+
+class RuntimeSkillMaterializer(Protocol):
+    async def materialize(
+        self, request: RuntimeTurnRequest
+    ) -> SkillRuntimeMaterialization: ...
 
 
 @dataclass(slots=True)
@@ -82,12 +101,16 @@ class SandboxedResearchAgentRuntime:
         workspace_manager: SandboxWorkspaceManager,
         runtime_with_tools_factory: RuntimeWithToolsFactory | None = None,
         mcp_tool_loader: RuntimeMcpToolLoader | None = None,
+        runtime_with_capabilities_factory: RuntimeWithCapabilitiesFactory | None = None,
+        skill_materializer: RuntimeSkillMaterializer | None = None,
     ) -> None:
         self._checkpoint_factory = checkpoint_factory
         self._runtime_factory = runtime_factory
         self._workspace_manager = workspace_manager
         self._runtime_with_tools_factory = runtime_with_tools_factory
         self._mcp_tool_loader = mcp_tool_loader
+        self._runtime_with_capabilities_factory = runtime_with_capabilities_factory
+        self._skill_materializer = skill_materializer
         self._active: dict[str, _ActiveExecution] = {}
         self._active_lock = asyncio.Lock()
 
@@ -122,6 +145,17 @@ class SandboxedResearchAgentRuntime:
         *,
         resume: RuntimeResumeRequest | None,
     ) -> AsyncIterator[RuntimeEvent]:
+        if turn_request.policy_snapshot.skill_refs:
+            if self._skill_materializer is None:
+                raise ResearchAgentRuntimeError(
+                    kind=RuntimeErrorKind.PERMANENT,
+                    code="runtime_skill_unavailable",
+                    safe_message="本轮 Skill 能力未装配",
+                )
+            # 精确版本与 hash 先在短 DB 会话内复核，结束后才取得外部 Sandbox。
+            skills = await self._skill_materializer.materialize(turn_request)
+        else:
+            skills = SkillRuntimeMaterialization(StateBackend(), ())
         lease = await self._workspace_manager.acquire(turn_request)
         active_ref: _ActiveExecution | None = None
         tool_stack = AsyncExitStack()
@@ -149,7 +183,7 @@ class SandboxedResearchAgentRuntime:
 
         try:
             runtime = self._new_runtime(
-                lease.backend, before_succeed=finalize, tools=mcp_tools
+                lease.backend, before_succeed=finalize, tools=mcp_tools, skills=skills
             )
         except BaseException:
             await _close_runtime_resources(tool_stack, lease.backend)
@@ -250,7 +284,22 @@ class SandboxedResearchAgentRuntime:
         *,
         before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None = None,
         tools: tuple[BaseTool, ...] = (),
+        skills: SkillRuntimeMaterialization | None = None,
     ) -> ResearchAgentRuntime:
+        if skills is not None and skills.sources:
+            if self._runtime_with_capabilities_factory is None:
+                raise ResearchAgentRuntimeError(
+                    kind=RuntimeErrorKind.PERMANENT,
+                    code="runtime_skill_unavailable",
+                    safe_message="本轮 Skill 能力未装配",
+                )
+            return self._runtime_with_capabilities_factory(
+                self._checkpoint_factory.create_saver(),
+                backend,
+                before_succeed,
+                tools,
+                skills,
+            )
         if tools:
             assert self._runtime_with_tools_factory is not None
             return self._runtime_with_tools_factory(

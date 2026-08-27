@@ -10,7 +10,9 @@ WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profil
 Playwright MCP、现有 Search MCP 与 Deep Agents 原生 Skills 的最小验证提前到 Phase 5。本阶段不重复
 这些 Spike，而是在其实际证据基础上完成完整 Registry、审批、公共网络/下载安全、UI 和运维强化。
 其中 Slice 7.1 已完成 OpenSandbox/Lease/WorkspaceSnapshot 的实现与离线/临时 PostgreSQL 验证；真实
-OpenSandbox Smoke 与 7.2–7.4 仍未完成。
+OpenSandbox proxy/Provider Smoke 仍未完成；Phase 5 的 7.2 MCP 配置、7.3 固定 Playwright/arXiv MCP
+镜像内回路和 7.4 Native Skills 已完成受限离线验证，但不替代本阶段的公共网络、下载、Prompt
+Injection 与完整治理验证。
 
 进入条件：Phase 5 已完成并通过 ADR 确认 Deep Agents 的版本策略、部署拓扑、`ResearchAgentRuntime` 契约、MCP 模式、Sandbox Provider、重试所有权和升级方法；Phase 5 的安全、取消、断连和重复副作用验证没有未解决的阻塞项。
 

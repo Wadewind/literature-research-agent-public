@@ -112,7 +112,8 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
   运行时测量、公开部署或生产 SLA。
 - 7.3 已把固定 Playwright/arXiv MCP 接到当前 Lease，execute/resume 的 MCP session 包围 graph，并在
   Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。真实 OpenSandbox 代理 Smoke、
-  noVNC/公共下载和 Native Skills 仍未完成；公共网络与统一 egress 后移到 Phase 6。
+  noVNC/公共下载仍未完成；7.4 已把 Native Skills 放在 Sandbox `execute` 不可见的只读虚拟 Backend，
+  没有改变物理 Workspace。公共网络与统一 egress 后移到 Phase 6。
 - `max_model_calls` 仍不覆盖 SummarizationMiddleware 内部重试或已在途 Provider 不确定窗口。
 
 ## 代码入口

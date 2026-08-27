@@ -37,6 +37,12 @@ from literature_agent.domain.research_agent import (
     create_context_snapshot,
     create_project_research_workspace_policy_snapshot,
 )
+from literature_agent.domain.skill_configuration import (
+    SkillCatalog,
+    SkillProfileSelection,
+    SkillSource,
+    create_skill_profile,
+)
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
 )
@@ -48,6 +54,11 @@ from literature_agent.infrastructure.agent.sandbox_workspace import (
 from literature_agent.infrastructure.agent.sandboxed_research_agent_runtime import (
     SandboxedResearchAgentRuntime,
 )
+from literature_agent.infrastructure.agent.skill_backend import (
+    ReadOnlySkillBackend,
+    SkillRuntimeMaterialization,
+)
+from literature_agent.infrastructure.agent.skill_catalog import EVIDENCE_LED_SYNTHESIS
 from tests.fakes.deep_agent_model import ScriptedDeepAgentChatModel
 
 
@@ -95,6 +106,39 @@ def _mcp_request() -> RuntimeTurnRequest:
             session_id="session-1",
             turn_run_id="turn-1",
             mcp_refs=(ref,),
+        ),
+    )
+
+
+def _skill_request() -> RuntimeTurnRequest:
+    request = _request()
+    profile = create_skill_profile(
+        owner_id="owner-1",
+        session_id="session-1",
+        selections=(
+            SkillProfileSelection(
+                SkillSource.PLATFORM,
+                EVIDENCE_LED_SYNTHESIS.skill_id,
+                EVIDENCE_LED_SYNTHESIS.version,
+            ),
+        ),
+    )
+    ref = SkillCatalog(platform_skills=(EVIDENCE_LED_SYNTHESIS,)).resolve_profile(
+        profile,
+        owner_id="owner-1",
+        allowed_tool_names=(
+            "read_review_evidence_matrix",
+            "search_project_chunks",
+        ),
+    )[0]
+    return replace(
+        request,
+        policy_snapshot=create_project_research_workspace_policy_snapshot(
+            owner_id="owner-1",
+            project_id="project-1",
+            session_id="session-1",
+            turn_run_id="turn-1",
+            skill_refs=(ref,),
         ),
     )
 
@@ -173,6 +217,13 @@ class _ExecuteThenAnswerModel(ScriptedDeepAgentChatModel):
                 }
             ],
         )
+
+
+class _EvidenceInsufficientModel(ScriptedDeepAgentChatModel):
+    def _next_message(self, messages: list[Any]) -> AIMessage:
+        del messages
+        self.model_call_count += 1
+        return AIMessage(content="当前授权上下文证据不足。")
 
 
 class _WorkspaceManager:
@@ -707,3 +758,132 @@ async def test_mcp_close_failure_still_closes_sandbox_connection() -> None:
         await _collect_events(runtime.execute_turn(_mcp_request()))
 
     assert workspace.backend.closed is True
+
+
+@pytest.mark.asyncio
+async def test_skill_materialization_is_passed_only_to_capability_factory() -> None:
+    workspace = _WorkspaceManager()
+    known = {"value": False}
+    skill_backend = ReadOnlySkillBackend(
+        {
+            "/platform/evidence-led-synthesis/SKILL.md": (
+                EVIDENCE_LED_SYNTHESIS.render_skill_md()
+            )
+        }
+    )
+    lifecycle: list[str] = []
+
+    class _Materializer:
+        async def materialize(self, request):
+            assert request.policy_snapshot.skill_refs
+            lifecycle.append("skills-materialized")
+            return SkillRuntimeMaterialization(
+                skill_backend,
+                ("/skills/platform/",),
+            )
+
+    def runtime_factory(saver, backend, before_succeed):
+        del saver, before_succeed
+        return _Runtime(backend, known=known)
+
+    def capabilities_factory(saver, backend, before_succeed, tools, skills):
+        del saver, before_succeed
+        assert backend is workspace.backend
+        assert tools == ()
+        assert skills.backend is skill_backend
+        assert skills.sources == ("/skills/platform/",)
+        lifecycle.append("capability-runtime-created")
+        return _Runtime(backend, known=known)
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=runtime_factory,
+        runtime_with_capabilities_factory=capabilities_factory,
+        skill_materializer=_Materializer(),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    events = [event async for event in runtime.execute_turn(_skill_request())]
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert lifecycle == ["skills-materialized", "capability-runtime-created"]
+    assert workspace.backend.closed is True
+
+
+@pytest.mark.asyncio
+async def test_skill_request_without_materializer_fails_before_sandbox_acquire() -> None:
+    workspace = _WorkspaceManager()
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=lambda saver, backend, before_succeed: _Runtime(
+            backend, known={"value": False}
+        ),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as failure:
+        await _collect_events(runtime.execute_turn(_skill_request()))
+
+    assert failure.value.code == "runtime_skill_unavailable"
+    assert workspace.acquire_calls == 0
+    assert workspace.backend.closed is False
+
+
+@pytest.mark.asyncio
+async def test_completed_skill_turn_collects_offline_without_rematerialization() -> None:
+    workspace = _ExecuteWorkspaceManager()
+    checkpoints = _SharedCheckpointFactory()
+    skill_backend = ReadOnlySkillBackend(
+        {
+            "/platform/evidence-led-synthesis/SKILL.md": (
+                EVIDENCE_LED_SYNTHESIS.render_skill_md()
+            )
+        }
+    )
+    materialize_calls = 0
+
+    class _Materializer:
+        async def materialize(self, request):
+            nonlocal materialize_calls
+            assert request.policy_snapshot.skill_refs
+            materialize_calls += 1
+            return SkillRuntimeMaterialization(skill_backend, ("/skills/platform/",))
+
+    model = _EvidenceInsufficientModel()
+
+    def runtime_factory(saver, backend, before_succeed):
+        return DeepAgentsResearchAgentRuntime(
+            model=model,
+            checkpointer=saver,
+            backend=backend,
+            before_succeed=before_succeed,
+        )
+
+    def capabilities_factory(saver, backend, before_succeed, tools, skills):
+        assert tools == ()
+        return DeepAgentsResearchAgentRuntime(
+            model=model,
+            checkpointer=saver,
+            backend=backend,
+            before_succeed=before_succeed,
+            skill_backend=skills.backend,
+            skill_sources=skills.sources,
+        )
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=checkpoints,
+        runtime_factory=runtime_factory,
+        runtime_with_capabilities_factory=capabilities_factory,
+        skill_materializer=_Materializer(),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    events = [event async for event in runtime.execute_turn(_skill_request())]
+    result = await runtime.collect_turn_result("turn-1")
+    reconciliation = await runtime.reconcile_turn("turn-1")
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert result.assistant_content == "当前授权上下文证据不足。"
+    assert reconciliation.state is RuntimeExecutionState.SUCCEEDED
+    assert materialize_calls == 1
+    assert workspace.acquire_calls == 1

@@ -5,14 +5,21 @@ from fastapi.testclient import TestClient
 from literature_agent.api.agent_sessions import (
     get_agent_session_service,
     get_mcp_configuration_service,
+    get_skill_configuration_service,
     router,
 )
 from literature_agent.api.dependencies import get_actor
 from literature_agent.application.agent_session_service import PostAgentMessageResult
 from literature_agent.application.mcp_configuration_service import McpProfileView
+from literature_agent.application.skill_configuration_service import SkillProfileView
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.mcp_configuration import create_mcp_profile
 from literature_agent.domain.research_agent import create_agent_session
+from literature_agent.domain.skill_configuration import (
+    create_owner_skill,
+    create_skill_version,
+)
+from literature_agent.infrastructure.agent.skill_catalog import EVIDENCE_LED_SYNTHESIS
 from literature_agent.main import create_app
 
 
@@ -51,6 +58,34 @@ class _McpService:
 
     def list_catalog(self):
         return ()
+
+
+class _SkillService:
+    async def list_available(self, actor):
+        del actor
+        return (EVIDENCE_LED_SYNTHESIS,)
+
+    async def create_owner_skill(self, actor, **kwargs):
+        name = kwargs.pop("name")
+        identity = create_owner_skill(owner_id=actor.owner_id, name=name)
+        return create_skill_version(skill=identity, **kwargs)
+
+    async def create_owner_version(self, actor, skill_id, **kwargs):
+        del actor, skill_id, kwargs
+        return EVIDENCE_LED_SYNTHESIS
+
+    async def get_profile(self, actor, session_id):
+        del actor
+        return SkillProfileView(session_id, 0, (), "0" * 64)
+
+    async def update_profile(self, actor, session_id, **kwargs):
+        del actor
+        return SkillProfileView(
+            session_id,
+            1,
+            kwargs["selections"],
+            "1" * 64,
+        )
 
 
 def test_agent_api_returns_201_and_202_and_rejects_runtime_configuration() -> None:
@@ -177,3 +212,72 @@ def test_mcp_profile_api_accepts_only_catalog_selection_and_safe_parameters() ->
     assert rejected_duplicate_catalog.status_code == 422
     payload = str(updated.json()) + str(empty_profile.json())
     assert "endpoint" not in payload and "transport" not in payload and "env" not in payload
+
+
+def test_skill_api_accepts_only_declarative_content_and_catalog_selection() -> None:
+    app = create_app()
+    app.dependency_overrides[get_actor] = lambda: ActorContext(owner_id="owner-1")
+    app.dependency_overrides[get_skill_configuration_service] = _SkillService
+    with TestClient(app) as client:
+        catalog = client.get("/api/v1/agent-skills")
+        created = client.post(
+            "/api/v1/agent-skills",
+            json={
+                "name": "compare-studies",
+                "description": "比较研究",
+                "instructions": "先读取 Evidence Matrix。",
+                "required_tool_names": ["read_review_evidence_matrix"],
+            },
+        )
+        profile = client.put(
+            "/api/v1/agent-sessions/session-1/skill-profile",
+            json={
+                "expected_revision": 0,
+                "selections": [
+                    {
+                        "source": "platform",
+                        "skill_id": EVIDENCE_LED_SYNTHESIS.skill_id,
+                        "version": 1,
+                    }
+                ],
+            },
+        )
+        rejected_path = client.post(
+            "/api/v1/agent-skills",
+            json={
+                "name": "unsafe",
+                "description": "unsafe",
+                "instructions": "unsafe",
+                "required_tool_names": [],
+                "path": "/host/skills",
+                "frontmatter": "---",
+                "scripts": ["run.py"],
+                "content_hash": "f" * 64,
+            },
+        )
+        rejected_owner = client.post(
+            "/api/v1/agent-skills",
+            json={
+                "name": "unsafe-owner",
+                "description": "unsafe",
+                "instructions": "unsafe",
+                "required_tool_names": [],
+                "owner_id": "other",
+            },
+        )
+
+    assert catalog.status_code == 200
+    assert catalog.json()[0]["instructions"]
+    assert created.status_code == 201
+    assert created.json()["source"] == "owner"
+    assert created.json()["instructions"] == "先读取 Evidence Matrix。"
+    assert profile.status_code == 200
+    assert profile.json()["selections"] == [
+        {
+            "source": "platform",
+            "skill_id": EVIDENCE_LED_SYNTHESIS.skill_id,
+            "version": 1,
+        }
+    ]
+    assert rejected_path.status_code == 422
+    assert rejected_owner.status_code == 422

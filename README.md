@@ -5,6 +5,13 @@
 Outline 并导出引用 Artifact 的固定 Review Workflow。Phase 4 已将其收束为本地可复现、可评测的
 Demo-ready Core v1；该里程碑不代表公网生产、登录认证、备份恢复、永久删除/GC 或 SLA 已完成。
 
+Phase 5 Research Agent Extension 正在按独立切片验证：业务 Session/Turn/Run 包装、Deep Agents 原生多轮
+Checkpoint/压缩、Project Context、跨进程恢复、OpenSandbox Workspace、固定 MCP Catalog 已完成受限
+验证；Native Skills 已支持平台固定 Skill 和 owner-scoped 声明式版本。Skill Profile 只在 Session 首个
+Turn 前配置，`/skills/` 为 Sandbox `execute` 不可见的只读虚拟 Backend，Skill 不能扩大 Tool/MCP/网络
+权限。生产默认仍使用 Fake Runtime；真实 Provider/OpenSandbox proxy、公共网络与 Phase 6 安全治理尚未
+完成。
+
 ## 仓库布局
 
 ```text

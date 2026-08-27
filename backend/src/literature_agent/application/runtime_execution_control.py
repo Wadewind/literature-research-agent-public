@@ -24,7 +24,7 @@ from literature_agent.domain.runtime_execution import (
 )
 
 RUNTIME_CONTRACT_REVISION = "research-agent-runtime.v1"
-RUNTIME_GRAPH_REVISION = "deep-agent-graph.v4"
+RUNTIME_GRAPH_REVISION = "deep-agent-graph.v5"
 DEEPAGENTS_REVISION = "0.7.8"
 LANGGRAPH_REVISION = "1.2.11"
 

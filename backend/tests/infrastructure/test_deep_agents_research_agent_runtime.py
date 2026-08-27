@@ -1082,7 +1082,7 @@ async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> 
     assert (await anext(stream)).kind is RuntimeEventKind.STARTED
     record = await control.get(request.turn_run_id)
     assert record is not None and record.last_checkpoint_id is not None
-    assert record.graph_revision == "deep-agent-graph.v4"
+    assert record.graph_revision == "deep-agent-graph.v5"
     checkpoint = await saver.aget_tuple(
         {
             "configurable": {
@@ -1093,7 +1093,7 @@ async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> 
         }
     )
     assert checkpoint is not None
-    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v4"
+    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v5"
     tampered = checkpoint._replace(
         metadata={**checkpoint.metadata, "agent_runtime_session_id": "session-other"}
     )
@@ -1127,7 +1127,7 @@ async def test_record_checkpoint_lookup_rejects_v2_graph_revision() -> None:
     await _collect(runtime.execute_turn(request))
     record = await control.get(request.turn_run_id)
     assert record is not None and record.last_checkpoint_id is not None
-    assert record.graph_revision == "deep-agent-graph.v4"
+    assert record.graph_revision == "deep-agent-graph.v5"
     checkpoint = await saver.aget_tuple(
         {
             "configurable": {
@@ -1138,7 +1138,7 @@ async def test_record_checkpoint_lookup_rejects_v2_graph_revision() -> None:
         }
     )
     assert checkpoint is not None
-    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v4"
+    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v5"
     old_checkpoint = checkpoint._replace(
         metadata={**checkpoint.metadata, "agent_graph_revision": "deep-agent-graph.v2"}
     )
@@ -1235,7 +1235,7 @@ async def test_v2_runtime_graph_revision_is_permanent_and_does_not_call_model() 
     )
     await _collect(first.execute_turn(request))
     record = repo._items[request.turn_run_id]  # noqa: SLF001
-    assert record.graph_revision == "deep-agent-graph.v4"
+    assert record.graph_revision == "deep-agent-graph.v5"
     repo._items[request.turn_run_id] = replace(  # noqa: SLF001
         record, graph_revision="deep-agent-graph.v2"
     )

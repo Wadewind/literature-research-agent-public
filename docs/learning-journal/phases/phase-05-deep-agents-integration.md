@@ -35,6 +35,11 @@ ClientSession 生命周期、Schema/hash 校验与平台 interceptor。该切片
 Session Sandbox，并把审核后的 Tool 子集接入生产 Catalog/Worker。由于本机没有运行 OpenSandbox
 server，opaque endpoint/header 与代理 Host 保留语义仍是显式 Smoke 门槛；本切片只形成受限通过结论，
 不宣称公共浏览、真实 arXiv 搜索或下载安全。
+切片 7.4“Deep Agents Native Skills”已于 2026-08-27 完成实现与离线/临时 PostgreSQL 验证：首个
+平台 Skill `evidence-led-synthesis` 与 owner-scoped 声明式 Skill 使用不可变版本和 SHA-256；Session
+Skill Profile 只允许首 Turn 前配置并永久锁定，每轮 Policy 冻结精确引用；`/skills/` 使用只读虚拟
+Backend，Deep Agents 原生 `SkillsMiddleware` 在同一 SDK Thread 复用 metadata，Sandbox `execute`
+不可见且不能改写 Skill。未新增依赖，也未运行真实 Provider/OpenSandbox Smoke。
 
 进入条件：Phase 4 已完成，Demo-ready Core Research Backend v1 的文献导入、RAG、固定 Review
 Workflow、Run/Event、Evidence、Artifact、最低 Logs/Metrics 和评测基线均可独立运行。Phase 4 的
@@ -68,7 +73,8 @@ Deep Agents 选型已经由 ADR-0001 确定，不重新讨论是否采用。ADR-
 证明 Session/Turn、消息顺序、授权快照、Runtime Binding 和 staged candidate 的业务所有权。切片 3
 随后完成取消、响应丢失、重复 Job 与业务崩溃对账；切片 4 使用 Deep Agents Fake Model 和确定性 Tool
 验证真实 Adapter、原生上下文及成功 checkpoint 对账。能力存在于框架中不代表平台已经完成权限、
-跨进程恢复、审计和安全集成；MCP、Browser、Sandbox 和平台 Skills 仍须在恢复门槛后逐项验证。
+跨进程恢复、审计和安全集成；MCP、Browser、Sandbox 和平台 Skills 后续已在恢复门槛后逐项验证，结论
+分别记录在 7.1–7.4。
 
 ## 范围
 
@@ -160,7 +166,7 @@ Retriever/Matrix Reader。模型只能提交 query 或空参数；owner、Projec
 ChunkSet 作用域均由稳定 `turn_run_id` 在平台侧反查。
 
 `PolicySnapshot` 最小字段为 `snapshot_id`、`policy_version`、`owner_id`、`project_id`、`session_id`、
-`turn_run_id`、`allowed_tool_names`、`allowed_skill_names`、`mcp_refs`、`network_enabled`、`sandbox_enabled`、
+`turn_run_id`、`allowed_tool_names`、`allowed_skill_names`、`skill_refs`、`mcp_refs`、`network_enabled`、`sandbox_enabled`、
 `approval_required`、`max_model_calls`、`max_tool_calls`、`snapshot_hash`、`created_at`。首版默认
 Tool/Skill 为空、禁网、禁 Sandbox，并要求审批；只有平台可以构造和持久化策略快照。
 
@@ -172,7 +178,9 @@ Catalog 构造 `sandbox_enabled`、`network_enabled`、Tool/MCP/Skill allowlist 
 对象。安全参数只保存在 owner/Session 范围的不可变 `agent_mcp_profiles` revision，Policy 以
 `profile_id/profile_revision` 精确引用，并以 Session 锁、expected revision 与 `(session_id, revision)`
 唯一约束防止并发覆盖。
-Skill 引用字段仍由 7.4 确定。
+7.4 已把 `skill_refs` 固化为 Profile ID/revision、Skill ID/source/version/name、content hash 与 required
+Tool 名；Event 不保存正文。Profile 首 Turn 后永久锁定，每轮重复冻结同一 manifest；required Tool 必须
+是本轮最终 Tool allowlist 的子集。
 
 ### 切片 1 领域字段清单
 
@@ -466,7 +474,9 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
   owner-scoped 的声明式 Markdown/文本 Skill；`/skills/` 路由平台管理的只读 Backend，不进入可由
   Sandbox `execute` 改写的 `/workspace`，并按 owner/Session 固化版本/内容哈希；
 - Skill 是提示与能力组合，不是权限边界；首版不接受 Skill 可执行脚本、二进制、动态依赖、任意路径或
-  Secret，也不能扩大 Tool、MCP、网络、Sandbox、预算和 Project 权限；
+  独立 Secret 配置，也不能扩大 Tool、MCP、网络、Sandbox、预算和 Project 权限。API 不提供 Secret 字段
+  或注入机制，但本阶段不扫描 description/instructions 中误贴的 Secret；用户仍不得提交 Secret，文本扫描
+  与内容审核留到 Phase 6；
 - 子 Agent 与长期 Memory 默认关闭，除非 Phase 6 通过新 ADR 明确开放。
 
 以上能力每项都是后续独立 Spike。某项失败不应迫使业务 Session/Turn 契约返工，也不自动阻塞其他项。
@@ -515,8 +525,8 @@ Event 只记录稳定业务 ID、版本、状态、时长和安全摘要，不�
    - **7.3 Playwright MCP 与 Search MCP Spike（已完成实现，受限通过）**：固定版本 Playwright MCP 在同一 OpenSandbox 中连接
      Chromium/CDP，操作本地合成页面并把下载写入 `/workspace`；再适配一个现有、固定版本的只读 Search
      MCP；不自研 MCP Server，不把公共网络与统一 egress 作为本切片通过条件；
-   - **7.4 Native Skills**：验证平台安装 Skill 与 owner-scoped 声明式 Skill 的只读 Backend、版本/哈希、
-     owner/Session 隔离、Sandbox 不可改写和权限不扩张；
+   - **7.4 Native Skills（已完成实现）**：验证平台安装 Skill 与 owner-scoped 声明式 Skill 的只读 Backend、
+     不可变版本/哈希、首 Turn 后 Session manifest 锁定、Sandbox 不可改写和权限不扩张；
 8. **最小 Agent Chat UI**：连续对话、活动 Turn、筛选后 Event、Evidence 与候选 Artifact；
 9. **ADR 与阶段复盘**：记录版本、部署、恢复所有权、能力通过/失败证据和 Phase 6 结论。
 
@@ -879,6 +889,34 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   未运行。因此“同进程/同镜像回路通过”和“真实 OpenSandbox proxy 回路通过”必须分开陈述。详见
   [`agent-mcp-browser-search.md`](../modules/agent-mcp-browser-search.md)。
 
+切片 7.4 实现证据（2026-08-27）：
+
+- Domain/API 只接受 name、description、Markdown/text instructions 与 required Tool 名，由平台生成
+  `SKILL.md`；拒绝 owner、path、frontmatter、脚本、二进制、动态依赖、MCP/网络/Sandbox 配置与调用方
+  伪造的 content hash，且不提供独立 Secret 字段/注入机制。普通文本中的 Secret 扫描未实现，用户仍不得
+  提交，治理留到 Phase 6。平台 Catalog 固定 `evidence-led-synthesis` v1；owner 编辑创建新 version，
+  不覆盖旧内容；A→B→A 回退会追加 v3=A，hash 相同不合并历史版本；
+- PostgreSQL 增加 owner Skill identity/version、Session Skill Profile 和 Policy `skill_refs`。并发同名
+  创建由唯一约束收敛；版本 CAS 锁稳定 identity；Profile 更新与首条 Message 都锁同一 AgentSession
+  行，因此首 Turn 后永久锁定无检查后写入竞态。Policy 每轮固化 profile/revision/id/source/version/name/
+  content hash/required tools；Profile hash 对 selection 规范排序，持久化仍保留提交顺序用于审计；Event
+  只保存 `skill_count`；
+- Policy version 不统一覆盖既有契约：无扩展能力保持 `project-research-workspace.v1`，MCP-only 保持
+  `project-research-workspace-mcp.v1`，仅在 `skill_refs` 非空时使用 `project-research-capabilities.v1`；
+- Runtime 在业务事务外按冻结引用复核旧版本和 hash，物化为 `/skills/` 只读虚拟 Backend，并把稳定 source
+  直接交给 `create_deep_agent(skills=...)`。现有 Composite routes 与 Sandbox default 不被覆盖；
+  write/edit/upload/delete 明确拒绝，物理 Sandbox `execute` 看不到 `/skills/`；
+- 真实 `create_deep_agent` + Fake Chat Model + MemorySaver 两轮离线测试分别重建 Runtime/graph、只共享
+  checkpointer/thread 与后端，证明 `skills_metadata` 只下载一次且内容可读；Materializer 还验证 exact
+  owner/version/hash/name/required-tools 漂移 fail-closed；Sandbox wrapper 缺少 materializer 时
+  fail-closed 并关闭连接。
+  普通测试未访问真实模型、网站、外部 MCP 或 OpenSandbox；根 `pyproject.toml`/`uv.lock` 未变化；
+- 本切片把 graph revision 提升为 `deep-agent-graph.v5`，防止用新 Skill State/中间件语义恢复旧 graph。
+  最终 Domain/Application/API/Fake/Deep Adapter/Sandbox/Worker 定向回归为 `123 passed in 19.84s`；
+  PostgreSQL Application/Repository、两轮可靠性与迁移回归为 `13 passed in 28.52s`，owner composite FK 加固后
+  单独复跑迁移为 `6 passed in 5.05s`。详细边界见
+  [`agent-native-skills.md`](../modules/agent-native-skills.md)。
+
 ## 阶段完成条件
 
 - 两轮 Project-scoped Agent Chat 可通过 Fake Runtime 完全离线运行；
@@ -947,6 +985,10 @@ schema、独立 RuntimeExecution lease/fencing、同步 durability、相同 Runt
   ToolExecution 成功提交之间仍有在途不确定窗口，重复时对 orphan RUNNING fail-safe 拒绝而非盲目重放；
   graph 构造前的只读 session/discovery 尚无 graph RuntimeExecution permit，跨进程重复 Job 可能重复该
   discovery，但每个边界前会检查业务取消，且不会绕过 Tool invocation effect 去重；
+- 切片 7.4 已验证平台/owner 声明式 Skill 的版本、Session Profile、冻结 Policy、原生 metadata 缓存与
+  虚拟只读文件边界；它不支持附件、脚本、二进制、动态依赖、Profile 热切换、fork/rewind、内容审核 UI
+  或真实 Provider/OpenSandbox Smoke。owner instructions 仍是不可信提示，权限子集校验不等于已消除
+  Prompt Injection；
 - Worker 已改为 1..4 连接的 checkpoint pool，并为每个 Runtime operation 创建独立 Saver/graph；这解决
   singleton Saver 的全局实例锁串行，不代表数据库容量、性能或故障切换已完成生产评测；
 - Matrix Reader 验证可由既有持久事实重建的 Output/聚合/Paper/Evidence/ChunkSet 闭包，并只返回部分有界

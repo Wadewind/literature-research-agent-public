@@ -59,5 +59,7 @@ OpenSandbox/Lease/WorkspaceSnapshot 推进；ADR-0008 又将剩余顺序固定�
 → Agent Chat UI。其中 7.1 已完成实现与离线/临时 PostgreSQL 验证，详见
 [Agent Sandbox Workspace](modules/agent-sandbox-workspace.md)；真实 OpenSandbox 隔离/资源 Smoke 与
 7.2 已完成 MCP Configuration Foundation；7.3 已完成固定 Playwright/arXiv MCP 的实现及无网络镜像内
-回路验证，详见 [Agent Playwright/Search MCP](modules/agent-mcp-browser-search.md)。真实 OpenSandbox
-proxy Smoke 与 7.4 Native Skills 仍待验证。
+回路验证，详见 [Agent Playwright/Search MCP](modules/agent-mcp-browser-search.md)。7.4 已完成
+[Agent Native Skills](modules/agent-native-skills.md)：平台/owner 声明式 Skill 采用不可变版本、首 Turn 后
+Session manifest 锁定和 `/skills/` 只读虚拟 Backend，并直接复用 Deep Agents SkillsMiddleware。真实
+OpenSandbox proxy/Provider 组合 Smoke 仍待验证。

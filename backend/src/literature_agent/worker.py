@@ -100,6 +100,11 @@ from literature_agent.infrastructure.agent.sandboxed_research_agent_runtime impo
     CheckpointExecutionFactory,
     SandboxedResearchAgentRuntime,
 )
+from literature_agent.infrastructure.agent.skill_backend import (
+    PlatformSkillMaterializer,
+    SkillRuntimeMaterialization,
+)
+from literature_agent.infrastructure.agent.skill_catalog import PLATFORM_SKILLS
 from literature_agent.infrastructure.arxiv import HttpxArxivGateway
 from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.fake_arxiv import FixtureArxivGateway
@@ -185,6 +190,7 @@ from literature_agent.infrastructure.persistence.sandbox_workspace_repository im
     SqlalchemySandboxWorkspaceRepository,
     SqlalchemyWorkspaceSnapshotPublisher,
 )
+from literature_agent.infrastructure.persistence.skill_repository import SqlalchemySkillRepository
 from literature_agent.infrastructure.persistence.tool_execution_repository import (
     SqlalchemyToolExecutionRepository,
 )
@@ -414,6 +420,26 @@ def _build_research_agent_runtime(
             before_succeed=before_succeed,
         )
 
+    def runtime_with_capabilities_factory(
+        checkpointer: BaseCheckpointSaver[str],
+        backend: BackendProtocol,
+        before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None,
+        tools: tuple[Any, ...],
+        skills: SkillRuntimeMaterialization,
+    ) -> ResearchAgentRuntime:
+        return DeepAgentsResearchAgentRuntime(
+            model=model,
+            checkpointer=checkpointer,
+            backend=backend,
+            tools=tools,
+            project_context=project_context,
+            execution_control=execution_control,
+            runtime_owner_id=runtime_owner_id,
+            before_succeed=before_succeed,
+            skill_backend=skills.backend,
+            skill_sources=skills.sources,
+        )
+
     mcp_guard = McpToolExecutionService(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -427,6 +453,11 @@ def _build_research_agent_runtime(
         guard=mcp_guard,
         execution_control=execution_control,
     )
+    skill_materializer = PlatformSkillMaterializer(
+        session_factory=session_factory,
+        skill_repo_factory=SqlalchemySkillRepository,
+        platform_skills=PLATFORM_SKILLS,
+    )
 
     return SandboxedResearchAgentRuntime(
         checkpoint_factory=checkpoint_factory,
@@ -434,6 +465,8 @@ def _build_research_agent_runtime(
         workspace_manager=workspace_manager,
         runtime_with_tools_factory=runtime_with_tools_factory,
         mcp_tool_loader=mcp_loader,
+        runtime_with_capabilities_factory=runtime_with_capabilities_factory,
+        skill_materializer=skill_materializer,
     )
 
 

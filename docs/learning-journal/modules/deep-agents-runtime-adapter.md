@@ -69,7 +69,8 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   Evidence 标记解析为小型 `RuntimeTurnResult.evidence_ids`；Application 仍负责 Citation 授权与事务提交；
 - 切片 4 当时未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，
   7.2 已在 Adapter 外围接入 LangChain MCP Adapter 的显式 session、Schema 校验和平台 interceptor。
-  Playwright/Search MCP 与 Deep Agents Native Skills 仍分别属于 7.3/7.4；
+  7.3 已接固定 Playwright/Search MCP；7.4 又把 `/skills/` 只读 route 与稳定 source 交给
+  `create_deep_agent(skills=...)` 原生 SkillsMiddleware，不重写 Skill Harness；
 - Runtime Event 只产生 `bound/started/assistant_delta/completed`，不输出模型思考、Tool 原始结果或 Graph
   State。
 
@@ -85,6 +86,10 @@ checkpoint 后恢复不返还额度。该预算不覆盖 Provider 在途不确�
 `deep-agent-graph.v4`。只有 execute/resume 打开显式 MCP ClientSession；session 包围 graph 执行并在
 结束或异常时先于 Sandbox 关闭，collect/reconcile/cancel 离线路径不加载 MCP。版本或 Schema 漂移均
 fail-closed，而不是沿旧 checkpoint 静默换 Tool。
+
+7.4 增加原生 SkillsMiddleware State 与只读 `/skills/` route 后 revision 升为
+`deep-agent-graph.v5`。Session Profile 在首 Turn 后锁定，使 checkpoint 缓存的 `skills_metadata` 与业务
+manifest 始终一致；旧 graph revision 继续 fail-closed。
 
 ## 失败、重复和取消
 
@@ -175,11 +180,11 @@ Playwright/arXiv Catalog 与 Sandbox resolver，但仍未运行真实 OpenSandbo
   `runtime_turn_not_interrupted`；
 - 成功、失败、取消及 orphan RUNNING 已有持久 RuntimeExecution 和第二 OS 进程恢复证据；只允许相同
   Runtime/Graph/SDK revision 自动恢复，跨版本迁移尚未实现；
-- 没有真实 Provider/OpenSandbox Smoke、Usage 账单闭环、流式 token、Native Skill 或正式 Artifact。
+- 没有真实 Provider/OpenSandbox Smoke、Usage 账单闭环、流式 token 或正式 Artifact。
   7.3 已在无网络派生容器验证真实 Playwright/arXiv MCP 与本地 Browser/下载回路，但没有验证公共网络或
   OpenSandbox proxy；7.1 已用固定 Capability Profile 和 checkpoint State 对 Project/文件/execute Tool 强制统一
   `max_tool_calls`，主 Agent Loop 已强制 `max_model_calls`，但 summarization 内部调用与 Provider 在途窗口
-  不在模型预算内；Native Skills 仍属于 7.4；
+  不在模型预算内；Native Skills 已在 7.4 通过离线原生两轮测试，但未做真实 Provider/Sandbox Smoke；
 - Worker 已使用 checkpoint pool，并为每次 Runtime operation 创建独立 Saver/graph；完成后的 collect/
   reconcile 不依赖活 Sandbox。实际数据库容量与故障切换未做生产评测；
 - Project Tool 成功后的重放、并发和 temporary retry 已有持久 effect 证据；Tool 外部调用完成后、

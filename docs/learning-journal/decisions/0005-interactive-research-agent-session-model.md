@@ -109,6 +109,10 @@ Phase 5 的首个故事固定为两轮 Project-scoped Research Agent 对话：
 Browser 下载、受控 MCP、Sandbox 脚本和平台 Skill 仍在 Phase 5 后续独立 Spike 中验证，不是切片 1
 的进入条件，也不改变首个故事的固定授权范围。
 
+后续状态：7.1–7.4 已分别完成 OpenSandbox Workspace、MCP 配置、固定 Playwright/arXiv MCP 镜像内回路
+和 Native Skills 的受限验证；真实 OpenSandbox proxy/Provider、公共网络与 Phase 6 完整安全治理仍未
+完成。该进展没有改变本 ADR 的 Session/Turn 映射。
+
 ## 后果
 
 正面影响：产品形态能够持续复用 Project 文献上下文，展示比一次性任务更完整的 Agent 体验；业务

@@ -12,6 +12,10 @@ from literature_agent.application.mcp_configuration_service import (
     McpConfigurationService,
     McpProfileView,
 )
+from literature_agent.application.skill_configuration_service import (
+    SkillConfigurationService,
+    SkillProfileView,
+)
 from literature_agent.domain.exceptions import (
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
@@ -23,9 +27,16 @@ from literature_agent.domain.exceptions import (
     ProjectArchivedError,
     ProjectNotFoundError,
     ProjectNotIndexedError,
+    SkillConfigurationInvalidError,
+    SkillNotFoundError,
+    SkillProfileLockedError,
+    SkillProfileRevisionConflictError,
+    SkillVersionConflictError,
 )
 from literature_agent.domain.mcp_configuration import McpProfileSelection
+from literature_agent.domain.skill_configuration import SkillProfileSelection, SkillSource
 from literature_agent.infrastructure.agent.mcp_catalog import PLATFORM_MCP_CATALOG
+from literature_agent.infrastructure.agent.skill_catalog import PLATFORM_SKILLS
 from literature_agent.infrastructure.persistence.agent_repository import SqlalchemyAgentRepository
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
@@ -47,6 +58,7 @@ from literature_agent.infrastructure.persistence.project_repository import (
 )
 from literature_agent.infrastructure.persistence.review_repository import SqlalchemyReviewRepository
 from literature_agent.infrastructure.persistence.run_repository import SqlalchemyRunRepository
+from literature_agent.infrastructure.persistence.skill_repository import SqlalchemySkillRepository
 
 router = APIRouter(prefix="/api/v1", tags=["agent-sessions"])
 
@@ -145,6 +157,53 @@ class McpCatalogEntryResponse(BaseModel):
     tools: list[dict[str, str]]
 
 
+class SkillCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=1_024)
+    instructions: str = Field(min_length=1, max_length=32_000)
+    required_tool_names: list[str] = Field(default_factory=list, max_length=32)
+
+
+class SkillVersionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    description: str = Field(min_length=1, max_length=1_024)
+    instructions: str = Field(min_length=1, max_length=32_000)
+    required_tool_names: list[str] = Field(default_factory=list, max_length=32)
+
+
+class SkillResponse(BaseModel):
+    skill_id: str
+    source: str
+    version: int
+    name: str
+    description: str
+    instructions: str
+    required_tool_names: list[str]
+    content_hash: str
+
+
+class SkillProfileSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: SkillSource
+    skill_id: str = Field(min_length=1, max_length=64)
+    version: int = Field(ge=1)
+
+
+class SkillProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=0)
+    selections: list[SkillProfileSelectionRequest] = Field(default_factory=list, max_length=8)
+
+
+class SkillProfileResponse(BaseModel):
+    session_id: str
+    revision: int
+    config_hash: str
+    selections: list[SkillProfileSelectionRequest]
+
+
 async def get_agent_session_service(request: Request) -> AgentSessionService:
     state = request.app.state.app_state
     return AgentSessionService(
@@ -161,6 +220,8 @@ async def get_agent_session_service(request: Request) -> AgentSessionService:
         outbox_repo_factory=SqlalchemyOutboxRepository,
         mcp_profile_repo_factory=SqlalchemyMcpProfileRepository,
         mcp_catalog=PLATFORM_MCP_CATALOG,
+        skill_repo_factory=SqlalchemySkillRepository,
+        platform_skills=PLATFORM_SKILLS,
         event_notifier=state.event_notifier,
     )
 
@@ -180,6 +241,21 @@ async def get_mcp_configuration_service(request: Request) -> McpConfigurationSer
 
 McpServiceDep = Annotated[
     McpConfigurationService, Depends(get_mcp_configuration_service)
+]
+
+
+async def get_skill_configuration_service(request: Request) -> SkillConfigurationService:
+    state = request.app.state.app_state
+    return SkillConfigurationService(
+        session_factory=state.session_factory,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        skill_repo_factory=SqlalchemySkillRepository,
+        platform_skills=PLATFORM_SKILLS,
+    )
+
+
+SkillServiceDep = Annotated[
+    SkillConfigurationService, Depends(get_skill_configuration_service)
 ]
 
 
@@ -227,6 +303,16 @@ def _translate(exc: Exception) -> HTTPException:
         return HTTPException(409, "mcp_profile_revision_conflict")
     if isinstance(exc, McpProfileInvalidError):
         return HTTPException(422, "mcp_profile_invalid")
+    if isinstance(exc, SkillNotFoundError):
+        return HTTPException(404, "skill_not_found")
+    if isinstance(exc, SkillProfileLockedError):
+        return HTTPException(409, "skill_profile_locked")
+    if isinstance(exc, SkillProfileRevisionConflictError):
+        return HTTPException(409, "skill_revision_conflict")
+    if isinstance(exc, SkillVersionConflictError):
+        return HTTPException(409, "skill_version_conflict")
+    if isinstance(exc, SkillConfigurationInvalidError):
+        return HTTPException(422, "skill_configuration_invalid")
     raise exc
 
 
@@ -240,6 +326,35 @@ def _mcp_profile(value: McpProfileView) -> McpProfileResponse:
                 catalog_id=item.catalog_id,
                 version=item.version,
                 parameters=dict(item.parameters),
+            )
+            for item in value.selections
+        ],
+    )
+
+
+def _skill(value) -> SkillResponse:
+    return SkillResponse(
+        skill_id=value.skill_id,
+        source=value.source.value,
+        version=value.version,
+        name=value.name,
+        description=value.description,
+        instructions=value.instructions,
+        required_tool_names=list(value.required_tool_names),
+        content_hash=value.content_hash,
+    )
+
+
+def _skill_profile(value: SkillProfileView) -> SkillProfileResponse:
+    return SkillProfileResponse(
+        session_id=value.session_id,
+        revision=value.revision,
+        config_hash=value.config_hash,
+        selections=[
+            SkillProfileSelectionRequest(
+                source=item.source,
+                skill_id=item.skill_id,
+                version=item.version,
             )
             for item in value.selections
         ],
@@ -310,6 +425,96 @@ async def update_mcp_profile(
         )
     except ValueError as exc:
         raise HTTPException(422, "mcp_profile_invalid") from exc
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.get("/agent-skills", response_model=list[SkillResponse])
+async def list_agent_skills(
+    actor: ActorDep, service: SkillServiceDep
+) -> list[SkillResponse]:
+    return [_skill(value) for value in await service.list_available(actor)]
+
+
+@router.post("/agent-skills", status_code=201, response_model=SkillResponse)
+async def create_agent_skill(
+    body: SkillCreateRequest, actor: ActorDep, service: SkillServiceDep
+) -> SkillResponse:
+    try:
+        return _skill(
+            await service.create_owner_skill(
+                actor,
+                name=body.name,
+                description=body.description,
+                instructions=body.instructions,
+                required_tool_names=tuple(body.required_tool_names),
+            )
+        )
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.post(
+    "/agent-skills/{skill_id}/versions", status_code=201, response_model=SkillResponse
+)
+async def create_agent_skill_version(
+    skill_id: str,
+    body: SkillVersionCreateRequest,
+    actor: ActorDep,
+    service: SkillServiceDep,
+) -> SkillResponse:
+    try:
+        return _skill(
+            await service.create_owner_version(
+                actor,
+                skill_id,
+                expected_version=body.expected_version,
+                description=body.description,
+                instructions=body.instructions,
+                required_tool_names=tuple(body.required_tool_names),
+            )
+        )
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.get(
+    "/agent-sessions/{session_id}/skill-profile",
+    response_model=SkillProfileResponse,
+)
+async def get_skill_profile(
+    session_id: str, actor: ActorDep, service: SkillServiceDep
+) -> SkillProfileResponse:
+    try:
+        return _skill_profile(await service.get_profile(actor, session_id))
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.put(
+    "/agent-sessions/{session_id}/skill-profile",
+    response_model=SkillProfileResponse,
+)
+async def update_skill_profile(
+    session_id: str,
+    body: SkillProfileUpdateRequest,
+    actor: ActorDep,
+    service: SkillServiceDep,
+) -> SkillProfileResponse:
+    try:
+        return _skill_profile(
+            await service.update_profile(
+                actor,
+                session_id,
+                expected_revision=body.expected_revision,
+                selections=tuple(
+                    SkillProfileSelection(item.source, item.skill_id, item.version)
+                    for item in body.selections
+                ),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(422, "skill_configuration_invalid") from exc
     except Exception as exc:
         raise _translate(exc) from exc
 

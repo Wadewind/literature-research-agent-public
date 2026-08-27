@@ -66,9 +66,18 @@ SSRF、预算、取消和审计仍属于平台责任。
   平台管理的只读 Backend，不暴露给 Sandbox `execute`；`/workspace` 仍由 OpenSandbox Backend 管理；
 - Skill 内容按 owner/Session 隔离，并在每轮固化 Skill ID、版本、内容哈希和所需能力；
 - 用户可以启用/禁用平台安装、固定版本的 Skill，也可以在首版创建 owner-scoped 的声明式 Markdown/
-  文本 Skill；首版不接受可执行脚本、二进制、动态依赖、任意路径挂载或由 Skill 携带的 Secret；
+  文本 Skill；首版不接受可执行脚本、二进制、动态依赖、任意路径挂载，也不提供独立 Secret 字段或注入
+  机制。description/instructions 任意文本的 Secret 扫描与内容审核留到 Phase 6；用户仍不得提交 Secret；
 - Skill 只能指导模型使用当前 PolicySnapshot 已允许的 Tool/MCP/Sandbox 能力，不能授予网络、权限、
   预算、Secret 或跨 Project/Session 访问。
+
+Slice 7.4 进一步固定 Session manifest 语义：Skill Profile 绑定 AgentSession，只在首个 Turn/Message
+创建前允许以 revision CAS 配置，之后永久锁定。owner Skill 只接受 name、description、Markdown/text
+instructions 与 required Tool 名，由平台生成标准 `SKILL.md`；编辑创建不可变新版本和 SHA-256，不原地
+覆盖。每个 Turn 的 PolicySnapshot 重复固化同一 Profile revision 的精确 SDK-neutral refs；required
+Tool 必须是本轮最终 Tool allowlist 的子集。更换 Skill 需要新建或未来 fork 新 Session，而不是热修改同一
+SDK Thread。版本以 `(skill_id, version)` 表达演化，允许 A→B→A 追加回退版本；内容 hash 只证明内容相等。
+Profile hash 在计算前按 source/ID/version 规范排序，避免选择重排产生不同 manifest hash。
 
 ### Slice 7 新顺序
 
@@ -165,6 +174,28 @@ navigate/click 和 Workspace 下载；没有调用公网 arXiv。由于开发机
 opaque endpoint/header、代理是否保留推导出的 Host 仍未验证，已提供默认跳过的显式 Smoke。故 7.3
 结论为“镜像内能力与平台装配受限通过”，不是 OpenSandbox 代理链路、公共浏览、真实 arXiv 搜索或下载
 安全通过。
+
+## Slice 7.4 落地证据
+
+2026-08-27 已实现平台 `evidence-led-synthesis` v1、owner-scoped 声明式 Skill 不可变版本、Session
+Profile/CAS 和逐 Turn `PolicySnapshot.skill_refs`。同名创建由唯一约束收敛；新版本创建锁稳定 Skill
+身份后检查 expected version；Profile 更新与首条消息共同锁 AgentSession，并以业务 Message 存在性永久
+关闭配置窗口。Event 只保存 Skill 数量，不保存 instructions。
+
+Policy version 采用兼容分支而非统一改名：workspace-only 沿用 `project-research-workspace.v1`，MCP-only
+沿用 `project-research-workspace-mcp.v1`；只有 `skill_refs` 非空时使用
+`project-research-capabilities.v1`。这样接入 Skills 不会改变既有 MCP Snapshot 的版本契约。
+
+Worker 在数据库事务外按冻结 ref 复核精确版本/hash，把生成的 `SKILL.md` 物化为 `/skills/` 路由的进程内
+只读 Backend；`/workspace` 和 default `execute` 仍是当前 Session OpenSandbox。Adapter 直接调用
+`create_deep_agent(skills=...)`，没有重写 SkillsMiddleware。锁定的 `deepagents==0.7.8` 离线测试在两轮
+分别重建 Runtime/graph、仅共享 checkpointer/thread 与后端时，证明只加载一次 `skills_metadata`；内置
+文件工具可读，而 write/edit/upload/delete 均拒绝，Sandbox `execute` 的物理文件系统看不到虚拟 Skill。
+
+普通测试使用 Fake Chat Model、MemorySaver、Fake Sandbox 和临时 PostgreSQL，不连接真实 Provider、网站、
+外部 MCP 或 OpenSandbox，且没有新增或升级依赖。graph revision 已提升为 `deep-agent-graph.v5`；旧 revision
+继续 fail-closed。该结论不证明 owner 提示没有 Prompt Injection，也不包含附件/脚本 Skill、Skill 内容
+审核 UI、真实 Sandbox/Provider Smoke、fork/rewind 或 Phase 6 完整治理。
 
 ## 参考资料
 

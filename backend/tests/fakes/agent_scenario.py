@@ -21,6 +21,7 @@ from literature_agent.domain.review import (
     create_review_run,
 )
 from literature_agent.domain.run import RunType, create_run
+from literature_agent.domain.skill_configuration import SkillVersion
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
 )
@@ -58,6 +59,7 @@ from literature_agent.infrastructure.persistence.review_repository import (
     SqlalchemyReviewRepository,
 )
 from literature_agent.infrastructure.persistence.run_repository import SqlalchemyRunRepository
+from literature_agent.infrastructure.persistence.skill_repository import SqlalchemySkillRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +131,10 @@ async def seed_agent_scenario(db_engine, *, owner_id: str = "agent-owner") -> Ag
 
 
 def make_agent_service(
-    session_factory, *, mcp_catalog: McpCatalog | None = None
+    session_factory,
+    *,
+    mcp_catalog: McpCatalog | None = None,
+    platform_skills: tuple[SkillVersion, ...] = (),
 ) -> AgentSessionService:
     """用真实 Repository 组装 AgentSessionService。"""
     return AgentSessionService(
@@ -146,4 +151,6 @@ def make_agent_service(
         outbox_repo_factory=SqlalchemyOutboxRepository,
         mcp_profile_repo_factory=SqlalchemyMcpProfileRepository,
         mcp_catalog=mcp_catalog,
+        skill_repo_factory=SqlalchemySkillRepository,
+        platform_skills=platform_skills,
     )
