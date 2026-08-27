@@ -63,7 +63,9 @@ OUTLINE_SCHEMA_VERSION = "outline.v1"
 SEARCH_STRATEGY_SCHEMA_VERSION = "search-strategy.v1"
 EVIDENCE_MATRIX_SCHEMA_VERSION = "evidence-matrix.v1"
 WORKFLOW_VERSION = "review.v1"
-MODEL_PROFILE_VERSION = "review-default.v1"
+SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
+    {"review-default.v1", "review-default.v2"}
+)
 
 OUTLINE_JSON_SCHEMA = {
     "type": "object",
@@ -254,7 +256,7 @@ class ReviewOutlineService[TSession: Session]:
                 raise RunNotFoundError(run_id)
             if (
                 review.workflow_version != WORKFLOW_VERSION
-                or review.model_profile_version != MODEL_PROFILE_VERSION
+                or review.model_profile_version not in SUPPORTED_MODEL_PROFILE_VERSIONS
                 or review.prompt_versions.get("outline_generate") != PROMPT_VERSION
             ):
                 raise ReviewOutlineScopeError("Review Outline 版本快照不受支持")

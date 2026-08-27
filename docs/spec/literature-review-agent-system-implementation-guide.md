@@ -928,8 +928,10 @@ Matrix Paper、READY Source、PaperVersion、ParseRevision、Project/Run Evidenc
 Claim 和 Citation 使用数据库唯一约束上的原子 get-or-add，并在回读后比较完整稳定语义。
 
 章节与一致性输出 token 预算分别由 Review Profile 快照的 `section_output_token_limit` 和
-`consistency_output_token_limit` 控制，默认 4,000/2,000，并进入创建请求指纹；缺字段的早期
-`review.v1` 开发 Run 回退到相同默认值。原始模型 JSON 在 Schema 解析前分别限制为 192/64 KiB。
+`consistency_output_token_limit` 控制。新建 Run 使用 `review-default.v2`，默认来源数为 3，预算为
+8,000/2,000，并进入创建请求指纹；历史 `review-default.v1` Run 保留其持久化的 10 篇与
+4,000/2,000 配置，缺字段的早期 v1 开发 Run 仍回退到 v1 默认值。原始模型 JSON 在 Schema 解析前
+分别限制为 192/64 KiB。
 章节节点还必须反查成功的 Matrix/Outline/Draft/Validate 业务 Step 闭包并固化新 Step input refs；
 所有副作用提交前持锁复核 Run 仍为 RUNNING Review，取消后不得新增 Output/Event 或推进 Stage。
 

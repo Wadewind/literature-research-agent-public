@@ -71,8 +71,10 @@ async def test_create_review_run_is_atomic_business_bundle() -> None:
     assert run.status is RunStatus.QUEUED and run.event_sequence == 2
     assert review is not None and review.research_question == "LangGraph 如何可靠恢复？"
     assert review.current_stage is ReviewStage.FORMULATE_SEARCH_STRATEGY
+    assert review.model_profile_version == "review-default.v2"
     assert review.prompt_versions["evidence_extract"] == "review-evidence-extraction.v1"
-    assert review.config_snapshot["section_output_token_limit"] == 4_000
+    assert review.config_snapshot["source_limit"] == 3
+    assert review.config_snapshot["section_output_token_limit"] == 8_000
     assert review.config_snapshot["consistency_output_token_limit"] == 2_000
     assert event_rows[0].event_type == "review_run_created"
     assert event_rows[0].payload == {
@@ -120,7 +122,7 @@ async def test_output_token_profile_participates_in_request_fingerprint(monkeypa
         "correlation_id": "corr-1",
     }
     await service.create_review_run(**kwargs)
-    monkeypatch.setitem(DEFAULT_CONFIG_SNAPSHOT, "section_output_token_limit", 4_001)
+    monkeypatch.setitem(DEFAULT_CONFIG_SNAPSHOT, "section_output_token_limit", 8_001)
 
     with pytest.raises(IdempotencyConflictError):
         await service.create_review_run(**kwargs)

@@ -66,7 +66,9 @@ from literature_agent.domain.review_section import (
 from literature_agent.domain.run import RunStatus, RunType
 
 WORKFLOW_VERSION = "review.v1"
-MODEL_PROFILE_VERSION = "review-default.v1"
+SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
+    {"review-default.v1", "review-default.v2"}
+)
 SECTION_PROMPT_VERSION = "section_draft.v1"
 CONSISTENCY_PROMPT_VERSION = "consistency_check.v1"
 SECTION_SCHEMA_VERSION = "section.v1"
@@ -435,7 +437,7 @@ class ReviewSectionService[TSession: Session]:
                 raise RunNotFoundError(run_id)
             if (
                 review.workflow_version != WORKFLOW_VERSION
-                or review.model_profile_version != MODEL_PROFILE_VERSION
+                or review.model_profile_version not in SUPPORTED_MODEL_PROFILE_VERSIONS
                 or review.prompt_versions.get("section_draft") != SECTION_PROMPT_VERSION
                 or review.prompt_versions.get("consistency_check") != CONSISTENCY_PROMPT_VERSION
                 or review.current_outline_output_id != outline_id

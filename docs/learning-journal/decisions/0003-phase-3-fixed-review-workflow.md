@@ -68,6 +68,15 @@ ParseRevision 和 Evidence 的闭包。
 - Markdown 固定使用 `[1]` 数字引用，系统内部映射到精确 Evidence 和 PDF 定位；
 - 第一版不提供引用样式切换。
 
+### 2026-08-28 Profile 校准补充
+
+- 新建 Run 改用 `review-default.v2`，固定 `source_limit=3`、
+  `section_output_token_limit=8000`、`consistency_output_token_limit=2000`；目标是降低个人项目 Real
+  验证的下载/解析成本，并缓解 P4-REAL-003 中 completion 恰好触及 4000 token 的风险；
+- 所有值仍随 Run 快照和创建请求指纹保存。执行服务同时接受 v1/v2；历史 v1 Run 不迁移、不改写，
+  继续按其 10/4000/2000 快照恢复；
+- 本次只调整预算，不引入模型 repair 或额外付费调用，也不把 P4-REAL-003 标记为根因已修复。
+
 编号按最终 Markdown 中论文的首次引用顺序分配，同一论文复用同一编号。导出同时持久化完整映射，
 包含 Paper/PaperVersion、ReviewSource、arXiv ID/version、Claim、Evidence 及页码/章节定位；不能只把
 不可回查的 References 文本写进 Markdown。

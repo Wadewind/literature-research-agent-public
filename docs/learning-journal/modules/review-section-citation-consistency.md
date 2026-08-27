@@ -39,14 +39,18 @@ Schema、引用规则和 Profile 快照中的 token 输出预算。它不包含�
 论文全文或前文章节全文。术语字典以最早持久定义作为后续 Prompt 的统一输入；不同 Section 输出中的
 定义冲突仍完整保留，交给一致性报告披露。
 
-新 Review Run 快照固定保存 `section_output_token_limit=4000` 与
-`consistency_output_token_limit=2000`，并进入创建请求指纹。切片 8 之前缺少字段的 `review.v1` 开发
-Run 明确回退到相同默认值；显式字段必须是整数，范围分别为 256–16,000 和 256–8,000。模型原始 JSON
+2026-08-28 起，新 Review Run 使用 `review-default.v2`，快照固定保存
+`section_output_token_limit=8000` 与 `consistency_output_token_limit=2000`，并进入创建请求指纹；
+同时将 `source_limit` 调整为 3，便于个人项目的低成本 Real 验证。历史 `review-default.v1` Run 继续
+使用已持久化的 10/4000/2000 配置；切片 8 之前缺少字段的 v1 开发 Run 仍回退到 v1 的 4000/2000。
+显式字段必须是整数，范围分别为 256–16,000 和 256–8,000。模型原始 JSON
 在 Pydantic 解析前先按 UTF-8 字节限制：Section 192 KiB、Consistency 64 KiB，给 ReviewOutput 的
 256 KiB 总上限保留空间。
 
 证据不足是合法章节：必须保留摘要以说明边界，但不得生成 Claim。模型输出非法不触发 repair 调用，
-避免引入未讨论的额外成本和重写语义。
+避免引入未讨论的额外成本和重写语义。Provider/网络临时失败可由 Run Attempt 重投；已经持久化的
+Section 通过稳定 Output key 在重投时复用，但达到输出上限后的非法 JSON 当前仍归类为
+`section_draft_invalid`，尚未根据 `finish_reason` 单独识别或自动 repair。
 
 ## ClaimSet 复用与幂等事务
 

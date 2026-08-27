@@ -119,7 +119,7 @@ Review 检索到 10 篇论文，其中 5 篇进入 `ready`，另 5 篇长期停�
 ## P4-REAL-003：章节输出触及 token 上限后结构校验失败
 
 - 发现日期：2026-08-24
-- 状态：调查中（尚待修复）
+- 状态：已做预算缓解，根因与 Real 回归仍待确认
 - 影响 Project：`a8a53cf8-32d6-48f2-b5f5-d915220394d0`
 - 影响 Review：`57439d97-115b-4191-8c01-1fab4eaab98e`
 - 影响 Step：`draft_sections` 的第二章节 `solution_frameworks`
@@ -156,6 +156,14 @@ completion 恰好达到 4000 token，且第二章节 Prompt 明显大于第一�
   上限。
 - 重新决定部分章节成功、后续章节失败时是终止整个 Review，还是保留部分结果并允许恢复；这是产品
   行为变化，需要单独确认。
+
+### 2026-08-28 缓解记录
+
+- 新建 Review Run 改用 `review-default.v2`：`source_limit` 从 10 降至 3，
+  `section_output_token_limit` 从 4000 提高到 8000，一致性输出仍为 2000；历史 v1 Run 保留原快照；
+- 这是针对低成本 Real 测试和高概率截断原因的预算缓解，不足以证明 P4-REAL-003 根因已经修复；
+- 尚未增加 `finish_reason=length` 的持久化/分类，也未增加一次 repair。结构非法仍稳定失败，避免隐式
+  增加费用；Provider 临时失败仍使用既有 Run Attempt 重试，已持久化章节在重投时复用。
 
 ### 所需回归测试
 

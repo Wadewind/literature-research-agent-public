@@ -36,8 +36,9 @@ Thread 与既有 Thread；损坏 checkpoint 不会被当作首次执行覆盖。
 固定图只在 State 中传递 `review_run_id/project_id` 及 Search Strategy、Matrix、Outline、Section、
 ClaimSet、Consistency、Final Output 和 Artifact ID，不保存正文。
 
-Search Strategy 使用 `search_strategy.v1` Prompt、`search-strategy.v1` Schema 和
-`review-default.v1` Profile。输出限制 64 KiB，禁止额外字段，只允许有效 arXiv 查询、3–6 个唯一
+Search Strategy 使用 `search_strategy.v1` Prompt、`search-strategy.v1` Schema 和版本化 Review
+Profile；新 Run 使用 `review-default.v2`，历史 `review-default.v1` 继续受支持。输出限制 64 KiB，
+禁止额外字段，只允许有效 arXiv 查询、3–6 个唯一
 snake_case 维度；非法输出不 repair。模型调用在事务外，返回后持锁复核 owner/Project/RUNNING
 Review，再以稳定 Step/Output/Event 提交。
 
@@ -137,8 +138,9 @@ PostgreSQL/Valkey/Testcontainers 集成回归 `112 passed`；
 
 ## 已知限制
 
-- 只支持 arXiv、固定前 10 篇默认预算和 Markdown；不支持人工筛选或其他引用格式；
-- `review-default.v1` 当前总下载预算由单文件上限乘固定来源数得到，仍需真实小规模试验校准；
+- 只支持 arXiv、v2 固定前 3 篇默认预算和 Markdown；不支持人工筛选或其他引用格式；
+- `review-default.v2` 当前总下载预算由单文件上限乘固定来源数得到，仍需真实小规模试验校准；历史 v1
+  Run 保留前 10 篇快照；
 - 一致性报告不是事实 Judge；引用闭包证明引用存在且范围正确，不证明 Claim 一定被 Evidence 语义蕴含；
 - Phase 3 切片 10 已完成阶段验收，并补齐图外 `current_stage` 的 Step/Event 原子推进；
 - Phase 4 切片 4 已把 Artifact 元数据和下载接入 Review Detail。浏览器只构造已授权的 Project-scoped

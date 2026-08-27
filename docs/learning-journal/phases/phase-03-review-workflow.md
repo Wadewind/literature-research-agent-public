@@ -849,6 +849,10 @@ Backend 完整非集成测试 `508 passed, 4 skipped`，完整 PostgreSQL/Valkey
 实现和取舍详见
 [人工大纲确认与恢复](../modules/human-outline-review.md)。
 
+> 2026-08-28 校准：以下切片 8 的 `review-default.v1`/4000 记录保留为当时事实。当前新建 Run 已使用
+> `review-default.v2`，固定 `source_limit=3`、章节/一致性输出预算 8000/2000；执行链仍兼容历史 v1
+> 快照。详见 ADR-0003 的 Profile 校准补充。
+
 ### 18.8 切片 8 完成记录（2026-08-23）
 
 - 新增 `section.v1`：每节按批准 Outline 顺序生成，固定保存 `section_key/title/status/summary/claims/

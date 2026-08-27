@@ -40,7 +40,9 @@ from literature_agent.domain.run import RunStatus, RunType
 TSession = TypeVar("TSession", bound=Session)
 PROMPT_VERSION = "search_strategy.v1"
 SCHEMA_VERSION = "search-strategy.v1"
-MODEL_PROFILE_VERSION = "review-default.v1"
+SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
+    {"review-default.v1", "review-default.v2"}
+)
 
 
 class ReviewSearchStrategyModel(Protocol):
@@ -144,7 +146,7 @@ class ReviewSearchStrategyService[TSession: Session]:
                 or run.run_type != RunType.REVIEW.value
                 or run.status is not RunStatus.RUNNING
                 or review.workflow_version != "review.v1"
-                or review.model_profile_version != MODEL_PROFILE_VERSION
+                or review.model_profile_version not in SUPPORTED_MODEL_PROFILE_VERSIONS
                 or review.prompt_versions.get("search_strategy") != PROMPT_VERSION
             ):
                 raise RunNotFoundError(run_id)
