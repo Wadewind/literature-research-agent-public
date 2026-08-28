@@ -132,7 +132,10 @@ OpenSandbox Server 独立于 `scripts/dev.sh` 启动。项目版本化配置是
 它提供本地 default-deny 行为证据，但未配置 secure runtime，不是公网多用户隔离方案。
 
 Phase 6 Slice 7 的目标网络配置由 ADR-0012 固定为 `research-public-egress.v1`，不是 `.env` 或用户设置：
-Sandbox 内允许任意正常公网 HTTP(S)，统一拒绝 loopback/private/link-local/reserved/metadata/宿主/LAN。
+Sandbox 内允许任意正常公网 HTTP(S)，保留 CDP/MCP/VNC 所需的 Sandbox namespace 内部 loopback，并统一
+拒绝非-loopback private/link-local/reserved/metadata/宿主/LAN 出口。raw Browser/execute 可访问同一
+Sandbox 内部服务，但不能访问宿主 loopback；正式 URL/source 输入仍拒绝 localhost/loopback 及解析到
+loopback 的 Host。
 `PolicySnapshot` 与 `SandboxLease` 将保存 Profile version/hash，策略变化必须轮换 generation。该 Profile
 在 Slice 7 实现与真实 Smoke 通过前仍是目标事实；当前已验证事实仍是 Slice 6 的 default-deny。用户不能
 提交 Host allowlist、代理、DNS、例外地址或认证 Secret。

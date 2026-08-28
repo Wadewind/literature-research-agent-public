@@ -145,7 +145,7 @@ DNS 结果、下载文件名/MIME/字节、Sandbox 生成文件和迟到的 Prov
 | Project Context Tool | 模型伪造 scope、跨 Snapshot 检索、全文泄漏 | 服务端注入 scope、精确 ContextSnapshot refs、有界 Evidence、Citation 校验 |
 | MCP/Skill | Schema 漂移、供应链替换、Prompt Injection、Secret 泄漏 | 固定 Catalog/version/hash、allowlist 投影、只读 Skill、调用前策略复核 |
 | Sandbox `execute` | 宿主逃逸、资源耗尽、网络绕过、读取 Secret、生成危险文件 | 非 root 固定镜像、无宿主挂载、资源上限、public-egress/private-network 边界、显式文件提交 |
-| Browser/URL | Prompt Injection、访问 private/metadata/宿主/LAN、下载炸弹、凭据外泄、意外 POST/表单/远端写入 | L3/L4/FQDN private deny、无平台 Secret、无外部写专用 Tool、正式资源文件策略；不宣称协议级只读 |
+| Browser/URL | Prompt Injection、访问 private/metadata/宿主/LAN、下载炸弹、凭据外泄、意外 POST/表单/远端写入 | 非-loopback 出口的 L3/L4/FQDN private deny、正式 URL/source 拒绝 localhost/loopback、无平台 Secret、无外部写专用 Tool、正式资源文件策略；不宣称协议级只读 |
 | Browser 人工控制 | 跨 Session 画面、旧 generation 控制、人/Agent 竞争、凭据落库 | BrowserControlLease、短时代理票据、generation/fence、Turn 边界互斥 |
 | Attachment/Artifact（均为已实现的本地受限业务事实） | 路径穿越、symlink、MIME 欺骗、越权下载、重复发布 | opaque ID/path、regular-file 校验、magic/hash/大小、staging 和成功 CAS |
 | 重试/恢复 | 同一消息重复追加、重复 Tool/Artifact、旧 Worker 晚到提交 | reconcile-first、稳定 binding/effect/candidate ID、唯一约束、fence/CAS |
@@ -198,14 +198,14 @@ Browser operation completed != Event/Run committed
 | 能力/动作 | 决策 | 前置条件 |
 |---|---|---|
 | 当前 ContextSnapshot 内 Project Paper/Chunk/Evidence/Matrix 只读 | 自动执行 | owner/Project/Session/Turn 闭包、精确版本引用、有界输出 |
-| 正常公网 HTTP(S) transport | 自动执行（Slice 7 后） | `research-public-egress.v1`、统一 private/metadata/宿主/LAN 拒绝、当前 Lease Profile/hash、预算全部通过；不代表协议级只读 |
+| 正常公网 HTTP(S) transport | 自动执行（Slice 7 后） | `research-public-egress.v1`、统一非-loopback private/metadata/宿主/LAN 拒绝、当前 Lease Profile/hash、预算全部通过；Sandbox 内部 loopback 仅用于固定本地服务，不代表协议级只读 |
 | Sandbox `execute` 与固定依赖绘图 | 自动执行 | 当前 Lease generation/fence/Profile、取消/预算预检、资源上限、无动态安装 |
 | 受支持类型的新 Agent Artifact | 自动执行 | 当前 Project/Turn、显式 `/workspace/outputs/` 路径、校验、不可变新 ID、Turn 成功 |
 | 用户通过 Attachment ID 提供受支持输入 | 自动执行 | 当前 owner/Project/Session、ContextSnapshot 冻结、受控 inbox 路径和文件校验 |
 | 用户在两个 Turn 之间控制当前 Chromium | 自动执行 | 无活动 Turn、健康且 generation 一致的 Lease、短 TTL 控制权、无原始 endpoint |
 | 平台或 Agent 持有/注入用户名、密码、Cookie、验证码、OAuth Token | 直接拒绝 | 不进入 Approval |
 | 平台外部写专用 Tool/Workflow | 不注册/不支持 | 产品策略禁止，平台不提供凭据；raw Browser/Shell/MCP 可能发起等价网络请求，当前无协议级强制 |
-| private/metadata/宿主/LAN 目标，或用户/MCP/网页修改网络 Profile/代理/DNS | 直接拒绝 | 不以用户确认放宽 |
+| 非-loopback private/metadata/宿主/LAN 出口，或用户/MCP/网页修改网络 Profile/代理/DNS | 直接拒绝 | 不以用户确认放宽；正式 URL/source 另行拒绝 localhost/loopback 输入与解析结果 |
 | 用户提交 MCP endpoint/URL/transport/command/env/版本/认证 | 直接拒绝 | 只能引用平台固定 Catalog |
 | 用户提交 Tool 代码、可执行 Skill、二进制 Skill、系统 Prompt | 直接拒绝 | owner Skill 仅声明式 Markdown/text |
 | 选择 Sandbox 镜像、挂载宿主路径、使用宿主 Shell/Python | 直接拒绝 | Sandbox 配置只由部署者固定 |
@@ -435,22 +435,28 @@ Artifact 或业务成功。
 ### Slice 7：Sandbox 公网与正式资源
 
 - 固定 `research-public-egress.v1` 允许任意正常公网 HTTP(S)，不维护平台 URL Host allowlist 或逐次网络
-  审批；统一 egress 必须拒绝 loopback/private/link-local/unspecified/multicast/reserved、云元数据、
-  宿主/LAN/容器控制面；
+  审批；保留 Sandbox network namespace 内部 loopback 供 CDP/MCP/websockify/VNC 与固定本地服务使用，
+  统一 egress 必须在非-loopback 出口拒绝 private/link-local/unspecified/multicast/reserved、云元数据、
+  宿主/LAN/容器控制面；raw Browser/execute 可访问同 Sandbox 服务但不能访问宿主 loopback；
+- 正式 URL/source 输入不享受内部 loopback 例外，必须拒绝 `localhost`、loopback 字面地址与 DNS 解析到
+  loopback 的 Host；
 - Profile 只提供 L3/L4/FQDN 目标边界，不检查 HTTP method、body、表单或站点业务语义；平台不注册外部
   写 Tool/Workflow、不提供平台凭据并要求研究读取，但验收不得把 raw Browser/MCP/Shell 描述为只读；
 - `PolicySnapshot` 冻结 Profile ID/version/hash，`SandboxLease` 保存相同 Profile/hash；Profile 变化、
   deny→public 或任意不匹配都必须轮换 generation，不能续租旧环境；
 - 网络策略覆盖 Browser、MCP、Shell、Python、Node 和 curl。必须核对 pinned `opensandbox==0.1.15`、
   Server `0.2.2`、egress image `v1.1.4`/upstream commit 前缀 `34653f7` 的上游与本地行为；配置字段存在
-  不能替代真实强制证据，固定版本做不到 public allow + private deny 时停止实现；
+  不能替代真实强制证据。上游 nft 规则已确认在 CIDR deny set 前固定 `accept` loopback interface；项目
+  选择保留现有 CDP/MCP/VNC 拓扑，而不自研 egress 镜像。固定版本做不到 public allow + 非-loopback
+  private deny 时停止实现；
 - Browser/MCP/execute 下载可留在 `/workspace/downloads/`，但 raw Workspace 文件不是正式业务资源，
   不可直接由公开 API 下载；只有成为 `AgentArtifact`、Project 资源或平台已验证来源时，才检查数量/
   总量、超时、大小、扩展名、MIME、magic、hash 和来源；
 - 外部网络、Sandbox 和 Storage I/O 不进入数据库事务；稳定 invocation/resource ID、effect ledger、唯一
   约束和 fence 收敛重复/响应丢失，不宣称 Exactly Once；
-- 离线恶意 Fixture 全部通过后，才显式运行 arXiv 页面/PDF、至少一个非 arXiv 公网目标以及 private/
-  metadata 拒绝 Smoke。真实 Smoke 不进入普通 CI，不调用真实模型，不使用用户 Cookie，也不绕过
+- 离线恶意 Fixture 全部通过后，才显式运行 Sandbox 内部 loopback、arXiv 页面/PDF、至少一个非 arXiv
+  公网目标以及非-loopback private/metadata/宿主拒绝 Smoke。真实 Smoke 不进入普通 CI，不调用真实模型，
+  不使用用户 Cookie，也不绕过
   CAPTCHA/付费墙/robots/授权；Smoke 只证明目标网络边界，不证明 HTTP 业务动作只读。
 
 ### Slice 8：产品整合

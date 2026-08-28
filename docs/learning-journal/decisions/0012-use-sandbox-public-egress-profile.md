@@ -29,8 +29,10 @@ Phase 6 Slice 7 引入版本化 `research-public-egress.v1`：
 - Sandbox 内的 Browser、Playwright/Search MCP、Shell、Python、Node 和 `curl` 可以访问任意正常公网
   `https`，并可在确有公开站点兼容需要时访问普通公网 `http`；
 - 不维护 arXiv 或其他公网 Host allowlist，不因 URL 来自模型、网页、用户或 MCP 而逐次等待批准；
-- 基础设施 egress 必须拒绝 loopback、RFC1918/private、link-local、unspecified、multicast、reserved、
-  云元数据以及宿主/LAN/容器控制面目标；拒绝不能只依靠 Tool 参数过滤；
+- Sandbox network namespace 内部 loopback 必须保留，用于 Chromium CDP、Playwright/Search MCP、
+  websockify/VNC 和其他固定本地服务；覆盖 Sandbox 全部进程的基础设施 egress 必须在非-loopback 出口
+  拒绝 RFC1918/private、link-local、unspecified、multicast、reserved、云元数据以及宿主/LAN/容器
+  控制面目标，拒绝不能只依靠 Tool 参数过滤；
 - Sandbox 继续使用非 root 固定镜像、空平台 Secret、无宿主目录/数据库/Docker Socket 挂载、固定资源
   与墙钟预算、短 TTL、generation/fence 和幂等清理；动态安装和用户自定义网络策略继续由产品策略禁止；
 - 不绕过 robots、CAPTCHA、付费墙或授权，不把人工登录凭据交给模型或平台持久化。
@@ -40,6 +42,12 @@ Phase 6 Slice 7 引入版本化 `research-public-egress.v1`：
 资源的专用 Tool，也不向 Sandbox 提供平台凭据；系统策略只允许研究读取。但 raw Browser、Shell、MCP、
 Python 或 `curl` 技术上仍可能发送 POST、提交表单或触发站点写操作，这是当前精简交付的已知风险，而
 不是基础设施层已强制拒绝的能力。
+
+允许的是当前 Sandbox network namespace 自身的 loopback，不是宿主 loopback。raw `execute`/Browser
+可以访问同一 Sandbox 内由固定镜像或平台 recipe 启动的服务，这是 Browser/MCP 集成所需且已知的隔离
+边界；它们不能借此访问宿主的 `127.0.0.1`。另一方面，平台正式 URL/source 输入不继承该例外：URL
+校验必须拒绝 `localhost`、loopback 字面地址以及 DNS 解析到 loopback 的 Host，不能把同 Sandbox
+loopback 当作可登记的外部来源。
 
 `PolicySnapshot` 必须冻结 public-egress Profile ID、version 与 canonical hash；`SandboxLease` 必须绑定
 同一 Profile/version/hash。Profile 变化或快照与 Lease 不一致时必须轮换 Sandbox generation，不能在旧
@@ -61,12 +69,21 @@ Browser、MCP 或 `execute` 下载的文件可以留在当前 Session Sandbox Wo
 Slice 7 必须先核对本地锁定的 Python SDK `opensandbox==0.1.15`、OpenSandbox Server `0.2.2`、egress
 image `v1.1.4`（上游 commit 前缀 `34653f7`）的实际行为和上游实现。配置对象存在、通配 Host 能保存或
 文档声称支持都不构成通过；必须由同一 Sandbox 中的 Browser/MCP/Shell/Python/curl 真实连接证明公网
-可达且 private/metadata 目标不可达。若固定版本不能同时做到“公网允许、私网拒绝”，Slice 7 必须停止并
-记录证据，不能退化为无 private-network 边界的开放网络。
+可达、Sandbox 内部 loopback 可用且非-loopback private/metadata/宿主目标不可达。若固定版本不能同时
+做到“公网允许、非-loopback 私网拒绝”，Slice 7 必须停止并记录证据，不能退化为无 private-network
+边界的开放网络。
+
+已确认的上游事实是：egress `v1.1.4` 在 `dns+nft` 模式可用 `defaultAction=allow` 与 IP/CIDR deny set
+表达公网允许和私网拒绝，且 deny set 位于动态 DNS allow 之前；其 nft 规则同时会在 deny set 之前固定
+`accept` loopback interface。项目选择保留这一行为，因为 CDP `127.0.0.1:9222`、VNC
+`127.0.0.1:5901` 和 Sandbox 内 MCP/合成服务依赖同一 namespace loopback。备选方案是自研 egress 镜像
+并重构这些本地通道，但会扩大镜像供应链、网络拓扑和验证范围，不符合个人项目的精简交付，因此拒绝。
 
 普通自动测试继续完全离线，使用恶意 URL/DNS/Redirect/文件 Fixture 与 Fake Provider；真实公网 Smoke
 必须显式启用，记录固定版本、Profile/hash、目标、预算、结果和限制，不调用真实付费模型。至少验证一个
-arXiv 页面/PDF、一个非 arXiv 正常公网目标和一个被拒绝的 private/metadata 目标。
+arXiv 页面/PDF、一个非 arXiv 正常公网目标、Sandbox 内部 loopback 可用，以及一个被拒绝的非-loopback
+private/metadata/宿主目标。正式 URL/source 的离线 Fixture 还必须证明 localhost/loopback 输入及解析
+结果被平台拒绝。
 
 ### 仍然不属于 Phase 6
 

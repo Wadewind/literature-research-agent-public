@@ -363,11 +363,14 @@ default-deny 网络下用 Sandbox 内合成登录页验收；Slice 7 的 public-
   站点兼容需要时允许普通公网 `http`；
 - Profile 是 L3/L4/FQDN 出网边界，只判断连接目标，不解析 HTTP method、body、表单或站点业务语义；
   Browser/MCP/Shell/Python/curl 的公网请求因此不能被基础设施证明为只读；
-- 统一 egress 必须阻断 loopback、link-local、private、multicast、unspecified、reserved、云元数据、
+- Sandbox network namespace 内部 loopback 必须保留，供 CDP、MCP、websockify/VNC 和固定本地服务使用；
+  统一 egress 必须在非-loopback 出口阻断 link-local、private、multicast、unspecified、reserved、云元数据、
   宿主/LAN/容器控制面目标，并覆盖 IPv4/IPv6 与 Browser/MCP/Shell/Python/curl 全部 Sandbox 进程；
+- 正式 URL/source 输入仍拒绝 `localhost`、loopback 字面地址和 DNS 解析到 loopback 的 Host；raw
+  Browser/`execute` 可访问同一 Sandbox 内部服务，但不能访问宿主 loopback；
 - 该强制效果不能只由 Tool 参数、配置字段或 Prompt 声明证明。Slice 7 必须核对 pinned SDK `0.1.15`、
-  Server `0.2.2`、egress image `v1.1.4`/upstream commit 前缀 `34653f7`，并运行真实公网允许与私网拒绝
-  Smoke；固定版本不能满足时停止实现，不能无条件开放；
+  Server `0.2.2`、egress image `v1.1.4`/upstream commit 前缀 `34653f7`，并运行 Sandbox 内部 loopback、
+  真实公网允许与非-loopback 私网拒绝 Smoke；固定版本不能满足时停止实现，不能无条件开放；
 - PolicySnapshot 冻结 Profile ID/version/hash，Sandbox Lease 绑定相同 Profile/hash；策略变化或不匹配
   必须轮换 generation，不能续租旧 deny/allowlist/不同策略环境；
 - 用户、模型、网页和 MCP 不能提交或修改 Profile、代理、DNS、认证 Secret 或 private-network 例外；
@@ -638,11 +641,13 @@ ADR-0007/0008 本身当作测试结果：
    MCP 的统一 default-deny；公网仍
    关闭。Docker overlay 物理磁盘硬配额未实现并作为明确限制保留；
 7. **Sandbox 公网与正式资源安全**：实现 `research-public-egress.v1`，让 Browser/MCP/Shell/Python/curl
-   访问任意正常公网 HTTP(S)，统一拒绝 loopback/private/link-local/reserved/metadata/宿主/LAN；冻结
+   访问任意正常公网 HTTP(S)，保留 Sandbox namespace 内部 loopback，并统一拒绝非-loopback
+   private/link-local/reserved/metadata/宿主/LAN 出口；正式 URL/source 输入继续拒绝 localhost/loopback；冻结
    PolicySnapshot 与 SandboxLease 的 Profile version/hash，策略变化强制轮换 generation。raw Workspace
    下载不冒充业务资源；正式 Artifact、Project 资源或已验证来源才执行数量/总量/超时/大小/MIME/magic/
-   hash/来源校验和 effect ledger。离线恶意 Fixture 通过后，显式运行 arXiv、非 arXiv 公网与私网拒绝
-   Smoke；不建设通用 URL Host allowlist、HTTP method/业务语义代理或逐次网络审批，明确 raw 公网通道
+   hash/来源校验和 effect ledger。离线恶意 Fixture 通过后，显式运行 Sandbox 内部 loopback、arXiv、
+   非 arXiv 公网与非-loopback 私网拒绝 Smoke；不建设通用 URL Host allowlist、HTTP method/业务语义代理
+   或逐次网络审批，明确 raw 公网通道
    不具备协议级只读保证；
 8. **产品整合、验证与复盘**：严格遵循 `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
    4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新，再整合 Turn Detail、

@@ -129,7 +129,9 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
 - 已验证本地 Docker OpenSandbox proxy Host/header 和单 generation endpoint；未验证远程/Kubernetes
   Provider、跨主机 endpoint、secure runtime 或长时间稳定性；
 - 本模块完成时 Sandbox 仍默认禁网，未验证真实 arXiv 查询、公共浏览、public-egress/private-network 或
-  正式资源校验；后续 public-egress 只约束目标网络，不会把 raw MCP/Browser 请求强制为协议级只读；
+  正式资源校验；后续 public-egress 保留 CDP/MCP 所需的同 Sandbox 内部 loopback，并拒绝非-loopback
+  private/metadata/宿主/LAN；正式 URL/source 输入仍拒绝 localhost/loopback。该 Profile 只约束目标网络，
+  不会把 raw MCP/Browser 请求强制为协议级只读；
 - OpenSandbox 创建固定传入 `entrypoint=['/entrypoint']`，以保留 pinned Chrome 镜像的 Chromium/execd
   启动 recipe；该值是平台镜像契约，不允许用户配置；
 - 用户不能配置任意开源 MCP，只能选择平台固定的两个 Catalog 条目；OAuth/Secret 委托不在 Phase 5；

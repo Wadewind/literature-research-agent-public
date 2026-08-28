@@ -97,6 +97,12 @@
 > 宿主与 LAN。raw Workspace 下载不等于正式业务资源；文件带出 Sandbox 时才执行来源与文件校验。该能力
 > 仍是 trusted-local 演示。Profile 只提供 L3/L4/FQDN 目标边界，不解析 HTTP method 或 Browser 业务
 > 语义；平台不注册外部写 Tool 或提供凭据，但不宣称 raw Browser/Shell/MCP 协议级只读。
+>
+> v20 变更：经核对 pinned egress `v1.1.4`/upstream commit `34653f7`，其 nft 规则在 CIDR deny set 前固定
+> 放行 loopback interface；现有 CDP、MCP 与 VNC 又依赖同一 Sandbox namespace 的 loopback。项目因此
+> 保留 Sandbox 内部 loopback，同时在非-loopback 出口拒绝 private/metadata/宿主/LAN。raw
+> Browser/execute 可以访问同 Sandbox 的固定本地服务，但不能访问宿主 loopback；正式 URL/source 输入
+> 仍拒绝 localhost/loopback 字面地址和 DNS 解析结果。自研 egress 镜像并重构本地通道不符合精简交付。
 
 ## 1. 文档用途
 
