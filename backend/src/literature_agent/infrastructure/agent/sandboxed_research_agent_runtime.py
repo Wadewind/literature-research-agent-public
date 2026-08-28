@@ -18,6 +18,7 @@ from literature_agent.application.ports.research_agent_runtime import (
     RuntimeErrorKind,
     RuntimeEvent,
     RuntimeEventKind,
+    RuntimeExecutionState,
     RuntimeResumeRequest,
     RuntimeTurnReconciliation,
     RuntimeTurnRequest,
@@ -81,6 +82,12 @@ class RuntimeSkillMaterializer(Protocol):
     ) -> SkillRuntimeMaterialization: ...
 
 
+class RuntimeAttachmentMaterializer(Protocol):
+    async def materialize(
+        self, request: RuntimeTurnRequest, lease: SandboxWorkspaceLease
+    ) -> None: ...
+
+
 class RuntimePlatformToolFactory(Protocol):
     """根据当前受控 request/lease 创建平台自定义 Tool。"""
 
@@ -112,6 +119,7 @@ class SandboxedResearchAgentRuntime:
         runtime_with_capabilities_factory: RuntimeWithCapabilitiesFactory | None = None,
         skill_materializer: RuntimeSkillMaterializer | None = None,
         platform_tool_factory: RuntimePlatformToolFactory | None = None,
+        attachment_materializer: RuntimeAttachmentMaterializer | None = None,
     ) -> None:
         self._checkpoint_factory = checkpoint_factory
         self._runtime_factory = runtime_factory
@@ -121,6 +129,7 @@ class SandboxedResearchAgentRuntime:
         self._runtime_with_capabilities_factory = runtime_with_capabilities_factory
         self._skill_materializer = skill_materializer
         self._platform_tool_factory = platform_tool_factory
+        self._attachment_materializer = attachment_materializer
         self._active: dict[str, _ActiveExecution] = {}
         self._active_lock = asyncio.Lock()
 
@@ -133,11 +142,20 @@ class SandboxedResearchAgentRuntime:
         """先用持久控制事实收敛重投，避免已知 Execution 抢占 Sandbox。"""
         offline = self._offline_runtime()
         try:
-            await offline.reconcile_turn(request.turn_run_id)
+            reconciliation = await offline.reconcile_turn(request.turn_run_id)
         except ResearchAgentRuntimeError as exc:
             if exc.code != "runtime_turn_not_found":
                 raise
         else:
+            if (
+                request.context_snapshot.attachment_refs
+                and reconciliation.state is RuntimeExecutionState.RUNNING
+            ):
+                # 恢复中的附件 Turn 不能改用 StateBackend；重取 fenced
+                # Sandbox 并按原 ContextSnapshot 重新物化 inbox。
+                async for event in self._run_with_workspace(request, resume=None):
+                    yield event
+                return
             async for event in offline.execute_turn(request):
                 yield event
             return
@@ -167,6 +185,28 @@ class SandboxedResearchAgentRuntime:
         else:
             skills = SkillRuntimeMaterialization(StateBackend(), ())
         lease = await self._workspace_manager.acquire(turn_request)
+        if self._attachment_materializer is not None:
+            try:
+                # 即使本轮没有引用，也必须清空上轮 inbox。
+                await self._attachment_materializer.materialize(turn_request, lease)
+            except BaseException as exc:
+                await self._workspace_manager.mark_dirty(lease)
+                await _close_runtime_resources(AsyncExitStack(), lease.backend)
+                if isinstance(exc, ResearchAgentRuntimeError):
+                    raise
+                raise ResearchAgentRuntimeError(
+                    kind=RuntimeErrorKind.PERMANENT,
+                    code="runtime_attachment_materialization_failed",
+                    safe_message="本轮输入附件未能安全物化",
+                ) from exc
+        elif turn_request.context_snapshot.attachment_refs:
+            await self._workspace_manager.mark_dirty(lease)
+            await _close_runtime_resources(AsyncExitStack(), lease.backend)
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.PERMANENT,
+                code="runtime_attachment_unavailable",
+                safe_message="本轮输入附件能力未装配",
+            )
         platform_tools = (
             self._platform_tool_factory.create(turn_request, lease)
             if self._platform_tool_factory is not None

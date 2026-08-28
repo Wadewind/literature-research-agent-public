@@ -534,7 +534,7 @@ class DeepAgentsResearchAgentRuntime:
                 {
                     "messages": [
                         HumanMessage(
-                            content=request.user_message_content,
+                            content=_runtime_user_message_content(request),
                             id=request.user_message_id,
                         )
                     ]
@@ -1482,6 +1482,27 @@ def _valid_profile_component(value: object) -> bool:
         and bool(value)
         and value == value.strip()
         and ":" not in value
+    )
+
+
+def _runtime_user_message_content(request: RuntimeTurnRequest) -> str:
+    """仅向模型暴露当轮受控路径与必要元数据，不复制文件内容。"""
+    if not request.context_snapshot.attachment_refs:
+        return request.user_message_content
+    manifest = [
+        {
+            "attachment_id": ref.attachment_id,
+            "display_name": ref.display_name,
+            "media_type": ref.media_type,
+            "size_bytes": ref.size_bytes,
+            "path": f"/workspace/inbox/{ref.attachment_id}/{ref.display_name}",
+        }
+        for ref in request.context_snapshot.attachment_refs
+    ]
+    return (
+        request.user_message_content
+        + "\n\n平台已将本轮明确授权的附件物化到 Sandbox：\n"
+        + json.dumps(manifest, ensure_ascii=False, separators=(",", ":"))
     )
 
 

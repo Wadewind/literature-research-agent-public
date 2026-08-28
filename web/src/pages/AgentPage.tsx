@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch, errorMessage } from "../api/client";
 import type {
   AgentMessage,
+  AgentAttachment,
   AgentArtifact,
   AgentSession,
   AgentSkill,
@@ -26,6 +27,10 @@ import {
   ensureAgentMessageIntent,
   type AgentMessageIntent,
 } from "../agent/messageIntent";
+import {
+  ensureAgentAttachmentUploadIntent,
+  type AgentAttachmentUploadIntent,
+} from "../agent/attachmentUploadIntent";
 import { agentWorkspaceKey } from "../agent/interactionIdentity";
 import { eligibleEvidenceMatrices } from "../agent/matrixEligibility";
 import {
@@ -42,6 +47,7 @@ import {
   type AgentWorkspaceLayout,
 } from "../agent/workspaceLayout";
 import AgentCapabilityPanel from "../components/AgentCapabilityPanel";
+import AgentAttachmentComposer from "../components/AgentAttachmentComposer";
 import AgentEvidenceMargin from "../components/AgentEvidenceMargin";
 import AgentResizeSeparator from "../components/AgentResizeSeparator";
 import AgentSessionRail from "../components/AgentSessionRail";
@@ -73,6 +79,8 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const [newSessionTitle, setNewSessionTitle] = useState("");
   const [content, setContent] = useState("");
   const [messageIntent, setMessageIntent] = useState<AgentMessageIntent | null>(null);
+  const [uploadIntent, setUploadIntent] = useState<AgentAttachmentUploadIntent | null>(null);
+  const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<string[]>([]);
   const [submittedRunId, setSubmittedRunId] = useState<string | null>(null);
   const [selectedReviewRunId, setSelectedReviewRunId] = useState("");
   const [selectedEvidence, setSelectedEvidence] = useState<CitationSummary | null>(null);
@@ -84,6 +92,42 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const projectQuery = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => apiFetch<Project>(`/api/v1/projects/${projectId}`),
+  });
+  const attachmentsQuery = useQuery({
+    queryKey: ["agent-attachments", sessionId],
+    queryFn: () => apiFetch<AgentAttachment[]>(`/api/v1/agent-sessions/${sessionId}/attachments`),
+  });
+  const uploadAttachmentMutation = useMutation({
+    mutationFn: ({ file, intent }: { file: File; intent: AgentAttachmentUploadIntent }) => {
+      const body = new FormData();
+      body.append("file", file);
+      return apiFetch<AgentAttachment>(`/api/v1/agent-sessions/${sessionId}/attachments`, {
+        method: "POST",
+        headers: { "Idempotency-Key": intent.key },
+        body,
+      });
+    },
+    onSuccess: (attachment) => {
+      setUploadIntent(null);
+      setSelectedAttachmentIds((current) =>
+        current.length < 5 && !current.includes(attachment.attachment_id)
+          ? [...current, attachment.attachment_id]
+          : current,
+      );
+      setMessageIntent(null);
+      void queryClient.invalidateQueries({ queryKey: ["agent-attachments", sessionId] });
+    },
+  });
+  const deleteAttachmentMutation = useMutation({
+    mutationFn: (attachmentId: string) =>
+      apiFetch<void>(`/api/v1/agent-sessions/${sessionId}/attachments/${attachmentId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: (_, attachmentId) => {
+      setSelectedAttachmentIds((current) => current.filter((value) => value !== attachmentId));
+      setMessageIntent(null);
+      void queryClient.invalidateQueries({ queryKey: ["agent-attachments", sessionId] });
+    },
   });
   const sessionsQuery = useQuery({
     queryKey: ["agent-sessions", projectId],
@@ -277,6 +321,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
         body: JSON.stringify({
           content: intent.content,
           review_output_id: intent.reviewOutputId,
+          attachment_ids: intent.attachmentIds,
         }),
       });
     },
@@ -284,6 +329,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
       setSubmittedRunId(result.run_id);
       setContent("");
       setMessageIntent(null);
+      setSelectedAttachmentIds([]);
       void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
       void queryClient.invalidateQueries({ queryKey: ["agent-sessions", projectId] });
       void queryClient.invalidateQueries({ queryKey: ["agent-messages", sessionId] });
@@ -315,10 +361,21 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
       messageIntent,
       normalized,
       reviewOutputId,
+      selectedAttachmentIds,
       () => crypto.randomUUID(),
     );
     setMessageIntent(intent);
     postMessageMutation.mutate(intent);
+  };
+
+  const uploadAttachment = (file: File) => {
+    const intent = ensureAgentAttachmentUploadIntent(
+      uploadIntent,
+      file,
+      () => crypto.randomUUID(),
+    );
+    setUploadIntent(intent);
+    uploadAttachmentMutation.mutate({ file, intent });
   };
 
   const handleMcpToggle = (entry: McpCatalogEntry, enabled: boolean) => {
@@ -518,6 +575,31 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
               )}
 
               <form className="agent-composer" onSubmit={submitMessage}>
+                <AgentAttachmentComposer
+                  attachments={attachmentsQuery.data ?? []}
+                  selectedIds={selectedAttachmentIds}
+                  disabled={
+                    !canInteract ||
+                    Boolean(activeTurnRunId) ||
+                    deleteAttachmentMutation.isPending
+                  }
+                  uploading={uploadAttachmentMutation.isPending}
+                  error={
+                    uploadAttachmentMutation.isError || deleteAttachmentMutation.isError ||
+                    attachmentsQuery.isError
+                      ? errorMessage(
+                          uploadAttachmentMutation.error ?? deleteAttachmentMutation.error ??
+                          attachmentsQuery.error,
+                        )
+                      : null
+                  }
+                  onUpload={uploadAttachment}
+                  onToggle={(attachmentId) => {
+                    setSelectedAttachmentIds((current) => current.includes(attachmentId) ? current.filter((value) => value !== attachmentId) : current.length < 5 ? [...current, attachmentId] : current);
+                    setMessageIntent(null);
+                  }}
+                  onDelete={(attachmentId) => deleteAttachmentMutation.mutate(attachmentId)}
+                />
                 <div className="agent-composer-context">
                   <label htmlFor="agent-matrix">本轮 Evidence Matrix</label>
                   <select id="agent-matrix" value={selectedReviewRunId} onChange={(event) => { setSelectedReviewRunId(event.target.value); setMessageIntent(null); }} disabled={!canInteract || Boolean(activeTurnRunId)}>

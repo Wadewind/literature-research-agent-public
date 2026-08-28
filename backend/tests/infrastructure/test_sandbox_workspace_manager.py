@@ -1,6 +1,7 @@
 """Sandbox Lease 与 WorkspaceSnapshot 协调器的离线行为。"""
 
 import asyncio
+import hashlib
 import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -8,7 +9,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from literature_agent.application.ports.research_agent_runtime import RuntimeTurnRequest
-from literature_agent.domain.workspace_snapshot import WorkspaceSnapshotStatus
+from literature_agent.domain.workspace_snapshot import (
+    WorkspaceFile,
+    WorkspaceSnapshotStatus,
+    create_workspace_snapshot,
+)
 from literature_agent.infrastructure.agent.sandbox_workspace import (
     SandboxLeaseRecord,
     SandboxLeaseStatus,
@@ -185,6 +190,59 @@ async def test_new_turn_reuses_generation_but_advances_fence_and_holder() -> Non
     assert second.record.generation == first.record.generation
     assert second.record.fencing_token == first.record.fencing_token + 1
     assert second.record.holder_turn_run_id == "turn-2"
+
+
+async def test_stage_snapshot_excludes_per_turn_attachment_inbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def immediate_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "literature_agent.infrastructure.agent.sandbox_workspace.asyncio.to_thread",
+        immediate_to_thread,
+    )
+    repo, provider, storage = _Repo(), _Provider(), _Storage()
+    manager = _manager(repo, provider, storage, [datetime(2026, 8, 26, tzinfo=UTC)])
+    request = _sandbox_request()
+    lease = await manager.acquire(request)
+    lease.backend.files["/workspace/notes.md"] = b"stable"
+    lease.backend.files["/workspace/inbox/attachment-1/private.pdf"] = b"private"
+
+    snapshot = await manager.stage_snapshot(request, lease)
+
+    assert [item.path for item in snapshot.files] == ["/workspace/notes.md"]
+    assert all("private" not in key for key in storage.data)
+
+
+async def test_restore_rejects_snapshot_that_contains_attachment_inbox() -> None:
+    repo, provider, storage = _Repo(), _Provider(), _Storage()
+    manager = _manager(repo, provider, storage, [datetime(2026, 8, 26, tzinfo=UTC)])
+    request = _sandbox_request(turn_run_id="turn-next")
+    content = b"must-not-be-restored"
+    snapshot = create_workspace_snapshot(
+        owner_id=request.context_snapshot.owner_id,
+        project_id=request.context_snapshot.project_id,
+        session_id=request.session_id,
+        turn_run_id="turn-previous",
+        version=1,
+        sandbox_generation=1,
+        files=(
+            WorkspaceFile(
+                path="/workspace/inbox/attachment-1/private.pdf",
+                content_hash=hashlib.sha256(content).hexdigest(),
+                size_bytes=len(content),
+            ),
+        ),
+    ).as_stable()
+    repo.snapshots.append(snapshot)
+
+    with pytest.raises(ValueError, match="不得恢复每轮授权 inbox"):
+        await manager.acquire(request)
+
+    assert provider.destroyed == ["sandbox-1"]
+    assert repo.lease is None
+    assert storage.data == {}
 
 
 async def test_new_turn_rotates_when_previous_holder_has_no_snapshot() -> None:

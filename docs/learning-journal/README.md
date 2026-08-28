@@ -88,5 +88,5 @@ ticket、固定 Server Proxy/websockify Adapter、单连接有界代理和 noVNC
 PostgreSQL 验证。修正镜像已重建，Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
 Smoke 已通过；前三次 endpoint、宿主代理、readiness/Fixture 失败均形成回归测试。该证据仅为未配置
 API key/secure runtime 的 trusted-local 功能验证，未验证 noVNC 人工键鼠 UI E2E、通用认证或公网安全。
-下一切片为 Agent 输入附件。最终 UI 同时受
+已完成 [Agent 输入附件](modules/agent-input-attachments.md)：不可变业务附件、消息/快照引用、事务外 fenced inbox 物化、WorkspaceSnapshot 隔离与壳层无关 UI 已落地；下一切片为固定能力、Project Context 与硬预算。最终 UI 同时受
 [`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-redesign.md)约束，前置功能组件必须保持壳层无关。

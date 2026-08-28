@@ -85,6 +85,12 @@
 > 诊断失败已修正，修正镜像已重建；Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
 > Smoke 已通过。该证据仅为未配置 API key/secure runtime 的 trusted-local 功能验证，不代表 noVNC 人工
 > 键鼠 UI E2E、通用认证、公网安全或跨 generation 登录恢复。
+>
+> v18 变更：Phase 6 Slice 4 完成 Agent 输入附件。用户文件作为 owner/Project/Session
+> scoped 不可变 `AgentAttachment` 进入业务 Storage；消息幂等 hash 覆盖有序附件 ID，
+> `agent-context.v2` 冻结精确版本/hash/大小/类型/名称。Runtime 在模型前事务外清空并
+> 重验物化 `/workspace/inbox`，WorkspaceSnapshot 不得保存或恢复 inbox。不开放 Browser 任意
+> 文件上传，Storage 孤儿 blob GC 与通用恶意文件扫描仍是已知限制。
 
 ## 1. 文档用途
 

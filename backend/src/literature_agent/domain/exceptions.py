@@ -389,3 +389,15 @@ class ReviewCitationInvalidError(Exception):
 
 class ReviewExportInvalidError(ValueError):
     """最终导出的 Output、Claim、Citation 或 Artifact 闭包非法。"""
+
+
+class AgentAttachmentNotFoundError(Exception):
+    """附件不存在、不可用或不属于当前 owner/Session。"""
+
+    def __init__(self, attachment_id: str) -> None:
+        self.attachment_id = attachment_id
+        super().__init__(f"AgentAttachment {attachment_id} 不存在")
+
+
+class AgentAttachmentReferencedError(Exception):
+    """附件已被历史消息引用，不可删除或覆盖。"""

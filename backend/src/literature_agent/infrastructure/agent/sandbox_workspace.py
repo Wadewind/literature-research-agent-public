@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from literature_agent.application.ports.research_agent_runtime import RuntimeTurnRequest
 from literature_agent.application.ports.storage import Storage
+from literature_agent.domain.agent_attachment import is_agent_attachment_inbox_path
 from literature_agent.domain.workspace_snapshot import (
     WORKSPACE_MAX_FILE_BYTES,
     WORKSPACE_MAX_FILES,
@@ -263,6 +264,8 @@ class SandboxWorkspaceManager:
         declared_sizes: dict[str, int] = {}
         declared_total = 0
         for path, entry_type, size in listed:
+            if is_agent_attachment_inbox_path(path):
+                continue
             normalized_type = entry_type.lower().rsplit(".", 1)[-1]
             if normalized_type in {"directory", "dir"}:
                 if path != "/workspace" and not is_workspace_file_path(path):
@@ -339,6 +342,8 @@ class SandboxWorkspaceManager:
             return
         payload: list[tuple[str, bytes]] = []
         for item in snapshot.files:
+            if is_agent_attachment_inbox_path(item.path):
+                raise ValueError("WorkspaceSnapshot 不得恢复每轮授权 inbox")
             content = await self._storage.read(snapshot.storage_key_for(item))
             if (
                 len(content) != item.size_bytes

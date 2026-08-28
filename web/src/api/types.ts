@@ -301,6 +301,19 @@ export interface AgentMessage {
   claim_set_id: string | null;
   created_at: string;
   claims: Claim[] | null;
+  attachment_ids: string[];
+}
+
+export interface AgentAttachment {
+  attachment_id: string;
+  session_id: string;
+  version: number;
+  display_name: string;
+  media_type: string;
+  content_hash: string;
+  size_bytes: number;
+  status: "available" | "deleted";
+  created_at: string;
 }
 
 export interface AgentCandidate {

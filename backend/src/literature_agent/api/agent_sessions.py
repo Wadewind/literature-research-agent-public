@@ -23,6 +23,7 @@ from literature_agent.application.skill_configuration_service import (
 )
 from literature_agent.domain.exceptions import (
     AgentArtifactNotFoundError,
+    AgentAttachmentNotFoundError,
     AgentBrowserControlBusyError,
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
@@ -44,6 +45,9 @@ from literature_agent.domain.mcp_configuration import McpProfileSelection
 from literature_agent.domain.skill_configuration import SkillProfileSelection, SkillSource
 from literature_agent.infrastructure.agent.mcp_catalog import PLATFORM_MCP_CATALOG
 from literature_agent.infrastructure.agent.skill_catalog import PLATFORM_SKILLS
+from literature_agent.infrastructure.persistence.agent_attachment_repository import (
+    SqlalchemyAgentAttachmentRepository,
+)
 from literature_agent.infrastructure.persistence.agent_repository import SqlalchemyAgentRepository
 from literature_agent.infrastructure.persistence.browser_control_repository import (
     SqlalchemyBrowserControlRepository,
@@ -102,12 +106,22 @@ class MessageCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1, max_length=16_000)
     review_output_id: str = Field(min_length=1, max_length=36)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator("content")
     @classmethod
     def reject_blank_content(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("content 不能为空白")
+        return value
+
+    @field_validator("attachment_ids")
+    @classmethod
+    def validate_attachment_ids(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() or len(item) > 36 for item in value):
+            raise ValueError("attachment_ids 含非法 ID")
+        if len(set(value)) != len(value):
+            raise ValueError("attachment_ids 不得重复")
         return value
 
 
@@ -136,6 +150,7 @@ class MessageResponse(BaseModel):
     claim_set_id: str | None
     created_at: datetime
     claims: list[ClaimResponse] | None
+    attachment_ids: list[str]
 
 
 class PostMessageResponse(BaseModel):
@@ -174,6 +189,7 @@ class TurnResponse(BaseModel):
     policy_snapshot_id: str
     review_output_id: str
     project_index_refs: list[dict[str, str]]
+    attachment_refs: list[dict[str, str | int]]
     candidates: list[CandidateResponse]
 
 
@@ -274,6 +290,7 @@ async def get_agent_session_service(request: Request) -> AgentSessionService:
         platform_skills=PLATFORM_SKILLS,
         event_notifier=state.event_notifier,
         browser_control_repo_factory=SqlalchemyBrowserControlRepository,
+        attachment_repo_factory=SqlalchemyAgentAttachmentRepository,
     )
 
 
@@ -346,10 +363,13 @@ def _translate(exc: Exception) -> HTTPException:
             AgentSessionNotFoundError,
             AgentTurnNotFoundError,
             AgentReviewOutputNotFoundError,
+            AgentAttachmentNotFoundError,
         ),
     ):
         code = (
-            "agent_session_not_found"
+            "agent_attachment_not_found"
+            if isinstance(exc, AgentAttachmentNotFoundError)
+            else "agent_session_not_found"
             if isinstance(exc, AgentSessionNotFoundError)
             else "agent_turn_not_found"
             if isinstance(exc, AgentTurnNotFoundError)
@@ -673,6 +693,7 @@ async def list_messages(
                     if x.claims is not None
                     else None
                 ),
+                attachment_ids=list(x.message.attachment_ids),
             )
             for x in values
         ]
@@ -703,6 +724,7 @@ async def post_message(
             session_id,
             content=body.content,
             review_output_id=body.review_output_id,
+            attachment_ids=tuple(body.attachment_ids),
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
         )
@@ -733,6 +755,17 @@ async def get_turn(run_id: str, actor: ActorDep, service: ServiceDep) -> TurnRes
                     "chunk_set_id": r.chunk_set_id,
                 }
                 for r in value.context_snapshot.project_index_refs
+            ],
+            attachment_refs=[
+                {
+                    "attachment_id": r.attachment_id,
+                    "version": r.version,
+                    "content_hash": r.content_hash,
+                    "size_bytes": r.size_bytes,
+                    "media_type": r.media_type,
+                    "display_name": r.display_name,
+                }
+                for r in value.context_snapshot.attachment_refs
             ],
             candidates=[
                 CandidateResponse(

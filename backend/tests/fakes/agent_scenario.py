@@ -1,11 +1,15 @@
 """Phase 5 Agent 分层行为测试共用的最小 PostgreSQL 场景。"""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from literature_agent.application.agent_session_service import AgentSessionService
+from literature_agent.application.ports.agent_attachment_repository import (
+    AgentAttachmentRepository,
+)
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.chunk import create_chunk_set
 from literature_agent.domain.mcp_configuration import McpCatalog
@@ -22,6 +26,9 @@ from literature_agent.domain.review import (
 )
 from literature_agent.domain.run import RunType, create_run
 from literature_agent.domain.skill_configuration import SkillVersion
+from literature_agent.infrastructure.persistence.agent_attachment_repository import (
+    SqlalchemyAgentAttachmentRepository,
+)
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
 )
@@ -144,6 +151,9 @@ def make_agent_service(
     *,
     mcp_catalog: McpCatalog | None = None,
     platform_skills: tuple[SkillVersion, ...] = (),
+    attachment_repo_factory: Callable[
+        [AsyncSession], AgentAttachmentRepository
+    ] = SqlalchemyAgentAttachmentRepository,
 ) -> AgentSessionService:
     """用真实 Repository 组装 AgentSessionService。"""
     return AgentSessionService(
@@ -165,4 +175,5 @@ def make_agent_service(
         skill_repo_factory=SqlalchemySkillRepository,
         platform_skills=platform_skills,
         browser_control_repo_factory=SqlalchemyBrowserControlRepository,
+        attachment_repo_factory=attachment_repo_factory,
     )

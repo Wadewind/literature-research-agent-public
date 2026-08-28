@@ -1,18 +1,29 @@
 """SqlalchemyAgentRepository 的真实 PostgreSQL 幂等行为测试。"""
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 
+from literature_agent.application.agent_attachment_service import AgentAttachmentService
+from literature_agent.domain.agent_attachment import AgentAttachmentStatus
 from literature_agent.domain.evidence import AnswerStatus, create_claim_set
-from literature_agent.domain.exceptions import RunConcurrentModificationError
+from literature_agent.domain.exceptions import (
+    AgentAttachmentNotFoundError,
+    AgentAttachmentReferencedError,
+    IdempotencyConflictError,
+    RunConcurrentModificationError,
+)
 from literature_agent.domain.research_agent import (
     AgentMessageRole,
     RuntimeSessionBinding,
     create_agent_artifact_candidate,
     create_agent_message,
+)
+from literature_agent.infrastructure.persistence.agent_attachment_repository import (
+    SqlalchemyAgentAttachmentRepository,
 )
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
@@ -20,9 +31,326 @@ from literature_agent.infrastructure.persistence.agent_repository import (
 from literature_agent.infrastructure.persistence.claim_set_repository import (
     SqlalchemyClaimSetRepository,
 )
-from literature_agent.infrastructure.persistence.models import AgentSessionORM
+from literature_agent.infrastructure.persistence.models import (
+    AgentAttachmentORM,
+    AgentMessageAttachmentORM,
+    AgentSessionORM,
+)
 from tests.fakes.agent_scenario import make_agent_service, seed_agent_scenario
 from tests.integration.conftest import db_engine as db_engine
+
+
+class _Storage:
+    def __init__(self) -> None:
+        self.values: dict[str, bytes] = {}
+
+    async def write(self, key: str, content: bytes) -> None:
+        self.values[key] = content
+
+    async def read(self, key: str) -> bytes:
+        return self.values[key]
+
+
+class _ConcurrentStorage(_Storage):
+    """强制两个上传都越过预查和事务外写入，再竞争数据库唯一事实。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._arrived = 0
+        self._ready = asyncio.Event()
+
+    async def write(self, key: str, content: bytes) -> None:
+        self._arrived += 1
+        if self._arrived == 2:
+            self._ready.set()
+        await asyncio.wait_for(self._ready.wait(), timeout=5)
+        await super().write(key, content)
+
+
+def _attachment_service(scenario, storage):
+    return AgentAttachmentService(
+        session_factory=scenario.factory,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        attachment_repo_factory=SqlalchemyAgentAttachmentRepository,
+        storage=storage,
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_attachment_upload_converges_or_conflicts_cleanly(
+    db_engine,
+) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    agent_session = await make_agent_service(scenario.factory).create_session(
+        scenario.actor, scenario.project.project_id, title=None
+    )
+
+    same_service = _attachment_service(scenario, _ConcurrentStorage())
+    same_results = await asyncio.gather(
+        *(
+            same_service.upload(
+                scenario.actor,
+                agent_session.session_id,
+                display_name="notes.txt",
+                media_type="text/plain",
+                content=b"same",
+                idempotency_key="concurrent-same",
+            )
+            for _ in range(2)
+        )
+    )
+
+    assert same_results[0].attachment == same_results[1].attachment
+    assert sorted(item.replayed for item in same_results) == [False, True]
+
+    conflict_service = _attachment_service(scenario, _ConcurrentStorage())
+    conflict_results = await asyncio.gather(
+        conflict_service.upload(
+            scenario.actor,
+            agent_session.session_id,
+            display_name="notes.txt",
+            media_type="text/plain",
+            content=b"first",
+            idempotency_key="concurrent-conflict",
+        ),
+        conflict_service.upload(
+            scenario.actor,
+            agent_session.session_id,
+            display_name="notes.txt",
+            media_type="text/plain",
+            content=b"second",
+            idempotency_key="concurrent-conflict",
+        ),
+        return_exceptions=True,
+    )
+    successes = [item for item in conflict_results if not isinstance(item, BaseException)]
+    conflicts = [item for item in conflict_results if isinstance(item, BaseException)]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    assert isinstance(conflicts[0], IdempotencyConflictError)
+
+    async with scenario.factory() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(AgentAttachmentORM)
+            .where(
+                AgentAttachmentORM.owner_id == scenario.actor.owner_id,
+                AgentAttachmentORM.idempotency_key.in_(("concurrent-same", "concurrent-conflict")),
+            )
+        )
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_message_and_delete_lock_attachment_until_one_outcome_is_durable(
+    db_engine,
+) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+
+    async def create_attachment(session_id: str, suffix: str):
+        return await _attachment_service(scenario, _Storage()).upload(
+            scenario.actor,
+            session_id,
+            display_name=f"notes-{suffix}.txt",
+            media_type="text/plain",
+            content=suffix.encode(),
+            idempotency_key=f"lock-{suffix}",
+        )
+
+    # Message 先锁：删除必须等待消息/引用提交，然后稳定拒绝为 referenced。
+    message_session = await make_agent_service(scenario.factory).create_session(
+        scenario.actor, scenario.project.project_id, title="message-first"
+    )
+    message_attachment = await create_attachment(message_session.session_id, "message")
+    message_locked = asyncio.Event()
+    allow_message = asyncio.Event()
+    delete_attempted = asyncio.Event()
+
+    class MessageFirstRepository(SqlalchemyAgentAttachmentRepository):
+        async def get_many_available_scoped(self, *args, for_update=False, **kwargs):
+            values = await super().get_many_available_scoped(*args, for_update=for_update, **kwargs)
+            if for_update:
+                message_locked.set()
+                await asyncio.wait_for(allow_message.wait(), timeout=5)
+            return values
+
+    class WaitingDeleteRepository(SqlalchemyAgentAttachmentRepository):
+        async def get_scoped(self, *args, for_update=False, **kwargs):
+            if for_update:
+                delete_attempted.set()
+            return await super().get_scoped(*args, for_update=for_update, **kwargs)
+
+    message_service = make_agent_service(
+        scenario.factory, attachment_repo_factory=MessageFirstRepository
+    )
+    delete_service = AgentAttachmentService(
+        session_factory=scenario.factory,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        attachment_repo_factory=WaitingDeleteRepository,
+        storage=_Storage(),
+    )
+    message_task = asyncio.create_task(
+        message_service.post_message(
+            scenario.actor,
+            message_session.session_id,
+            content="先引用",
+            review_output_id=scenario.matrix.output_id,
+            attachment_ids=(message_attachment.attachment.attachment_id,),
+            idempotency_key="message-first-turn",
+            correlation_id="message-first-turn",
+        )
+    )
+    await asyncio.wait_for(message_locked.wait(), timeout=5)
+    delete_task = asyncio.create_task(
+        delete_service.delete(
+            scenario.actor,
+            message_session.session_id,
+            message_attachment.attachment.attachment_id,
+        )
+    )
+    await asyncio.wait_for(delete_attempted.wait(), timeout=5)
+    allow_message.set()
+    message_result = await asyncio.wait_for(message_task, timeout=5)
+    with pytest.raises(AgentAttachmentReferencedError):
+        await asyncio.wait_for(delete_task, timeout=5)
+
+    # Delete 先锁：消息必须等待删除提交，然后把附件视为不可用且不创建引用。
+    delete_session = await make_agent_service(scenario.factory).create_session(
+        scenario.actor, scenario.project.project_id, title="delete-first"
+    )
+    delete_attachment = await create_attachment(delete_session.session_id, "delete")
+    delete_locked = asyncio.Event()
+    allow_delete = asyncio.Event()
+    message_attempted = asyncio.Event()
+
+    class DeleteFirstRepository(SqlalchemyAgentAttachmentRepository):
+        async def get_scoped(self, *args, for_update=False, **kwargs):
+            value = await super().get_scoped(*args, for_update=for_update, **kwargs)
+            if for_update:
+                delete_locked.set()
+                await asyncio.wait_for(allow_delete.wait(), timeout=5)
+            return value
+
+    class WaitingMessageRepository(SqlalchemyAgentAttachmentRepository):
+        async def get_many_available_scoped(self, *args, for_update=False, **kwargs):
+            if for_update:
+                message_attempted.set()
+            return await super().get_many_available_scoped(*args, for_update=for_update, **kwargs)
+
+    delete_first_service = AgentAttachmentService(
+        session_factory=scenario.factory,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        attachment_repo_factory=DeleteFirstRepository,
+        storage=_Storage(),
+    )
+    waiting_message_service = make_agent_service(
+        scenario.factory, attachment_repo_factory=WaitingMessageRepository
+    )
+    delete_first_task = asyncio.create_task(
+        delete_first_service.delete(
+            scenario.actor,
+            delete_session.session_id,
+            delete_attachment.attachment.attachment_id,
+        )
+    )
+    await asyncio.wait_for(delete_locked.wait(), timeout=5)
+    waiting_message_task = asyncio.create_task(
+        waiting_message_service.post_message(
+            scenario.actor,
+            delete_session.session_id,
+            content="后引用",
+            review_output_id=scenario.matrix.output_id,
+            attachment_ids=(delete_attachment.attachment.attachment_id,),
+            idempotency_key="delete-first-turn",
+            correlation_id="delete-first-turn",
+        )
+    )
+    await asyncio.wait_for(message_attempted.wait(), timeout=5)
+    allow_delete.set()
+    await asyncio.wait_for(delete_first_task, timeout=5)
+    with pytest.raises(AgentAttachmentNotFoundError):
+        await asyncio.wait_for(waiting_message_task, timeout=5)
+
+    async with scenario.factory() as session:
+        repo = SqlalchemyAgentAttachmentRepository(session)
+        message_winner = await repo.get_scoped(
+            message_attachment.attachment.attachment_id,
+            message_session.session_id,
+            scenario.actor.owner_id,
+        )
+        delete_winner = await repo.get_scoped(
+            delete_attachment.attachment.attachment_id,
+            delete_session.session_id,
+            scenario.actor.owner_id,
+        )
+        message_refs = await session.scalar(
+            select(func.count())
+            .select_from(AgentMessageAttachmentORM)
+            .where(
+                AgentMessageAttachmentORM.attachment_id
+                == message_attachment.attachment.attachment_id
+            )
+        )
+        delete_refs = await session.scalar(
+            select(func.count())
+            .select_from(AgentMessageAttachmentORM)
+            .where(
+                AgentMessageAttachmentORM.attachment_id
+                == delete_attachment.attachment.attachment_id
+            )
+        )
+
+    assert message_result.run_id
+    assert message_winner is not None
+    assert message_winner.status is AgentAttachmentStatus.AVAILABLE
+    assert message_refs == 1
+    assert delete_winner is not None
+    assert delete_winner.status is AgentAttachmentStatus.DELETED
+    assert delete_refs == 0
+
+
+@pytest.mark.asyncio
+async def test_attachment_message_and_context_snapshot_round_trip(db_engine) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    agent_service = make_agent_service(scenario.factory)
+    agent_session = await agent_service.create_session(
+        scenario.actor, scenario.project.project_id, title=None
+    )
+    attachment_service = AgentAttachmentService(
+        session_factory=scenario.factory,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        attachment_repo_factory=SqlalchemyAgentAttachmentRepository,
+        storage=_Storage(),
+    )
+    uploaded = await attachment_service.upload(
+        scenario.actor,
+        agent_session.session_id,
+        display_name="notes.txt",
+        media_type="text/plain",
+        content=b"notes",
+        idempotency_key="pg-attachment-1",
+    )
+    submitted = await agent_service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="读取附件",
+        review_output_id=scenario.matrix.output_id,
+        attachment_ids=(uploaded.attachment.attachment_id,),
+        idempotency_key="pg-attachment-turn",
+        correlation_id="pg-attachment-turn",
+    )
+
+    async with scenario.factory() as session:
+        repo = SqlalchemyAgentRepository(session)
+        message = await repo.get_message_by_run_and_role(submitted.run_id, "user")
+        turn = await repo.get_turn_scoped(submitted.run_id, scenario.actor.owner_id)
+        assert message is not None and turn is not None
+        snapshot = await repo.get_context_snapshot(turn.context_snapshot_id)
+
+    assert message.attachment_ids == (uploaded.attachment.attachment_id,)
+    assert snapshot is not None
+    assert snapshot.schema_version == "agent-context.v2"
+    assert snapshot.attachment_refs[0].content_hash == uploaded.attachment.content_hash
 
 
 @pytest.mark.asyncio

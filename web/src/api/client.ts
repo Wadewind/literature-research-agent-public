@@ -23,6 +23,8 @@ const BUSINESS_ERROR_MESSAGES: Record<string, string> = {
   review_cannot_cancel: "Review 当前状态不能取消，请刷新后查看最新状态",
   agent_session_not_found: "研究会话不存在或无权访问",
   agent_turn_not_found: "研究 Turn 不存在或无权访问",
+  agent_attachment_not_found: "附件不存在、已删除或无权访问",
+  attachment_referenced: "附件已被历史研究消息引用，不能删除",
   agent_session_busy: "当前会话已有研究任务在执行，请等待完成或先停止本轮",
   agent_browser_control_active: "请先在浏览器面板完成或结束人工操作",
   browser_control_not_found: "浏览器控制已结束、过期或无权访问",

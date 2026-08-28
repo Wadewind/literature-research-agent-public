@@ -32,6 +32,7 @@ from literature_agent.application.ports.research_agent_runtime import (
 )
 from literature_agent.domain.mcp_configuration import McpPolicyRef, McpPolicyToolRef
 from literature_agent.domain.research_agent import (
+    AttachmentContextRef,
     RuntimeSessionBinding,
     RuntimeTurnBinding,
     create_context_snapshot,
@@ -345,6 +346,119 @@ class _Runtime:
             last_event_sequence=1,
             result_available=True,
         )
+
+
+async def test_attachment_materialization_failure_closes_before_runtime_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def immediate_to_thread(function: Any, *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "literature_agent.infrastructure.agent.sandboxed_research_agent_runtime.asyncio.to_thread",
+        immediate_to_thread,
+    )
+    request = _request()
+    request = replace(
+        request,
+        context_snapshot=replace(
+            request.context_snapshot,
+            attachment_refs=(
+                AttachmentContextRef(
+                    attachment_id="attachment-1",
+                    version=1,
+                    content_hash="a" * 64,
+                    size_bytes=3,
+                    media_type="text/plain",
+                    display_name="notes.txt",
+                ),
+            ),
+        ),
+    )
+    workspace = _WorkspaceManager()
+    runtime_created = False
+
+    class FailingMaterializer:
+        async def materialize(self, request: Any, lease: Any) -> None:
+            del request, lease
+            raise RuntimeError("inbox reset failed")
+
+    def runtime_factory(*args: Any) -> _Runtime:
+        nonlocal runtime_created
+        if isinstance(args[1], StateBackend):
+            return _Runtime(args[1], known={"value": False})
+        runtime_created = True
+        return _Runtime(args[1], known={"value": False})
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=runtime_factory,  # type: ignore[arg-type]
+        workspace_manager=workspace,  # type: ignore[arg-type]
+        attachment_materializer=FailingMaterializer(),
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as caught:
+        _ = [item async for item in runtime.execute_turn(request)]
+
+    assert caught.value.code == "runtime_attachment_materialization_failed"
+    assert runtime_created is False
+    assert workspace.dirty_calls == 1
+    assert workspace.backend.closed is True
+
+
+async def test_running_attachment_retry_reacquires_and_rematerializes_inbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def immediate_to_thread(function: Any, *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "literature_agent.infrastructure.agent.sandboxed_research_agent_runtime.asyncio.to_thread",
+        immediate_to_thread,
+    )
+    request = _request()
+    request = replace(
+        request,
+        context_snapshot=replace(
+            request.context_snapshot,
+            attachment_refs=(
+                AttachmentContextRef(
+                    "attachment-1", 1, "a" * 64, 3, "text/plain", "notes.txt"
+                ),
+            ),
+        ),
+    )
+    workspace = _WorkspaceManager()
+
+    class RunningRuntime(_Runtime):
+        async def reconcile_turn(self, turn_run_id: str) -> RuntimeTurnReconciliation:
+            return replace(self._reconciliation(turn_run_id), state=RuntimeExecutionState.RUNNING)
+
+    class Materializer:
+        calls = 0
+
+        async def materialize(self, request: Any, lease: Any) -> None:
+            del request, lease
+            self.calls += 1
+
+    materializer = Materializer()
+
+    def runtime_factory(saver: Any, backend: object, callback: Any) -> _Runtime:
+        del saver, callback
+        return RunningRuntime(backend) if isinstance(backend, StateBackend) else _Runtime(backend)
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=runtime_factory,  # type: ignore[arg-type]
+        workspace_manager=workspace,  # type: ignore[arg-type]
+        attachment_materializer=materializer,
+    )
+
+    events = [item async for item in runtime.execute_turn(request)]
+
+    assert events[-1].kind is RuntimeEventKind.COMPLETED
+    assert workspace.acquire_calls == 1
+    assert materializer.calls == 1
 
 
 async def test_completed_collect_and_reconcile_do_not_reacquire_sandbox(

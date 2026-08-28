@@ -21,6 +21,7 @@ from literature_agent.domain.research_agent import (
     AgentSessionStatus,
     AgentTurnRun,
     ArtifactContextRef,
+    AttachmentContextRef,
     ContextSnapshot,
     PolicySnapshot,
     ProjectIndexContextRef,
@@ -33,6 +34,7 @@ from literature_agent.infrastructure.persistence.models import (
     AgentArtifactCandidateORM,
     AgentArtifactORM,
     AgentContextSnapshotORM,
+    AgentMessageAttachmentORM,
     AgentMessageORM,
     AgentPolicySnapshotORM,
     AgentRuntimeSessionBindingORM,
@@ -171,6 +173,17 @@ class SqlalchemyAgentRepository(AgentRepository):
                 claim_set_id=value.claim_set_id,
             )
         )
+        if value.attachment_ids:
+            # 未建 ORM relationship，因此先固化父行，再插入有序引用。
+            await self._session.flush()
+        for ordinal, attachment_id in enumerate(value.attachment_ids, start=1):
+            self._session.add(
+                AgentMessageAttachmentORM(
+                    message_id=value.message_id,
+                    attachment_id=attachment_id,
+                    ordinal=ordinal,
+                )
+            )
         return value
 
     async def has_messages(self, session_id: str) -> bool:
@@ -196,7 +209,8 @@ class SqlalchemyAgentRepository(AgentRepository):
             .scalars()
             .all()
         )
-        return [_message(row) for row in rows]
+        attachment_ids = await self._message_attachment_ids([row.message_id for row in rows])
+        return [_message(row, attachment_ids.get(row.message_id, ())) for row in rows]
 
     async def get_message_by_run_and_role(self, run_id: str, role: str) -> AgentMessage | None:
         row = (
@@ -206,7 +220,30 @@ class SqlalchemyAgentRepository(AgentRepository):
                 )
             )
         ).scalar_one_or_none()
-        return _message(row) if row else None
+        if row is None:
+            return None
+        attachment_ids = await self._message_attachment_ids([row.message_id])
+        return _message(row, attachment_ids.get(row.message_id, ()))
+
+    async def _message_attachment_ids(
+        self, message_ids: list[str]
+    ) -> dict[str, tuple[str, ...]]:
+        if not message_ids:
+            return {}
+        rows = (
+            await self._session.execute(
+                select(AgentMessageAttachmentORM).where(
+                    AgentMessageAttachmentORM.message_id.in_(message_ids)
+                ).order_by(
+                    AgentMessageAttachmentORM.message_id,
+                    AgentMessageAttachmentORM.ordinal,
+                )
+            )
+        ).scalars().all()
+        values: dict[str, list[str]] = {}
+        for row in rows:
+            values.setdefault(row.message_id, []).append(row.attachment_id)
+        return {key: tuple(value) for key, value in values.items()}
 
     async def add_turn(self, value: AgentTurnRun) -> AgentTurnRun:
         self._session.add(
@@ -256,6 +293,17 @@ class SqlalchemyAgentRepository(AgentRepository):
                 artifact_refs=[
                     {"artifact_id": r.artifact_id, "content_hash": r.content_hash}
                     for r in value.artifact_refs
+                ],
+                attachment_refs=[
+                    {
+                        "attachment_id": r.attachment_id,
+                        "version": r.version,
+                        "content_hash": r.content_hash,
+                        "size_bytes": r.size_bytes,
+                        "media_type": r.media_type,
+                        "display_name": r.display_name,
+                    }
+                    for r in value.attachment_refs
                 ],
                 snapshot_hash=value.snapshot_hash,
                 created_at=value.created_at,
@@ -642,7 +690,9 @@ def _session(row: AgentSessionORM) -> AgentSession:
     )
 
 
-def _message(row: AgentMessageORM) -> AgentMessage:
+def _message(
+    row: AgentMessageORM, attachment_ids: tuple[str, ...] = ()
+) -> AgentMessage:
     return AgentMessage(
         row.message_id,
         row.session_id,
@@ -653,6 +703,7 @@ def _message(row: AgentMessageORM) -> AgentMessage:
         row.idempotency_key,
         row.created_at,
         row.claim_set_id,
+        attachment_ids,
     )
 
 
@@ -668,19 +719,22 @@ def _turn(row: AgentTurnRunORM) -> AgentTurnRun:
 
 def _context(row: AgentContextSnapshotORM) -> ContextSnapshot:
     return ContextSnapshot(
-        row.snapshot_id,
-        row.schema_version,
-        row.owner_id,
-        row.project_id,
-        row.session_id,
-        row.turn_run_id,
-        row.user_message_id,
-        row.history_through_sequence,
-        tuple(ProjectIndexContextRef(**r) for r in row.project_index_refs),
-        row.review_output_id,
-        tuple(ArtifactContextRef(**r) for r in row.artifact_refs),
-        row.snapshot_hash,
-        row.created_at,
+        snapshot_id=row.snapshot_id,
+        schema_version=row.schema_version,
+        owner_id=row.owner_id,
+        project_id=row.project_id,
+        session_id=row.session_id,
+        turn_run_id=row.turn_run_id,
+        user_message_id=row.user_message_id,
+        history_through_sequence=row.history_through_sequence,
+        project_index_refs=tuple(ProjectIndexContextRef(**r) for r in row.project_index_refs),
+        review_output_id=row.review_output_id,
+        artifact_refs=tuple(ArtifactContextRef(**r) for r in row.artifact_refs),
+        snapshot_hash=row.snapshot_hash,
+        created_at=row.created_at,
+        attachment_refs=tuple(
+            AttachmentContextRef(**r) for r in row.attachment_refs
+        ),
     )
 
 

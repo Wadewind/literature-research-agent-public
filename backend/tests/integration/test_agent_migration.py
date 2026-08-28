@@ -255,10 +255,30 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
             finally:
                 engine.dispose()
 
-        def has_browser_table() -> bool:
+        def has_table(name: str) -> bool:
             engine = create_engine(url)
             try:
-                return inspect(engine).has_table("agent_browser_control_leases")
+                return inspect(engine).has_table(name)
+            finally:
+                engine.dispose()
+
+        def attachment_constraints() -> set[str]:
+            engine = create_engine(url)
+            try:
+                inspector = inspect(engine)
+                checks = {
+                    value["name"]
+                    for value in inspector.get_check_constraints("agent_attachments")
+                    if value["name"] is not None
+                }
+                checks.update(
+                    value["name"]
+                    for value in inspector.get_check_constraints(
+                        "agent_message_attachments"
+                    )
+                    if value["name"] is not None
+                )
+                return checks
             finally:
                 engine.dispose()
 
@@ -270,11 +290,23 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         )
         assert "sandbox_generation > 0" in state_check
         assert "sandbox_fencing_token > 0" in state_check
-        assert has_browser_table()
+        assert has_table("agent_browser_control_leases")
+        assert has_table("agent_attachments")
+        assert has_table("agent_message_attachments")
+        assert {
+            "ck_agent_attachment_version",
+            "ck_agent_attachment_size",
+            "ck_agent_attachment_status",
+            "ck_agent_attachment_state_fields",
+            "ck_agent_message_attachment_ordinal",
+        } <= attachment_constraints()
         run_alembic("downgrade", "-1")
-        assert not has_browser_table()
+        assert has_table("agent_browser_control_leases")
+        assert not has_table("agent_attachments")
+        assert not has_table("agent_message_attachments")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("upgrade", "head")
-        assert has_browser_table()
+        assert has_table("agent_browser_control_leases")
+        assert has_table("agent_attachments")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("check")

@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from literature_agent.api.agent_attachments import router as agent_attachments_router
 from literature_agent.api.agent_browser import router as agent_browser_router
 from literature_agent.api.agent_sessions import router as agent_sessions_router
 from literature_agent.api.conversations import router as conversations_router
@@ -39,5 +40,6 @@ def create_app() -> FastAPI:
     app.include_router(documents_router)
     app.include_router(conversations_router)
     app.include_router(agent_sessions_router)
+    app.include_router(agent_attachments_router)
     app.include_router(agent_browser_router)
     return app

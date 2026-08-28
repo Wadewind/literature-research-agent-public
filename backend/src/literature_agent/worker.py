@@ -35,6 +35,9 @@ from literature_agent.application.agent_artifact_publisher import (
 from literature_agent.application.agent_artifact_service import (
     AgentArtifactSubmissionService,
 )
+from literature_agent.application.agent_attachment_materializer import (
+    AgentAttachmentMaterializer,
+)
 from literature_agent.application.agent_turn_executor import AgentTurnExecutor
 from literature_agent.application.agent_turn_lifecycle_service import (
     AgentTurnLifecycleService,
@@ -85,6 +88,9 @@ from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.run import RunType
 from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.agent.artifact_tools import AgentArtifactToolFactory
+from literature_agent.infrastructure.agent.attachment_inbox import (
+    SandboxRuntimeAttachmentMaterializer,
+)
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
 )
@@ -129,6 +135,9 @@ from literature_agent.infrastructure.parsing.fake_parser import (
 )
 from literature_agent.infrastructure.parsing.fallback_parser import FallbackDocumentParser
 from literature_agent.infrastructure.parsing.pypdf_parser import PypdfDocumentParser
+from literature_agent.infrastructure.persistence.agent_attachment_repository import (
+    SqlalchemyAgentAttachmentRepository,
+)
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
 )
@@ -475,6 +484,17 @@ def _build_research_agent_runtime(
         skill_repo_factory=SqlalchemySkillRepository,
         platform_skills=PLATFORM_SKILLS,
     )
+    sandbox_repository = SqlalchemySandboxWorkspaceRepository(session_factory)
+    attachment_materializer = SandboxRuntimeAttachmentMaterializer(
+        AgentAttachmentMaterializer(
+            session_factory=session_factory,
+            agent_repo_factory=SqlalchemyAgentRepository,
+            run_repo_factory=SqlalchemyRunRepository,
+            attachment_repo_factory=SqlalchemyAgentAttachmentRepository,
+            storage=LocalFileStorage(settings.storage_root),
+        ),
+        sandbox_repository,
+    )
 
     return SandboxedResearchAgentRuntime(
         checkpoint_factory=checkpoint_factory,
@@ -486,8 +506,9 @@ def _build_research_agent_runtime(
         skill_materializer=skill_materializer,
         platform_tool_factory=AgentArtifactToolFactory(
             artifact_submission,
-            SqlalchemySandboxWorkspaceRepository(session_factory),
+            sandbox_repository,
         ),
+        attachment_materializer=attachment_materializer,
     )
 
 

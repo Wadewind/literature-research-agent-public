@@ -3,9 +3,12 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from literature_agent.api.agent_sessions import (
+    MessageCreateRequest,
     get_agent_artifact_query_service,
     get_agent_session_service,
     get_mcp_configuration_service,
@@ -37,6 +40,21 @@ from literature_agent.domain.skill_configuration import (
 )
 from literature_agent.infrastructure.agent.skill_catalog import EVIDENCE_LED_SYNTHESIS
 from literature_agent.main import create_app
+
+
+def test_message_create_dto_forbids_extra_duplicate_and_too_many_attachments() -> None:
+    invalid = (
+        {"content": "x", "review_output_id": "review-1", "attachment_ids": ["a", "a"]},
+        {
+            "content": "x",
+            "review_output_id": "review-1",
+            "attachment_ids": ["a", "b", "c", "d", "e", "f"],
+        },
+        {"content": "x", "review_output_id": "review-1", "unknown": True},
+    )
+    for payload in invalid:
+        with pytest.raises(ValidationError):
+            MessageCreateRequest.model_validate(payload)
 
 
 def test_agent_session_router_is_available() -> None:

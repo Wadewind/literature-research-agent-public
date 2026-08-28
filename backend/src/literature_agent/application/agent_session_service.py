@@ -8,6 +8,9 @@ from dataclasses import dataclass, replace
 from typing import TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
+from literature_agent.application.ports.agent_attachment_repository import (
+    AgentAttachmentRepository,
+)
 from literature_agent.application.ports.agent_repository import AgentRepository
 from literature_agent.application.ports.browser_control_repository import BrowserControlRepository
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
@@ -31,6 +34,7 @@ from literature_agent.application.ports.skill_repository import SkillRepository
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import (
+    AgentAttachmentNotFoundError,
     AgentBrowserControlBusyError,
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
@@ -52,6 +56,7 @@ from literature_agent.domain.research_agent import (
     AgentMessageRole,
     AgentSession,
     AgentTurnRun,
+    AttachmentContextRef,
     ContextSnapshot,
     PolicySnapshot,
     ProjectIndexContextRef,
@@ -138,6 +143,7 @@ class AgentSessionService[TSession: Session]:
         platform_skills: tuple[SkillVersion, ...] = (),
         event_notifier: EventNotifier | None = None,
         browser_control_repo_factory: Callable[[TSession], BrowserControlRepository],
+        attachment_repo_factory: Callable[[TSession], AgentAttachmentRepository] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._project_repo_factory = project_repo_factory
@@ -158,6 +164,7 @@ class AgentSessionService[TSession: Session]:
         self._platform_skills = platform_skills
         self._event_notifier = event_notifier or NoopEventNotifier()
         self._browser_control_repo_factory = browser_control_repo_factory
+        self._attachment_repo_factory = attachment_repo_factory
 
     async def create_session(
         self, actor: ActorContext, project_id: str, *, title: str | None
@@ -289,6 +296,7 @@ class AgentSessionService[TSession: Session]:
         *,
         content: str,
         review_output_id: str,
+        attachment_ids: tuple[str, ...] = (),
         idempotency_key: str,
         correlation_id: str,
     ) -> PostAgentMessageResult:
@@ -300,6 +308,7 @@ class AgentSessionService[TSession: Session]:
                     "session_id": session_id,
                     "content": content,
                     "review_output_id": review_output_id,
+                    "attachment_ids": list(attachment_ids),
                 },
                 sort_keys=True,
                 ensure_ascii=False,
@@ -330,6 +339,33 @@ class AgentSessionService[TSession: Session]:
                 raise ProjectNotFoundError(agent_session.project_id)
             if project.is_archived:
                 raise ProjectArchivedError(project.project_id)
+            attachment_refs: tuple[AttachmentContextRef, ...] = ()
+            if attachment_ids:
+                if self._attachment_repo_factory is None:
+                    raise AgentAttachmentNotFoundError(attachment_ids[0])
+                attachments = await self._attachment_repo_factory(
+                    session
+                ).get_many_available_scoped(
+                    attachment_ids,
+                    session_id,
+                    actor.owner_id,
+                    for_update=True,
+                )
+                if tuple(item.attachment_id for item in attachments) != attachment_ids:
+                    found_ids = {item.attachment_id for item in attachments}
+                    missing = next(value for value in attachment_ids if value not in found_ids)
+                    raise AgentAttachmentNotFoundError(missing)
+                attachment_refs = tuple(
+                    AttachmentContextRef(
+                        attachment_id=item.attachment_id,
+                        version=item.version,
+                        content_hash=item.content_hash,
+                        size_bytes=item.size_bytes,
+                        media_type=item.media_type,
+                        display_name=item.display_name,
+                    )
+                    for item in attachments
+                )
             browser_control = await self._browser_control_repo_factory(
                 session
             ).get_current_for_update(session_id)
@@ -385,6 +421,7 @@ class AgentSessionService[TSession: Session]:
                 content=content,
                 turn_run_id=run.run_id,
                 idempotency_key=idempotency_key,
+                attachment_ids=attachment_ids,
             )
             context = create_context_snapshot(
                 owner_id=actor.owner_id,
@@ -395,6 +432,7 @@ class AgentSessionService[TSession: Session]:
                 history_through_sequence=sequence,
                 project_index_refs=tuple(refs),
                 review_output_id=review_output_id,
+                attachment_refs=attachment_refs,
             )
             profile = (
                 await self._mcp_profile_repo_factory(session).get_scoped(
@@ -494,6 +532,7 @@ class AgentSessionService[TSession: Session]:
                         "project_index_count": len(refs),
                         "mcp_catalog_count": len(mcp_refs),
                         "skill_count": len(skill_refs),
+                        "attachment_count": len(attachment_refs),
                     },
                 )
             )

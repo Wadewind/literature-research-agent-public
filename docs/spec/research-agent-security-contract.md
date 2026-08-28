@@ -1,6 +1,6 @@
 # Research Agent 精简安全契约
 
-> 状态：Phase 6 Slice 1–3 已确认；Slice 4–8 的实施契约。
+> 状态：Phase 6 Slice 1–4 已确认；Slice 5–8 的实施契约。
 >
 > 基线：`b0ec3f4`（2026-08-28）。本文把已经由 Phase 5 代码/测试证明的事实与 Phase 6 目标事实分开；
 > “目标”“必须”“验收”不表示对应能力已经实现或经过真实环境验证。
@@ -31,7 +31,7 @@
 | Session/Turn | `AgentSession` 绑定 owner/Project；一条用户消息创建一个 `AgentTurnRun`；同一 Session 只有一个活动 Turn |
 | Runtime Port | `ResearchAgentRuntime` 固定为 `execute_turn`、`resume_turn`、`cancel_turn`、`reconcile_turn`、`collect_turn_result` 五个方法；只使用项目 DTO，不暴露 Deep Agents/LangGraph 类型 |
 | Runtime 映射 | Session 与 opaque SDK Thread binding 对应；Turn 与 opaque Runtime execution/checkpoint binding 对应；已有 `RuntimeExecution` lease/fence 和跨进程 reconcile-first 恢复 |
-| 产品上下文 | `ContextSnapshot` 固化 owner/Project/Session/Turn、消息水位、精确 ChunkSet 引用、明确选择的 `ReviewOutput.output_id` 和既有 Artifact 引用；不保存正文或 SDK State |
+| 产品上下文 | `ContextSnapshot` 固化 owner/Project/Session/Turn、消息水位、精确 ChunkSet 引用、明确选择的 `ReviewOutput.output_id`、既有 Artifact 引用和本轮明确授权的 Attachment 版本/hash；不保存正文或 SDK State |
 | 产品策略 | `PolicySnapshot` 固化 Tool/Skill/MCP 引用、网络/Sandbox 开关、`approval_required`、模型/工具次数；workspace Profile 为 `network_enabled=false`、`sandbox_enabled=true`、`approval_required=false` |
 | Project Tool | 两个固定只读 Project Context Tool 已按 Turn/Context/Policy 作用域读取精确 ChunkSet 与指定 Evidence Matrix，并使用 `ToolExecution` 记录参数 hash、状态与有界结果 |
 | Sandbox | 每个 Session 最多一个短 TTL OpenSandbox Lease；记录 owner/Project/Session、holder Turn、generation 和 fencing token；不跨 owner/Session 共享 |
@@ -40,26 +40,28 @@
 | Browser Spike | 固定 Playwright MCP 能连接同一 Sandbox Chromium，在禁网环境操作合成页面并下载到同一 Workspace；未提供面向用户的画面或控制权 |
 | Browser 人工控制 | 独立 BrowserControlLease、Turn 边界互斥、短时票据、固定 Server Proxy/websockify 平台代理和 noVNC 右栏组件已完成离线闭环；修正镜像的 RFB 与同一 Sandbox Playwright 合成页完整 trusted-local Smoke 已通过 |
 | Agent Artifact | `AgentArtifactCandidate` 已实现 `STAGED → VALIDATED → COMMITTED` 与 `STAGED → REJECTED`；独立不可变 `AgentArtifact` 只由 Turn 成功事务发布。真实 Sandbox Turn 固定装配 `submit_artifact`，Fake Runtime 描述符仍只停留在 `STAGED`；单文件上限为 10 MiB |
+| Agent Attachment | owner/Project/Session scoped 不可变 `AgentAttachment(version=1)` 已实现上传、列表、受限删除、消息有界有序引用、`agent-context.v2` 冻结和事务外 fenced `/workspace/inbox` 物化；已引用附件不可删除 |
 | API/Event | 已有 Session/Message/Turn、MCP/Skill 配置和通用 Run cancel/Event API；Event 只保存筛选后的 Agent/Tool 生命周期摘要 |
 
-这些事实不证明 OpenSandbox 是生产级隔离，不证明统一 egress、真实 arXiv、公共下载、正式附件或完整
-硬预算已经实现。Slice 2 的正式 Agent Artifact 是本地受限交付能力，不是生产级恶意文件扫描结论；
+这些事实不证明 OpenSandbox 是生产级隔离，不证明统一 egress、真实 arXiv、公共下载或完整硬预算已经
+实现。Slice 2 的正式 Agent Artifact 与 Slice 4 的 AgentAttachment 都是本地受限文件能力，不代表已完成
+生产级恶意文件扫描、隔离检疫、无 TOCTOU 竞争或 Storage GC；
 Slice 3 的真实 Smoke 只证明未配置 API key/secure runtime 的 trusted-local OpenSandbox 功能链路，不是
 noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
 
 ### 2.2 Phase 6 目标与责任切片
 
-| 尚缺目标 | 责任切片 |
+| 能力或尚缺目标 | 责任切片 |
 |---|---|
 | 独立 `AgentArtifact`、Candidate 完整生命周期、`submit_artifact`、预览和下载 | Slice 2（已完成） |
 | `BrowserControlLease`、鉴权画面代理和跨 Turn 人工控制 | Slice 3（已完成；trusted-local RFB/同 Sandbox Playwright 合成页 Smoke 已通过；noVNC 人工输入 UI E2E 留到 Slice 8） |
-| `AgentAttachment`、上传/删除、消息引用、ContextSnapshot 冻结与 `/workspace/inbox` 物化 | Slice 4 |
+| `AgentAttachment`、上传/删除、消息引用、ContextSnapshot 冻结与 `/workspace/inbox` 物化 | Slice 4（已完成） |
 | 固定能力 Schema/hash 漂移拒绝、完整调用前 scope 检查、脱敏 Tool 摘要和硬预算 | Slice 5 |
 | 实测资源限制、TTL/清理补偿、Workspace 重建与覆盖全部 Sandbox 进程的 default-deny egress | Slice 6 |
 | 固定 arXiv 公网、URL/DNS/IP/Redirect/SSRF、下载隔离/校验/来源和 Prompt Injection 验证 | Slice 7 |
 | App Shell、完整 UI/E2E、故障测试、评测、运行文档和完成复盘 | Slice 8 |
 
-后续切片不得为了方便把上表的目标改写成已有能力，也不得用 Mock/配置字段存在代替真实强制效果。
+未完成切片不得为了方便把目标改写成已有能力，也不得用 Mock/配置字段存在代替真实强制效果。
 
 ## 3. 所有权、身份与信任边界
 
@@ -73,7 +75,7 @@ noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
             ├─ Logical Workspace（业务命名空间）
             ├─ SandboxLease generation/fence（物理环境）
             ├─ BrowserControlLease（当前 generation 的人工控制权）
-            ├─ AgentAttachment（输入，Slice 4）
+            ├─ AgentAttachment（输入业务事实）
             └─ AgentTurnRun.turn_run_id
                  ├─ User/Assistant AgentMessage
                  ├─ ContextSnapshot / PolicySnapshot
@@ -100,13 +102,13 @@ noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
 
 | 区域 | 信任级别 | 可以持有 | 不得成为唯一事实来源 |
 |---|---|---|---|
-| PostgreSQL 业务层 | 业务事实来源 | 当前已有 owner/Project、Session/Message/Run、Context/Policy/Workspace Snapshot、Event、ToolExecution、Review Artifact、Candidate 生命周期、独立 AgentArtifact 与 BrowserControlLease；Slice 4/5 后增加 AgentAttachment 和 Agent 硬预算/Usage 事实 | SDK 对话状态、物理 Sandbox 文件 |
+| PostgreSQL 业务层 | 业务事实来源 | 当前已有 owner/Project、Session/Message/Run、Context/Policy/Workspace Snapshot、Event、ToolExecution、Review Artifact、Candidate 生命周期、独立 AgentArtifact、BrowserControlLease 与 AgentAttachment；Slice 5 后增加 Agent 硬预算/Usage 事实 | SDK 对话状态、物理 Sandbox 文件 |
 | API/Application | 可信策略执行者 | ActorContext、授权闭包、短事务和安全 DTO | 模型自行声明的 owner/Project/权限 |
 | ARQ Worker/Runtime Adapter | 受信代码、外部结果不可信 | Provider Secret 的最小使用、opaque binding、SDK client | Runtime 成功不能直接等于业务成功 |
 | Deep Agents/LangGraph | Runtime 内部状态 | Message、摘要、Checkpoint、内部文件卸载 | 业务权限、Run/Event、正式 Artifact |
 | Session OpenSandbox | 不可信执行区 | 当前 generation 的 Workspace、Chromium、固定 MCP 进程和 `execute` | Secret、宿主路径、业务所有权、正式文件 |
 | MCP/Browser/网页/arXiv | 外部不可信 | 有界响应和公开内容 | Tool 描述、网页文本或 Redirect 不能扩大策略 |
-| Storage | 不可信字节存储、受信 Adapter 寻址 | 当前已有 WorkspaceSnapshot/Review Artifact 与 Agent Artifact staging 内容寻址 blob；Slice 4 后增加 Attachment 内容 | 元数据授权与业务可见性 |
+| Storage | 不可信字节存储、受信 Adapter 寻址 | 当前已有 WorkspaceSnapshot/Review Artifact、Agent Artifact staging 与 Attachment 内容寻址 blob | 元数据授权与业务可见性 |
 | Web UI | 不可信客户端 | 当前已有业务 ID/公开 DTO与只驻留内存的短时 Browser view ticket | owner、raw endpoint、Sandbox path、策略配置 |
 
 ## 4. 威胁模型
@@ -114,7 +116,7 @@ noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
 ### 4.1 需要保护的资产
 
 - 当前已有的 owner 私有论文、Chunk、Evidence、Review Matrix、消息、Review Artifact、WorkspaceSnapshot、
-  Candidate 与正式 AgentArtifact；Slice 4 目标中的 AgentAttachment；
+  Candidate、正式 AgentArtifact 与 AgentAttachment；
 - PostgreSQL、Valkey、Storage、宿主文件、Docker Socket、云元数据和内部管理 API；
 - 模型、MCP、OpenSandbox、Storage 和 Browser 代理使用的 Secret；
 - SDK Thread/Checkpoint、Sandbox generation、Workspace 与登录态的跨 Session 隔离；
@@ -144,7 +146,7 @@ DNS 结果、下载文件名/MIME/字节、Sandbox 生成文件和迟到的 Prov
 | Sandbox `execute` | 宿主逃逸、资源耗尽、网络绕过、读取 Secret、生成危险文件 | 非 root 固定镜像、无宿主挂载、资源上限、统一 egress、显式文件提交 |
 | Browser/URL | SSRF、DNS rebinding、Redirect 到私网、下载炸弹、凭据外泄 | 精确 arXiv allowlist、连接目标绑定、每跳复核、隔离下载和文件策略 |
 | Browser 人工控制 | 跨 Session 画面、旧 generation 控制、人/Agent 竞争、凭据落库 | BrowserControlLease、短时代理票据、generation/fence、Turn 边界互斥 |
-| Attachment/Artifact（Artifact 已实现；Attachment 为 Slice 4 目标） | 路径穿越、symlink、MIME 欺骗、越权下载、重复发布 | opaque ID/path、regular-file 校验、magic/hash/大小、staging 和成功 CAS |
+| Attachment/Artifact（均为已实现的本地受限业务事实） | 路径穿越、symlink、MIME 欺骗、越权下载、重复发布 | opaque ID/path、regular-file 校验、magic/hash/大小、staging 和成功 CAS |
 | 重试/恢复 | 同一消息重复追加、重复 Tool/Artifact、旧 Worker 晚到提交 | reconcile-first、稳定 binding/effect/candidate ID、唯一约束、fence/CAS |
 | Event/日志/Trace | Prompt、全文、Secret、endpoint 或大输出泄漏 | 字段白名单、hash/计数/安全摘要、大小限制和诊断信息分层 |
 
@@ -194,7 +196,7 @@ Infrastructure 约束必须同时允许，任一层不匹配即 fail closed。
 | 固定 arXiv 搜索、摘要页、PDF 只读 | 自动执行（Slice 7 后） | 版本化精确主机 allowlist、统一 egress、URL/SSRF、预算与来源记录全部通过 |
 | Sandbox 离线 `execute` 与固定依赖绘图 | 自动执行 | 当前 Lease generation/fence、禁网、取消/预算预检、资源上限、无动态安装 |
 | 受支持类型的新 Agent Artifact | 自动执行 | 当前 Project/Turn、显式 `/workspace/outputs/` 路径、校验、不可变新 ID、Turn 成功 |
-| 用户通过 Attachment ID 提供受支持输入 | 自动执行（Slice 4 后） | 当前 owner/Project/Session、ContextSnapshot 冻结、受控 inbox 路径和文件校验 |
+| 用户通过 Attachment ID 提供受支持输入 | 自动执行 | 当前 owner/Project/Session、ContextSnapshot 冻结、受控 inbox 路径和文件校验 |
 | 用户在两个 Turn 之间控制当前 Chromium | 自动执行 | 无活动 Turn、健康且 generation 一致的 Lease、短 TTL 控制权、无原始 endpoint |
 | 平台或 Agent 持有/注入用户名、密码、Cookie、验证码、OAuth Token | 直接拒绝 | 不进入 Approval |
 | 表单提交、发帖、发送消息、上传到外站、修改远程资源、购买/发布 | 直接拒绝 | 不进入 Approval |
@@ -222,21 +224,22 @@ Infrastructure 约束必须同时允许，任一层不匹配即 fail closed。
 ### 7.1 当前已存在
 
 - Session/Turn：创建/列出/查询 Project AgentSession，查询消息，提交消息，查询 AgentTurnRun；
+- Attachment：上传、列出和删除当前 Session 未引用附件；Message 可携带有界有序 Attachment ID；
 - 配置：查询平台 MCP Catalog、查询/更新 Session MCP Profile，查询/创建声明式 Skill 与版本、查询/更新
   Session Skill Profile；
 - 通用 Run：查询、取消、Event 列表与 SSE；
 - 当前 Turn DTO 可返回 Candidate 的安全元数据与生命周期状态，但 Candidate 不是正式下载资源。
 
-客户端只能提交业务内容、`review_output_id`、幂等键和已公开的 Catalog/Skill 选择；不能提交 owner、
+客户端只能提交业务内容、`review_output_id`、有界 Attachment ID、幂等键和已公开的 Catalog/Skill 选择；不能提交 owner、
 SDK Thread/Checkpoint、Sandbox、Workspace、raw MCP 配置、网络策略或 fence。
 
-### 7.2 已实现与后续新增
+### 7.2 已实现与后续增量
 
-| Slice | 目标 API | 必须保持的授权/隐藏边界 |
+| Slice | API | 必须保持的授权/隐藏边界 |
 |---|---|---|
 | 2（已实现） | `GET /api/v1/agent-turn-runs/{run_id}/artifacts`；`GET /api/v1/agent-artifacts/{artifact_id}/content` | 每次 owner/Project/Session/Turn 授权；Candidate 不可下载；不返回 storage key/Sandbox path |
 | 3（已实现） | `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/browser-control`；`WS /api/v1/agent-browser-controls/view` | HTTP 开始/查询/结束只使用业务 Session ID；仅开始返回短时 ticket 和平台 view URL；WS 用 subprotocol 传 ticket；不返回 VNC/noVNC/CDP/MCP/OpenSandbox endpoint |
-| 4 | `POST /api/v1/agent-sessions/{session_id}/attachments`；删除未绑定附件；Message 增加有界 attachment ID 引用 | owner 来自 ActorContext；不接受物理路径；已被历史 Turn 引用的输入不可篡改 |
+| 4（已实现） | `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/attachments`；Message 增加有界 attachment ID 引用 | owner 来自 ActorContext；不接受物理路径；已被历史 Turn 引用的输入不可篡改 |
 | 5 | `GET /api/v1/agent-turn-runs/{run_id}/tool-executions`，必要的预算/Usage 投影 | 仅安全摘要、版本/hash、计数、状态/时长；不返回原始参数/结果/endpoint |
 | 7 | `GET /api/v1/agent-turn-runs/{run_id}/manifest` | 只返回规范化来源元数据和验证状态，不返回网页/PDF 全文或内部请求凭据 |
 
@@ -260,13 +263,13 @@ SDK 类型继续停留在 infrastructure。
 
 通用 Run/Attempt/Event 继续记录队列和执行历史。
 
-### 8.2 后续增量归属
+### 8.2 事件增量归属
 
 | Slice | 允许新增的业务事件 |
 |---|---|
 | 2（已实现） | `agent_artifact_validated`、`agent_artifact_committed`、`agent_artifact_rejected` |
 | 3（已实现） | `agent_browser_control_started`、`agent_browser_control_ended`、`agent_browser_control_expired` |
-| 4 | `agent_attachment_added`，必要时增加删除/拒绝摘要事件 |
+| 4（已实现） | 不为上传泛化 Run-bound Event；`agent_message_accepted` 仅增加 `attachment_count`，不记录内容或物理路径 |
 | 5 | `agent_budget_updated`、`agent_tool_rejected`、`agent_policy_violation`、有界 Step 状态 |
 | 6 | `agent_workspace_created`、`agent_workspace_cleanup_requested`、`agent_workspace_cleaned` 及安全清理失败摘要 |
 | 7 | 有界网络/下载允许或拒绝摘要、Resource Manifest 提交结果；事件名称在实现前冻结 |
@@ -367,11 +370,15 @@ Artifact 或业务成功。
   `5 passed in 13.06s`；前三次失败形成 endpoint、代理和 readiness/Fixture 回归测试。该 trusted-local
   证据不覆盖 noVNC 人工键鼠 E2E、通用认证、API key/secure runtime、公网或跨 generation 登录恢复。
 
-### Slice 4：Agent 输入附件
+### Slice 4：Agent 输入附件（已完成）
 
-- 先冻结 Attachment 所有权、不可变版本、上传/删除/引用和 ContextSnapshot 语义；
-- 文件校验、Storage 和 inbox 物化在事务外；跨 owner/Project/Session、路径穿越和 hash 漂移拒绝；
-- 普通测试完全离线；不开放 `browser_file_upload`。
+- 已实现不可变 `AgentAttachment(version=1)`，固定单文件 10 MiB，每消息最多 5 个不重复引用并保留请求顺序。上传只接受 PNG/JPEG/SVG/PDF/CSV/Markdown/plain text/JSON，同时检查安全文件名、扩展名、声明 MIME、magic/UTF-8/JSON/CSV 结构；
+- `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/attachments` 的 owner 只来自 `ActorContext`，公开 DTO 不含 `storage_key`、Sandbox 路径或内容。上传 `Idempotency-Key` 稳定绑定 owner/Session/元数据/内容 hash；同请求并发收敛到同一事实和准确 replay 状态，不同请求复用键稳定 409。Web 以 name/size/type/lastModified 固定上传意图，响应丢失后重选同一文件复用键；
+- 消息按附件 ID 稳定顺序获取 scoped `FOR UPDATE` 行锁并持有到 Message/引用/ContextSnapshot 提交；删除先获取同一行锁，再复核历史引用后标记 `DELETED`。因此消息与删除竞态只有“引用提交后删除 409”或“删除提交后消息 not-found”两个稳定结果；
+- `AgentMessage` 仅保存有序 ID 引用；`agent-context.v2` 额外冻结 `id/version/hash/size/media_type/display_name`。消息幂等 hash 覆盖有序附件 ID，Event 只记录 `attachment_count`，文件内容和物理路径不进入 Message/Run/Event/Graph State；
+- Runtime 在数据库事务外每轮先复核 owner/Project/Session/Run 取消状态、不可变事实与 Sandbox generation/fence，清空 inbox，再从 Storage 读取、重验 hash/类型并上传到 `/workspace/inbox/<attachment-id>/<safe-name>`。清空、读取、验证、上传、取消或 fence 任一失败都在模型/Tool 前 fail closed 并将环境标脏；
+- `WorkspaceSnapshot` 暂存时排除 inbox，恢复时拒绝含 inbox 的旧/异常快照；Deep Agents 只看到受控路径和必要元数据。不开放 `browser_file_upload`，Project PDF 仍优先通过 Project Library/Index 提供；
+- Storage 写入成功后 DB 提交失败可产生内部孤儿 blob；本切片保持不可见且可用同一幂等键重试，不声称已实现 Storage GC。
 
 ### Slice 5：固定能力、Project Context 与硬预算
 

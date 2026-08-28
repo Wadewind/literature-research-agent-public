@@ -81,6 +81,71 @@ class AgentMessageORM(Base):
     )
 
 
+class AgentAttachmentORM(Base):
+    """Session scoped、内容不可变的用户输入附件。"""
+
+    __tablename__ = "agent_attachments"
+    attachment_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id", "idempotency_key", name="uq_agent_attachment_owner_idempotency"
+        ),
+        CheckConstraint("version = 1", name="ck_agent_attachment_version"),
+        CheckConstraint(
+            "size_bytes BETWEEN 0 AND 10485760", name="ck_agent_attachment_size"
+        ),
+        CheckConstraint(
+            "status IN ('available','deleted')", name="ck_agent_attachment_status"
+        ),
+        CheckConstraint(
+            "(status = 'available' AND deleted_at IS NULL) OR "
+            "(status = 'deleted' AND deleted_at IS NOT NULL)",
+            name="ck_agent_attachment_state_fields",
+        ),
+    )
+
+
+class AgentMessageAttachmentORM(Base):
+    """消息引用附件的稳定顺序与数据库级删除保护。"""
+
+    __tablename__ = "agent_message_attachments"
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_messages.message_id"), primary_key=True
+    )
+    attachment_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_attachments.attachment_id"), primary_key=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id", "ordinal", name="uq_agent_message_attachment_ordinal"
+        ),
+        CheckConstraint(
+            "ordinal BETWEEN 1 AND 5", name="ck_agent_message_attachment_ordinal"
+        ),
+    )
+
+
 class AgentTurnRunORM(Base):
     """通用 Run 的 Agent Turn 一对一扩展。"""
 
@@ -144,6 +209,7 @@ class AgentContextSnapshotORM(Base):
         ForeignKey("review_outputs.output_id"), nullable=False
     )
     artifact_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
+    attachment_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

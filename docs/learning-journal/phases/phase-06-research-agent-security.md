@@ -7,7 +7,7 @@
 Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目精简交付日期：2026-08-28；对齐
 `docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28；Slice 1 精简产品契约与威胁模型
 完成日期：2026-08-28；Slice 2 Agent 输出 Artifact 完成日期：2026-08-28；Slice 3 Browser 画面与跨 Turn
-人工控制完成日期：2026-08-28。
+人工控制完成日期：2026-08-28；Slice 4 Agent 输入附件完成日期：2026-08-28。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -17,7 +17,7 @@ Slice 1 已完成文档契约审计，形成
 `STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
 Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件。Slice 3 已实现独立
 `BrowserControlLease`、Session/Turn/Sandbox generation/fence 互斥、短时 opaque ticket、平台 VNC
-WebSocket 代理和 noVNC 右栏组件；下一开发切片为 Slice 4 Agent 输入附件。
+WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI；下一开发切片为 Slice 5。
 
 Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
 PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
@@ -35,6 +35,12 @@ headers 建立上游连接。修正镜像已重建；第四次主审真实 Smoke
 endpoint 语义、宿主代理继承以及合成服务 readiness/Fixture 转义问题，均已形成离线回归契约。当前本地
 OpenSandbox 未配置 API key/secure runtime，因此这只是 trusted-local 功能证据，不代表 noVNC 人工键鼠
 UI E2E、通用认证、多实例 API、公网网站或跨 generation 登录恢复已验证。
+
+Slice 4 经主智能体复核的完整后端非 integration 回归为 1066 passed、6 skipped（148.64s）；附件
+Application/Repository/Alembic PostgreSQL 定向为 19 passed，Agent Session/Attachment API 为
+12 passed，主智能体定向组合复核为 33 passed（30.67s）；Domain/Materializer/Runtime/Workspace 新增边界定向为 41 passed。Pyright 零错误，Web
+全量 Vitest 为 156 passed，TypeScript/Vite build 通过。未运行真实 Provider/OpenSandbox 附件
+Smoke；不声称已完成 Storage GC、恶意文件扫描或生产级 Sandbox 隔离。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
@@ -561,8 +567,8 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
    壳层无关。离线闭环已验证；旧 raw TCP 诊断已暴露 endpoint 语义错误，修正镜像的 RFB 链路已通过真实
    验证；修正镜像的 Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整 Smoke 已通过。
    该证据仅适用于未配置 API key/secure runtime 的 trusted-local 环境，公网继续关闭；
-4. **Agent 输入附件**：Session 上传、Message 引用、ContextSnapshot 冻结、`/workspace/inbox` 物化与
-   Chat UI；不开放任意 Browser 文件上传；
+4. **Agent 输入附件（已完成）**：Session 上传、并发幂等收敛、Message/删除行锁互斥、有界有序引用、ContextSnapshot 不可变元数据冻结、事务外 `/workspace/inbox` 物化、WorkspaceSnapshot 排除与
+   可重试上传意图 Chat UI 均已落地；不开放任意 Browser 文件上传，Storage GC 延期；
 5. **固定能力、Project Context 与硬预算**：复用 Phase 5 Catalog/Profile，补齐固定 Tool/MCP/Skill 的
    Schema/hash 漂移拒绝、调用前 owner/Project/Context/权限/预算校验、ToolExecution 脱敏摘要、超时/
    输出限制和确定性循环保护；不建设完整 Registry 或 Approval；

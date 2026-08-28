@@ -19,6 +19,7 @@ _AGENT_CANDIDATE_NAME_MAX_LENGTH = 255
 _AGENT_CANDIDATE_MEDIA_TYPE_MAX_LENGTH = 255
 _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
 _AGENT_CANDIDATE_MAX_SIZE_BYTES = 10 * 1024 * 1024
+AGENT_MESSAGE_MAX_ATTACHMENTS = 5
 
 PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v2"
 PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = (
@@ -91,6 +92,12 @@ class AgentMessage:
     idempotency_key: str
     created_at: datetime
     claim_set_id: str | None = None
+    attachment_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_attachment_ids(self.attachment_ids)
+        if self.role is AgentMessageRole.ASSISTANT and self.attachment_ids:
+            raise ValueError("Assistant Message 不能引用用户输入附件")
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +323,31 @@ class ArtifactContextRef:
 
 
 @dataclass(frozen=True, slots=True)
+class AttachmentContextRef:
+    """当前 Turn 明确授权并冻结版本的用户输入附件。"""
+
+    attachment_id: str
+    version: int
+    content_hash: str
+    size_bytes: int
+    media_type: str
+    display_name: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty(
+            attachment_id=self.attachment_id,
+            media_type=self.media_type,
+            display_name=self.display_name,
+        )
+        if self.version != 1:
+            raise ValueError("Attachment Context 首版只接受 version=1")
+        if not _SHA256_PATTERN.fullmatch(self.content_hash):
+            raise ValueError("Attachment Context content_hash 必须是小写 SHA-256")
+        if not 0 <= self.size_bytes <= _AGENT_CANDIDATE_MAX_SIZE_BYTES:
+            raise ValueError("Attachment Context size_bytes 必须在 0..10_MiB 范围内")
+
+
+@dataclass(frozen=True, slots=True)
 class ContextSnapshot:
     """Turn 创建时固化的小型授权上下文引用。"""
 
@@ -332,6 +364,7 @@ class ContextSnapshot:
     artifact_refs: tuple[ArtifactContextRef, ...]
     snapshot_hash: str
     created_at: datetime
+    attachment_refs: tuple[AttachmentContextRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +448,7 @@ def create_agent_message(
     turn_run_id: str,
     idempotency_key: str,
     claim_set_id: str | None = None,
+    attachment_ids: tuple[str, ...] = (),
 ) -> AgentMessage:
     """创建严格占用 Session 下一 sequence 的消息。"""
     _require_non_empty(
@@ -428,6 +462,9 @@ def create_agent_message(
         raise ValueError("AgentMessage 内容不能为空")
     if len(content) > _AGENT_MESSAGE_MAX_LENGTH:
         raise ValueError(f"AgentMessage 内容长度不能超过 {_AGENT_MESSAGE_MAX_LENGTH}")
+    _validate_attachment_ids(attachment_ids)
+    if role is AgentMessageRole.ASSISTANT and attachment_ids:
+        raise ValueError("Assistant Message 不能引用用户输入附件")
     return AgentMessage(
         message_id=str(uuid4()),
         session_id=session_id,
@@ -438,6 +475,7 @@ def create_agent_message(
         idempotency_key=idempotency_key,
         created_at=datetime.now(UTC),
         claim_set_id=claim_set_id,
+        attachment_ids=attachment_ids,
     )
 
 
@@ -535,6 +573,7 @@ def create_context_snapshot(
     project_index_refs: tuple[ProjectIndexContextRef, ...] = (),
     review_output_id: str | None = None,
     artifact_refs: tuple[ArtifactContextRef, ...] = (),
+    attachment_refs: tuple[AttachmentContextRef, ...] = (),
 ) -> ContextSnapshot:
     """创建只包含稳定引用的不可变 ContextSnapshot。"""
     _require_non_empty(
@@ -550,7 +589,10 @@ def create_context_snapshot(
         raise ValueError("review_output_id 不能是空字符串")
     _reject_duplicate_refs(project_index_refs, "Project Index")
     _reject_duplicate_refs(artifact_refs, "Artifact")
-    schema_version = "agent-context.v1"
+    _reject_duplicate_refs(attachment_refs, "Attachment")
+    if len(attachment_refs) > AGENT_MESSAGE_MAX_ATTACHMENTS:
+        raise ValueError(f"每轮最多引用 {AGENT_MESSAGE_MAX_ATTACHMENTS} 个附件")
+    schema_version = "agent-context.v2"
     hash_payload = {
         "schema_version": schema_version,
         "owner_id": owner_id,
@@ -572,6 +614,17 @@ def create_context_snapshot(
             {"artifact_id": ref.artifact_id, "content_hash": ref.content_hash}
             for ref in artifact_refs
         ],
+        "attachment_refs": [
+            {
+                "attachment_id": ref.attachment_id,
+                "version": ref.version,
+                "content_hash": ref.content_hash,
+                "size_bytes": ref.size_bytes,
+                "media_type": ref.media_type,
+                "display_name": ref.display_name,
+            }
+            for ref in attachment_refs
+        ],
     }
     return ContextSnapshot(
         snapshot_id=str(uuid4()),
@@ -585,6 +638,7 @@ def create_context_snapshot(
         project_index_refs=tuple(project_index_refs),
         review_output_id=review_output_id,
         artifact_refs=tuple(artifact_refs),
+        attachment_refs=tuple(attachment_refs),
         snapshot_hash=_canonical_hash(hash_payload),
         created_at=datetime.now(UTC),
     )
@@ -761,3 +815,12 @@ def _reject_duplicate_names(names: tuple[str, ...], label: str) -> None:
         raise ValueError(f"{label} 名称不能为空")
     if len(names) != len(set(names)):
         raise ValueError(f"{label} 名称不能重复")
+
+
+def _validate_attachment_ids(attachment_ids: tuple[str, ...]) -> None:
+    if len(attachment_ids) > AGENT_MESSAGE_MAX_ATTACHMENTS:
+        raise ValueError(f"每条消息最多引用 {AGENT_MESSAGE_MAX_ATTACHMENTS} 个附件")
+    if any(not value.strip() or len(value) > 36 for value in attachment_ids):
+        raise ValueError("attachment_id 非法")
+    if len(attachment_ids) != len(set(attachment_ids)):
+        raise ValueError("attachment_ids 不能重复")
