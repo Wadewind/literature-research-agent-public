@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 
+import AppSidebar from "./components/AppSidebar";
 import DocumentPage from "./pages/DocumentPage";
 import AgentPage from "./pages/AgentPage";
 import ConversationPage from "./pages/ConversationPage";
@@ -16,17 +17,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <ScrollToTop />
-      <header className="app-header">
-        <Link to="/" className="brand" aria-label="返回项目首页">
-          <span className="brand-mark" aria-hidden="true">L·A</span>
-          <span><strong>Literature Atlas</strong><small>文献综述 Agent</small></span>
-        </Link>
-        <nav className="primary-nav" aria-label="主导航">
-          <NavLink to="/" end>项目</NavLink>
-          <NavLink to="/library">个人文献库</NavLink>
-        </nav>
-        <span className="phase-chip">RESEARCH AGENT · SPIKE</span>
-      </header>
+      <AppSidebar />
       <main className="app-main">
         <Routes>
           <Route path="/" element={<ProjectsPage />} />

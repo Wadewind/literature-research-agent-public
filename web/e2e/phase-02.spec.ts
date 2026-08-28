@@ -45,16 +45,25 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
   await expect(page.locator(".evidence-drawer blockquote")).not.toBeEmpty();
   await expect(page.getByTitle("Evidence 来源 PDF")).toHaveAttribute("src", /#page=\d+$/);
 
-  await page.getByRole("link", { name: "文献库", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "应用导航" })
+    .getByRole("link", { name: "文献库", exact: true })
+    .click();
   await page.getByRole("button", { name: "询问此篇" }).click();
   await expect(page.getByRole("checkbox").first()).toBeChecked();
   await page.getByRole("button", { name: /创建问答/ }).click();
   await expect(page.getByText(/CITED RAG \/ 1 篇文献/)).toBeVisible();
 
-  await page.getByRole("link", { name: "文献库", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "应用导航" })
+    .getByRole("link", { name: "文献库", exact: true })
+    .click();
   await page.getByRole("button", { name: "归档 Project" }).click();
   await expect(page.getByText(/该 Project 当前只读/)).toBeVisible();
-  await page.getByRole("link", { name: "文献问答", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "应用导航" })
+    .getByRole("link", { name: "文献问答", exact: true })
+    .click();
   await expect(page.getByText(/历史问答仍可查看/)).toBeVisible();
   await expect(page.getByRole("button", { name: /创建问答/ })).toBeDisabled();
   expect(pageErrors).toEqual([]);

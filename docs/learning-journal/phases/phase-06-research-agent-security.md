@@ -18,6 +18,15 @@ Sandbox 内部 loopback 可用，但随后因固定镜像没有 `curl` 而在第
 private/MCP 步骤。这是全量下载耗时而不是网络拒绝证据；验收已改为同一 PDF 最多 64 KiB 的有界前缀，
 第三轮真实 Smoke 最终为 1 passed（39.67s）。该结果只证明本节列出的固定目标和进程边界，不证明完整
 PDF 下载、所有公网目标、协议级只读、secure runtime 或生产隔离。
+Slice 8 的应用壳子切片 8.1 完成日期：2026-08-28；已用固定 `AppSidebar` 取代旧全局 Header，加入全局与
+Project 四模式索引导航、版本化折叠偏好和 232px/56px 桌面栏，并把工作区可用高度恢复为 `100dvh`。
+主智能体最终独立验证 `npm test` 为 24 files / 161 passed，`npm run build` 通过；完整 E2E 曾为
+3 passed / 2 failed，其中 Phase 5 初次因新应用壳挤压既有三栏工作区、导致 Evidence Margin 横向裁剪而
+失败。将 Research/Agent 工作区中央列改为可收缩的 `minmax(0, 1fr)` 后，主智能体定向运行
+`npm run test:e2e -- phase-05.spec.ts` 为 1 passed（36.1s），并验证独立滚动的 Evidence Margin 可展开、
+定位候选成果。另一项 Phase 4 失败为来源列表期望 4、实际 3；现有证据指向后台 Fixture/时序，尚未形成
+与 Sidebar 的因果证据，因此保持原业务断言，留待后续完整回归复核。完整五流程 E2E 与桌面截图走查仍未
+闭环，本记录不宣称视觉验收已经完成。`ProjectWorkspaceHeader`/`ProjectNav` 仍按顺序保留到子切片 8.2。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -677,7 +686,8 @@ ADR-0007/0008 本身当作测试结果：
    `browser_navigate` 与 arXiv Search MCP `search_papers` 成功；metadata `169.254.169.254`、Docker
    gateway `:8080` 和 `10.0.0.1` 均被拒绝。主智能体独立离线复核合计 137 passed，其中 PostgreSQL/
    Alembic 26 passed。该证据不扩张为完整 PDF、全部公网、协议级只读或生产隔离声明；
-8. **产品整合、验证与复盘**：严格遵循 `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
+8. **产品整合、验证与复盘（进行中：应用壳子切片 8.1 已实现）**：严格遵循
+   `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
    4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新，再整合 Turn Detail、
    Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；随后按 ADR-0009 完成本地 noVNC 真实人工
    输入 UI E2E（人工操作结束后，下一 Turn 由同 generation Playwright MCP 观察页面状态），并完成关键

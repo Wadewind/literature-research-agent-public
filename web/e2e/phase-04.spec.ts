@@ -78,7 +78,10 @@ async function createProject(page: Page, name: string) {
 }
 
 async function createReview(page: Page, researchQuestion: string) {
-  await page.getByRole("link", { name: "综述", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "应用导航" })
+    .getByRole("link", { name: "综述", exact: true })
+    .click();
   await page.getByLabel("研究问题").fill(researchQuestion);
   await page.getByRole("button", { name: "开始文献综述" }).click();
   await expect(page).toHaveURL(/\/reviews\/[0-9a-f-]+$/);
