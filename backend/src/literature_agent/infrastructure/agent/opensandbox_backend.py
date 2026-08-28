@@ -23,8 +23,9 @@ from opensandbox.config.connection_sync import ConnectionConfigSync
 from opensandbox.exceptions import SandboxApiException
 from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import DirectoryListEntry, WriteEntry
-from opensandbox.models.sandboxes import NetworkPolicy
+from opensandbox.models.sandboxes import NetworkPolicy, NetworkRule
 
+from literature_agent.domain.agent_network import RESEARCH_PUBLIC_EGRESS_PROFILE
 from literature_agent.domain.workspace_snapshot import is_workspace_file_path
 
 _PLATFORM_MCP_SERVICES = frozenset({"playwright", "arxiv-search"})
@@ -309,10 +310,33 @@ class OpenSandboxProvider:
         memory_mib: int,
         network_enabled: bool,
         metadata: dict[str, str],
+        network_profile_id: str | None = None,
+        network_profile_version: str | None = None,
+        network_profile_hash: str | None = None,
     ) -> OpenSandboxBackend:
-        """创建固定资源、空环境且 default-deny 的 Sandbox。"""
-        if network_enabled:
-            raise ValueError("Slice 7.1 不允许开启 Sandbox 网络")
+        """仅把固定 public-egress 档案翻译为 OpenSandbox SDK DTO。"""
+        requested_profile = (
+            network_profile_id,
+            network_profile_version,
+            network_profile_hash,
+        )
+        expected_profile = (
+            RESEARCH_PUBLIC_EGRESS_PROFILE.profile_id,
+            RESEARCH_PUBLIC_EGRESS_PROFILE.version,
+            RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash,
+        )
+        if not network_enabled and requested_profile == (None, None, None):
+            network_policy = NetworkPolicy(defaultAction="deny", egress=[])
+        elif network_enabled and requested_profile == expected_profile:
+            network_policy = NetworkPolicy(
+                defaultAction="allow",
+                egress=[
+                    NetworkRule(action="deny", target=cidr)
+                    for cidr in RESEARCH_PUBLIC_EGRESS_PROFILE.denied_non_loopback_cidrs
+                ],
+            )
+        else:
+            raise ValueError("OpenSandbox Network Profile 未在平台固定档案中注册")
         sandbox = await asyncio.to_thread(
             self.sandbox_cls.create,
             image_ref,
@@ -321,7 +345,7 @@ class OpenSandboxProvider:
             entrypoint=["/entrypoint"],
             metadata=dict(metadata),
             resource={"cpu": str(cpu), "memory": f"{memory_mib}Mi"},
-            network_policy=NetworkPolicy(defaultAction="deny", egress=[]),
+            network_policy=network_policy,
             volumes=[],
             connection_config=self._connection(),
         )

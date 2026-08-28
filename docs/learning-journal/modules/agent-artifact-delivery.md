@@ -11,7 +11,7 @@ Deep Agents 可以在 Session 专属 OpenSandbox 中写文件，但 Sandbox 文�
 
 ```text
 真实 Sandbox Turn
-  → submit_artifact(path, name, media_type)
+  → submit_artifact(path, name, media_type, source_url?)
   → Runtime permit + owner/Project/Session/Turn + Sandbox generation/fence
   → 事务外读取 /workspace/outputs/ 普通文件
   → 扩展名/MIME/magic/结构/10 MiB/hash 校验
@@ -34,7 +34,8 @@ Deep Agents Tool 只存在于 infrastructure adapter。
 - `candidate_id` 由 Turn + `tool_call_id` 稳定生成；正式 `artifact_id` 由 Candidate 稳定生成；数据库用
   Turn/tool-call、Candidate、Storage key 唯一约束和 Candidate CAS 收敛重复调用与响应丢失。
 - `AgentArtifact` 独立保存 owner/Project/Session/Turn、名称、媒体类型、内容 hash、大小和内部 Storage
-  key。公开 DTO 不返回 Storage key 或 Sandbox path。
+  key。Phase 6 Slice 7 起可成对保存已规范化的声明来源目标 URL/hash；query 不入库，避免 Manifest 泄漏
+  token/signature。公开 DTO 不返回 Storage key 或 Sandbox path。
 - Sandbox download、内容扫描、Storage write/read 都在数据库事务外；VALIDATED 登记和 Turn 成功发布各自
   只提交小型事实。Storage 成功而数据库失败只留下不可见、稳定 key 的 staging blob。
 - Turn 成功事务先发布本轮 VALIDATED Candidate，再提交 Assistant Message、Event 与 Run CAS；任一步失败
@@ -43,6 +44,11 @@ Deep Agents Tool 只存在于 infrastructure adapter。
 ## 文件和下载策略
 
 首版单文件上限与 Workspace 单文件限制一致，为 10 MiB。支持：
+
+同一 Turn 最多 8 个非 REJECTED Candidate、总量最多 50 MiB；锁定 Run 后串行复核，避免并发提交绕过
+业务配额。`GET /api/v1/agent-turn-runs/{run_id}/manifest` 只返回正式 Artifact 的有界声明目标、文件 hash、
+MIME、大小和创建时间；`declared_public_target_checked` 只表示 URL/DNS 公网分类通过，不是 provenance
+证明。raw `/workspace/downloads`、Candidate 与 WorkspaceSnapshot 均没有公开下载入口。
 
 - PNG、JPEG：magic/基本结构校验，可通过同一受权 content API内联预览；
 - SVG：XML 结构校验，并拒绝 script、foreignObject、事件属性、外部引用、DOCTYPE/ENTITY 等主动内容；
@@ -64,6 +70,12 @@ Deep Agents Tool 只存在于 infrastructure adapter。
 - 重复 `tool_call_id` 回读同一 Candidate；同 ID 不同内容冲突，不能覆盖已验证/提交事实。
 - Storage 写入成功而 Candidate 事务失败时，重试复用相同内容寻址 key；孤儿 blob 后续由 GC 清理。
 - Candidate 永远没有下载 API；跨 owner、Project、Session 或 Turn 的正式 Artifact 查询表现为 not found。
+- 可选 `source_url` 在 Sandbox/Storage I/O 前完成 HTTP(S) 规范化和 DNS 全回答公网校验；localhost、
+  loopback、private、link-local、reserved、metadata 或混合 DNS 回答稳定拒绝。该校验不证明文件字节必然
+  来自声明 URL，也不把 raw egress 变成协议级只读代理。
+- 数量/总量在锁定同一 Run 后统计；第 9 项或超过 50 MiB 的事务回滚，不留下 Candidate 行。同一
+  `tool_call_id` 重放直接回读已存在 Candidate，不重复计数。由于 Storage write 先于短事务，预算冲突仍
+  可能留下不可见的内容寻址 staging blob，等待后续 GC。
 
 ## 安全与可观测性
 
@@ -85,6 +97,8 @@ Sandbox Adapter 会先读取文件清单并拒绝静态 symlink/device，再下�
 - Sandbox Tool、Deep Agents 与真实 Sandbox Runtime Adapter 离线测试：60 passed；
 - 完整后端非 integration 回归：1005 passed、5 skipped；
 - Web 全量 Vitest：143 passed（其中 API client 与成果组件定向 17 passed）；Vite TypeScript build 通过。
+- Slice 7 来源/预算增量定向套件：146 passed；其中 PostgreSQL 并发预算测试覆盖第 8/9 项竞争、50 MiB
+  超限回滚与同一 Candidate 重放不重复计数；Ruff 全后端通过，Pyright 为 0 errors。
 
 普通测试没有访问真实模型、公共网络或付费 Sandbox；本切片没有运行真实 OpenSandbox Artifact Smoke。
 
@@ -97,10 +111,12 @@ Sandbox Adapter 会先读取文件清单并拒绝静态 symlink/device，再下�
 - API：`api/agent_sessions.py`
 - Web：`web/src/components/AgentArtifactList.tsx`
 - Migration：`f3a6c8d1e2b4_add_agent_artifacts.py`
+- Slice 7 来源/Profile 迁移：`c7d2f9a4e1b8_add_agent_public_egress_profile.py`
 
 ## 已知限制
 
-- staging blob 的孤儿 GC、Session/Turn 总量配额和正式恶意文件扫描尚未实现；
+- staging blob 的孤儿 GC、Session 总量配额和正式恶意文件扫描尚未实现；Turn 已有 8 项/50 MiB 业务
+  配额，但不是 Sandbox 物理磁盘配额；
 - SVG/PDF 只下载不预览；没有 PDF 深度解析、杀毒或内容无害化；
 - 当前 regular-file 检查不是 race-hardened scanner；
 - 没有运行真实 OpenSandbox + 真实 Provider 的“画图并下载”Smoke；

@@ -248,6 +248,16 @@ def test_native_skill_versions_profiles_and_policy_refs_remain_sdk_neutral() -> 
         "content_hash",
     } <= set(AgentOwnerSkillVersionORM.__table__.columns.keys())
     assert "skill_refs" in AgentPolicySnapshotORM.__table__.columns
+    assert "network_profile_id" in AgentPolicySnapshotORM.__table__.columns
+    assert "network_profile_version" in AgentPolicySnapshotORM.__table__.columns
+    assert "network_profile_hash" in AgentPolicySnapshotORM.__table__.columns
+    assert "network_profile_id" in AgentSandboxLeaseORM.__table__.columns
+    assert "network_profile_version" in AgentSandboxLeaseORM.__table__.columns
+    assert "network_profile_hash" in AgentSandboxLeaseORM.__table__.columns
+    assert "source_url" in AgentArtifactCandidateORM.__table__.columns
+    assert "source_url_hash" in AgentArtifactCandidateORM.__table__.columns
+    assert "source_url" in AgentArtifactORM.__table__.columns
+    assert "source_url_hash" in AgentArtifactORM.__table__.columns
     assert {
         "path",
         "frontmatter",
@@ -318,6 +328,15 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
             finally:
                 engine.dispose()
 
+        def has_column(table_name: str, column_name: str) -> bool:
+            engine = create_engine(url)
+            try:
+                return column_name in {
+                    value["name"] for value in inspect(engine).get_columns(table_name)
+                }
+            finally:
+                engine.dispose()
+
         def attachment_constraints() -> set[str]:
             engine = create_engine(url)
             try:
@@ -353,6 +372,7 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_model_call_reservations")
         assert has_table("agent_tool_calls")
         assert has_table("agent_sandbox_cleanups")
+        assert has_column("agent_policy_snapshots", "network_profile_hash")
         assert {
             "ck_agent_attachment_version",
             "ck_agent_attachment_size",
@@ -367,12 +387,16 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_turn_usages")
         assert has_table("agent_model_call_reservations")
         assert has_table("agent_tool_calls")
-        assert not has_table("agent_sandbox_cleanups")
+        assert has_table("agent_sandbox_cleanups")
+        assert not has_column("agent_policy_snapshots", "network_profile_hash")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
+        run_alembic("downgrade", "-1")
+        assert not has_table("agent_sandbox_cleanups")
         run_alembic("upgrade", "head")
         assert has_table("agent_browser_control_leases")
         assert has_table("agent_attachments")
         assert has_table("agent_turn_usages")
         assert has_table("agent_sandbox_cleanups")
+        assert has_column("agent_policy_snapshots", "network_profile_hash")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("check")

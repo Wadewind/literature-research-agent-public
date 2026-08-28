@@ -79,6 +79,8 @@ class AgentArtifact:
     size_bytes: int
     storage_key: str
     created_at: datetime
+    source_url: str | None = None
+    source_url_hash: str | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -97,6 +99,10 @@ class AgentArtifact:
             raise ValueError("AgentArtifact content_hash 必须是小写 SHA-256")
         if not 0 <= self.size_bytes <= AGENT_ARTIFACT_MAX_BYTES:
             raise ValueError("AgentArtifact 文件大小超过 10 MiB")
+        if (self.source_url is None) != (self.source_url_hash is None):
+            raise ValueError("AgentArtifact source 引用必须完整")
+        if self.source_url_hash is not None and not _SHA256.fullmatch(self.source_url_hash):
+            raise ValueError("AgentArtifact source hash 非法")
 
     @property
     def previewable(self) -> bool:
@@ -224,6 +230,8 @@ def create_agent_artifact(*, candidate: AgentArtifactCandidate) -> AgentArtifact
         size_bytes=candidate.size_bytes,
         storage_key=storage_key,
         created_at=datetime.now(UTC),
+        source_url=candidate.source_url,
+        source_url_hash=candidate.source_url_hash,
     )
 
 

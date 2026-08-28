@@ -106,6 +106,9 @@ from literature_agent.infrastructure.agent.mcp_tools import (
     LangchainMcpToolLoader,
 )
 from literature_agent.infrastructure.agent.opensandbox_backend import OpenSandboxProvider
+from literature_agent.infrastructure.agent.public_source_resolver import (
+    SystemPublicSourceResolver,
+)
 from literature_agent.infrastructure.agent.sandbox_cleanup import SandboxCleanupService
 from literature_agent.infrastructure.agent.sandbox_mcp import (
     PLATFORM_SANDBOX_MCP_RESOLVER,
@@ -403,6 +406,7 @@ def _build_research_agent_runtime(
         event_repo_factory=SqlalchemyEventRepository,
         storage=LocalFileStorage(settings.storage_root),
         execution_control=execution_control,
+        source_resolver=SystemPublicSourceResolver(),
         event_notifier=event_notifier,
     )
     project_context = ProjectResearchContextService(

@@ -26,7 +26,7 @@ Sandbox 隔离并不等于网络隔离：一个可出网的 Sandbox 仍可能访
 
 Phase 6 Slice 7 引入版本化 `research-public-egress.v1`：
 
-- Sandbox 内的 Browser、Playwright/Search MCP、Shell、Python、Node 和 `curl` 可以访问任意正常公网
+- Sandbox 内的 Browser、Playwright/Search MCP、Shell、Python、Node 和固定 `/usr/bin/wget` 可以访问任意正常公网
   `https`，并可在确有公开站点兼容需要时访问普通公网 `http`；
 - 不维护 arXiv 或其他公网 Host allowlist，不因 URL 来自模型、网页、用户或 MCP 而逐次等待批准；
 - Sandbox network namespace 内部 loopback 必须保留，用于 Chromium CDP、Playwright/Search MCP、
@@ -40,7 +40,7 @@ Phase 6 Slice 7 引入版本化 `research-public-egress.v1`：
 `research-public-egress.v1` 是 L3/L4/FQDN 目标边界，不是 HTTP 应用代理。它不解析 method、body、表单或
 站点业务语义，因而不能证明网络请求“只读”。平台不注册发帖、提交表单、发送消息、上传外站或修改远端
 资源的专用 Tool，也不向 Sandbox 提供平台凭据；系统策略只允许研究读取。但 raw Browser、Shell、MCP、
-Python 或 `curl` 技术上仍可能发送 POST、提交表单或触发站点写操作，这是当前精简交付的已知风险，而
+Python 或 `wget` 技术上仍可能发送 POST、提交表单或触发站点写操作，这是当前精简交付的已知风险，而
 不是基础设施层已强制拒绝的能力。
 
 允许的是当前 Sandbox network namespace 自身的 loopback，不是宿主 loopback。raw `execute`/Browser
@@ -56,11 +56,12 @@ deny、旧 allowlist 或不同网络策略的物理环境上续租。
 ### Workspace 文件与正式业务资源
 
 Browser、MCP 或 `execute` 下载的文件可以留在当前 Session Sandbox Workspace，受 Workspace 文件数、
-单文件、总量、TTL 与 Snapshot 规则约束。raw Workspace 文件不是 Project Paper、Evidence、已验证来源
+单文件、总量、TTL 与 Snapshot 规则约束。raw Workspace 文件不是 Project Paper、Evidence、已证明来源
 或可下载业务 Artifact，不能通过公开 API 直接取回。
 
-只有文件离开 Sandbox、成为正式 `AgentArtifact`、Project 资源或平台“已验证下载/来源”时，平台才执行
-大小、数量/总量、超时、扩展名、MIME、magic、hash 和来源校验。外部网络与 Sandbox/Storage I/O 保持在
+只有文件离开 Sandbox、成为正式 `AgentArtifact`、Project 资源或登记声明来源目标时，平台才执行
+大小、数量/总量、超时、扩展名、MIME、magic、hash 和目标分类。当前声明 URL/DNS 检查不证明文件字节
+来自该 URL。外部网络与 Sandbox/Storage I/O 保持在
 数据库事务外；稳定 invocation/resource ID、effect ledger、唯一约束和 fence 用于 Effectively Once
 收敛，不宣称 Exactly Once。
 
@@ -68,7 +69,7 @@ Browser、MCP 或 `execute` 下载的文件可以留在当前 Session Sandbox Wo
 
 Slice 7 必须先核对本地锁定的 Python SDK `opensandbox==0.1.15`、OpenSandbox Server `0.2.2`、egress
 image `v1.1.4`（上游 commit 前缀 `34653f7`）的实际行为和上游实现。配置对象存在、通配 Host 能保存或
-文档声称支持都不构成通过；必须由同一 Sandbox 中的 Browser/MCP/Shell/Python/curl 真实连接证明公网
+文档声称支持都不构成通过；必须由同一 Sandbox 中的 Browser/MCP/Shell/Python/wget 真实连接证明公网
 可达、Sandbox 内部 loopback 可用且非-loopback private/metadata/宿主目标不可达。若固定版本不能同时
 做到“公网允许、非-loopback 私网拒绝”，Slice 7 必须停止并记录证据，不能退化为无 private-network
 边界的开放网络。
@@ -81,7 +82,9 @@ image `v1.1.4`（上游 commit 前缀 `34653f7`）的实际行为和上游实现
 
 普通自动测试继续完全离线，使用恶意 URL/DNS/Redirect/文件 Fixture 与 Fake Provider；真实公网 Smoke
 必须显式启用，记录固定版本、Profile/hash、目标、预算、结果和限制，不调用真实付费模型。至少验证一个
-arXiv 页面/PDF、一个非 arXiv 正常公网目标、Sandbox 内部 loopback 可用，以及一个被拒绝的非-loopback
+arXiv 页面、同一固定 arXiv PDF 的最多 64 KiB 有界前缀（接受 HTTP 200/206，并校验
+`Content-Type`、`%PDF` magic 和 SHA-256）、一个非 arXiv 正常公网目标、Sandbox 内部 loopback 可用，
+以及一个被拒绝的非-loopback
 private/metadata/宿主目标。正式 URL/source 的离线 Fixture 还必须证明 localhost/loopback 输入及解析
 结果被平台拒绝。
 

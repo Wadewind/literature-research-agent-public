@@ -232,6 +232,9 @@ class AgentPolicySnapshotORM(Base):
     skill_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     mcp_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     network_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    network_profile_id: Mapped[str | None] = mapped_column(String(100))
+    network_profile_version: Mapped[str | None] = mapped_column(String(50))
+    network_profile_hash: Mapped[str | None] = mapped_column(String(64))
     sandbox_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     max_model_calls: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -253,6 +256,13 @@ class AgentPolicySnapshotORM(Base):
             "AND max_input_tokens_per_model_call > 0 "
             "AND max_output_tokens_per_model_call > 0",
             name="ck_agent_policy_positive_limits",
+        ),
+        CheckConstraint(
+            "(network_profile_id IS NULL AND network_profile_version IS NULL "
+            "AND network_profile_hash IS NULL AND network_enabled = false) OR "
+            "(network_profile_id IS NOT NULL AND network_profile_version IS NOT NULL "
+            "AND network_profile_hash IS NOT NULL AND network_enabled = true)",
+            name="ck_agent_policy_network_profile",
         ),
     )
 
@@ -447,6 +457,9 @@ class AgentSandboxLeaseORM(Base):
     )
     sandbox_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     image_ref: Mapped[str] = mapped_column(String(500), nullable=False)
+    network_profile_id: Mapped[str | None] = mapped_column(String(100))
+    network_profile_version: Mapped[str | None] = mapped_column(String(50))
+    network_profile_hash: Mapped[str | None] = mapped_column(String(64))
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     fencing_token: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -463,6 +476,13 @@ class AgentSandboxLeaseORM(Base):
         CheckConstraint(
             "status IN ('active','dirty','retired')",
             name="ck_agent_sandbox_lease_status",
+        ),
+        CheckConstraint(
+            "(network_profile_id IS NULL AND network_profile_version IS NULL "
+            "AND network_profile_hash IS NULL) OR "
+            "(network_profile_id IS NOT NULL AND network_profile_version IS NOT NULL "
+            "AND network_profile_hash IS NOT NULL)",
+            name="ck_agent_sandbox_lease_network_profile",
         ),
     )
 
@@ -651,6 +671,8 @@ class AgentArtifactCandidateORM(Base):
     content_ref: Mapped[str] = mapped_column(String(500), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    source_url_hash: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     tool_call_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -666,6 +688,11 @@ class AgentArtifactCandidateORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (
         CheckConstraint("size_bytes BETWEEN 0 AND 10485760", name="ck_agent_candidate_size"),
+        CheckConstraint(
+            "(source_url IS NULL AND source_url_hash IS NULL) OR "
+            "(source_url IS NOT NULL AND source_url_hash IS NOT NULL)",
+            name="ck_agent_candidate_source",
+        ),
         CheckConstraint(
             "status IN ('staged','validated','committed','rejected')",
             name="ck_agent_candidate_status",
@@ -717,9 +744,16 @@ class AgentArtifactORM(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     storage_key: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    source_url_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (
         CheckConstraint("size_bytes BETWEEN 0 AND 10485760", name="ck_agent_artifact_size"),
+        CheckConstraint(
+            "(source_url IS NULL AND source_url_hash IS NULL) OR "
+            "(source_url IS NOT NULL AND source_url_hash IS NOT NULL)",
+            name="ck_agent_artifact_source",
+        ),
     )
 
 

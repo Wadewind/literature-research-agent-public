@@ -149,6 +149,8 @@ def test_only_committed_candidate_creates_immutable_agent_artifact() -> None:
         content_ref="/workspace/outputs/chart.png",
         content_hash="a" * 64,
         size_bytes=24,
+        source_url="https://arxiv.org/pdf/2401.00001",
+        source_url_hash="b" * 64,
     )
     with pytest.raises(ValueError, match="COMMITTED"):
         create_agent_artifact(candidate=staged)
@@ -163,5 +165,7 @@ def test_only_committed_candidate_creates_immutable_agent_artifact() -> None:
 
     assert artifact.artifact_id == duplicate.artifact_id
     assert artifact.previewable is True
+    assert artifact.source_url == "https://arxiv.org/pdf/2401.00001"
+    assert artifact.source_url_hash == "b" * 64
     with pytest.raises(FrozenInstanceError):
         artifact.name = "changed.png"  # type: ignore[misc]

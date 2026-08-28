@@ -9,6 +9,7 @@ from opensandbox.exceptions import SandboxApiException
 from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import WriteEntry
 
+from literature_agent.domain.agent_network import RESEARCH_PUBLIC_EGRESS_PROFILE
 from literature_agent.infrastructure.agent.opensandbox_backend import (
     OpenSandboxBackend,
     OpenSandboxProvider,
@@ -289,7 +290,7 @@ async def test_provider_exposes_only_fixed_browser_websocket_endpoint(
         await provider.get_browser_websocket_target("opaque", port=5901)
 
 
-async def test_provider_creation_is_fixed_resource_default_deny_and_secret_free(
+async def test_provider_creation_uses_fixed_public_egress_and_is_secret_free(
     monkeypatch,
 ) -> None:
     calls: list[dict] = []
@@ -316,18 +317,50 @@ async def test_provider_creation_is_fixed_resource_default_deny_and_secret_free(
         ttl_seconds=600,
         cpu=1,
         memory_mib=2048,
-        network_enabled=False,
+        network_enabled=True,
+        network_profile_id=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_id,
+        network_profile_version=RESEARCH_PUBLIC_EGRESS_PROFILE.version,
+        network_profile_hash=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash,
         metadata={"session_id": "session-1"},
     )
 
     assert backend.id == "sandbox-private-id"
     assert calls[0]["image"] == "research@sha256:pinned"
     assert calls[0]["resource"] == {"cpu": "1", "memory": "2048Mi"}
-    assert calls[0]["network_policy"].default_action == "deny"
-    assert calls[0]["network_policy"].egress == []
+    assert calls[0]["network_policy"].default_action == "allow"
+    assert calls[0]["network_policy"].egress
+    assert all(rule.action == "deny" for rule in calls[0]["network_policy"].egress)
+    assert "127.0.0.0/8" not in {
+        rule.target for rule in calls[0]["network_policy"].egress
+    }
     assert calls[0]["env"] == {}
     assert calls[0]["entrypoint"] == ["/entrypoint"]
     assert "provider-secret" not in repr(provider)
+
+
+async def test_provider_rejects_unknown_or_drifted_network_profile(monkeypatch) -> None:
+    async def immediate_to_thread(call, *args, **kwargs):
+        return call(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+    provider = OpenSandboxProvider(
+        domain="sandbox.internal:8080",
+        protocol="http",
+        sandbox_cls=type("Factory", (), {"create": classmethod(lambda cls, *a, **k: _Sandbox())}),
+    )
+
+    with pytest.raises(ValueError, match="Network Profile"):
+        await provider.create(
+            image_ref="research@sha256:pinned",
+            ttl_seconds=600,
+            cpu=1,
+            memory_mib=2048,
+            network_enabled=True,
+            network_profile_id=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_id,
+            network_profile_version=RESEARCH_PUBLIC_EGRESS_PROFILE.version,
+            network_profile_hash="0" * 64,
+            metadata={"session_id": "session-1"},
+        )
 
 
 async def test_provider_destroy_treats_missing_resource_as_idempotent(monkeypatch) -> None:

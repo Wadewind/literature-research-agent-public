@@ -137,8 +137,18 @@ Sandbox 内允许任意正常公网 HTTP(S)，保留 CDP/MCP/VNC 所需的 Sandb
 Sandbox 内部服务，但不能访问宿主 loopback；正式 URL/source 输入仍拒绝 localhost/loopback 及解析到
 loopback 的 Host。
 `PolicySnapshot` 与 `SandboxLease` 将保存 Profile version/hash，策略变化必须轮换 generation。该 Profile
-在 Slice 7 实现与真实 Smoke 通过前仍是目标事实；当前已验证事实仍是 Slice 6 的 default-deny。用户不能
-提交 Host allowlist、代理、DNS、例外地址或认证 Secret。
+当前代码已实现 Profile/Lease/Provider 映射和离线契约。固定镜像包含
+`/usr/bin/wget`、Python、Node 和 Chromium，但不包含 `curl`；Slice 7 网络 Smoke 使用 `wget`，不为测试
+增加镜像依赖或改变 digest。第二轮完整下载固定 2,215,244-byte arXiv PDF 超过 30 秒 Sandbox 命令限制，
+Adapter 外层以 exit 124 结束；这不是网络拒绝证据。PDF 验收现改为同一 URL 最多 64 KiB 有界前缀的
+HTTP 200/206、Content-Type、`%PDF` magic 和 SHA-256 检查。第三轮显式真实 Smoke 为 1 passed
+（39.67s），实际确认同一 Sandbox 内部 loopback、`wget` arXiv 首页、上述 PDF 前缀、Python/Node/Chromium
+访问 `example.com`、Playwright MCP `browser_navigate`、arXiv Search MCP `search_papers`，并确认 metadata
+`169.254.169.254`、Docker gateway `:8080`、`10.0.0.1` 被拒绝。它不证明完整 PDF 下载、所有公网目标、
+协议级只读或生产隔离。用户不能提交 Host allowlist、代理、DNS、例外地址或认证 Secret。
+
+真实验证需由开发者显式设置 `AGENT_RUN_OPENSANDBOX_PUBLIC_EGRESS_TESTS=1`；普通测试保持离线。这个开关
+只启用 Smoke，不改变应用运行时策略，也不得提交到 `.env`。
 
 该 Profile 只强制 L3/L4/FQDN 目标边界，不解析 HTTP method、body、表单或站点业务语义。平台不会注册
 外部写专用 Tool，也不提供平台凭据，产品策略要求 Agent 只做研究读取；但 raw Browser/Shell/MCP 仍可能
@@ -223,7 +233,8 @@ Evidence Matrix 的 UI 选择最终绑定具体 `review_output_id`；Project Ind
 
 正常公网 Host 不作为逐项用户配置；平台固化的是 public-egress Profile 及 private/metadata/宿主/LAN
 拒绝规则。Browser/MCP/execute 的 raw Workspace 下载不是正式业务资源，只有带出 Sandbox 成为 Artifact、
-Project 资源或已验证来源时才执行平台文件与来源校验。
+Project 资源或登记声明来源目标时才执行平台文件与目标分类检查。`source_url` 仅表示声明 URL/DNS 已检查，
+不证明文件字节来自该 URL。
 
 Deep Agents `permissions`、Skill 或 MCP 自身配置不能替代上述平台校验。
 

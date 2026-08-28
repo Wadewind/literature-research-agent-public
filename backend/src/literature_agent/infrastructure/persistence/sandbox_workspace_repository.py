@@ -531,6 +531,9 @@ def _lease_values(value: SandboxLeaseRecord) -> dict[str, Any]:
         "holder_turn_run_id": value.holder_turn_run_id,
         "sandbox_id": value.sandbox_id,
         "image_ref": value.image_ref,
+        "network_profile_id": value.network_profile_id,
+        "network_profile_version": value.network_profile_version,
+        "network_profile_hash": value.network_profile_hash,
         "generation": value.generation,
         "fencing_token": value.fencing_token,
         "status": value.status.value,
@@ -554,6 +557,9 @@ def _lease(row: AgentSandboxLeaseORM) -> SandboxLeaseRecord:
         generation_started_at=row.generation_started_at,
         expires_at=row.expires_at,
         updated_at=row.updated_at,
+        network_profile_id=row.network_profile_id,
+        network_profile_version=row.network_profile_version,
+        network_profile_hash=row.network_profile_hash,
     )
 
 

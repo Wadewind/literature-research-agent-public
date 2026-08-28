@@ -9,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from literature_agent.application.ports.research_agent_runtime import RuntimeTurnRequest
+from literature_agent.domain.agent_network import RESEARCH_PUBLIC_EGRESS_PROFILE
+from literature_agent.domain.research_agent import create_policy_snapshot
 from literature_agent.domain.workspace_snapshot import (
     WorkspaceFile,
     WorkspaceSnapshotStatus,
@@ -168,8 +170,32 @@ def _sandbox_request(*, turn_run_id: str = "turn-1") -> RuntimeTurnRequest:
         request,
         policy_snapshot=replace(
             request.policy_snapshot,
+            network_enabled=True,
+            network_profile_id=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_id,
+            network_profile_version=RESEARCH_PUBLIC_EGRESS_PROFILE.version,
+            network_profile_hash=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash,
             sandbox_enabled=True,
             approval_required=False,
+        ),
+    )
+
+
+def _legacy_default_deny_request() -> RuntimeTurnRequest:
+    request = _sandbox_request()
+    return replace(
+        request,
+        policy_snapshot=create_policy_snapshot(
+            owner_id=request.context_snapshot.owner_id,
+            project_id=request.context_snapshot.project_id,
+            session_id=request.session_id,
+            turn_run_id=request.turn_run_id,
+            policy_version="agent-policy.project-research-workspace.v2",
+            allowed_tool_names=("execute",),
+            network_enabled=False,
+            sandbox_enabled=True,
+            approval_required=False,
+            max_model_calls=8,
+            max_tool_calls=12,
         ),
     )
 
@@ -190,10 +216,60 @@ async def test_acquire_reuses_one_session_lease_and_renews_sliding_ttl() -> None
     assert second.record.fencing_token == first.record.fencing_token
     assert second.record.holder_turn_run_id == request.turn_run_id
     assert len(provider.created) == 1
-    assert provider.created[0]["network_enabled"] is False
+    assert provider.created[0]["network_enabled"] is True
+    assert (
+        provider.created[0]["network_profile_hash"]
+        == RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash
+    )
     assert provider.created[0]["cpu"] == 1
     assert provider.created[0]["memory_mib"] == 2048
     assert provider.renewed == [(first.record.sandbox_id, 600)]
+
+
+async def test_legacy_or_drifted_network_profile_rotates_generation() -> None:
+    repo, provider, storage = _Repo(), _Provider(), _Storage()
+    manager = _manager(repo, provider, storage, [datetime(2026, 8, 26, tzinfo=UTC)])
+    request = _sandbox_request()
+    first = await manager.acquire(request)
+    repo.lease = replace(first.record, network_profile_hash=None)
+
+    rotated = await manager.acquire(request)
+
+    assert rotated.record.generation == 2
+    assert rotated.record.sandbox_id != first.record.sandbox_id
+    assert rotated.record.network_profile_hash == RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash
+    assert provider.renewed == []
+    assert first.record.sandbox_id in provider.destroyed
+
+
+async def test_running_v2_snapshot_recovers_only_in_frozen_default_deny_mode() -> None:
+    repo, provider, storage = _Repo(), _Provider(), _Storage()
+    manager = _manager(repo, provider, storage, [datetime(2026, 8, 26, tzinfo=UTC)])
+    request = _legacy_default_deny_request()
+
+    first = await manager.acquire(request)
+    second = await manager.acquire(request)
+
+    assert second.record.sandbox_id == first.record.sandbox_id
+    assert first.record.network_profile_id is None
+    assert provider.created[0]["network_enabled"] is False
+    assert provider.created[0]["network_profile_id"] is None
+    assert provider.created[0]["metadata"]["network_profile"] == "legacy-default-deny"
+
+
+async def test_unregistered_default_deny_snapshot_fails_closed() -> None:
+    repo, provider, storage = _Repo(), _Provider(), _Storage()
+    manager = _manager(repo, provider, storage, [datetime(2026, 8, 26, tzinfo=UTC)])
+    request = _legacy_default_deny_request()
+    request = replace(
+        request,
+        policy_snapshot=replace(request.policy_snapshot, policy_version="unknown-policy.v1"),
+    )
+
+    with pytest.raises(ValueError, match="Network Profile 未注册"):
+        await manager.acquire(request)
+
+    assert provider.created == []
 
 
 async def test_new_turn_reuses_generation_but_advances_fence_and_holder() -> None:

@@ -17,6 +17,7 @@ from literature_agent.application.ports.agent_artifact_source import (
 from literature_agent.application.ports.agent_repository import AgentRepository
 from literature_agent.application.ports.event_notifier import EventNotifier, NoopEventNotifier
 from literature_agent.application.ports.event_repository import EventRepository
+from literature_agent.application.ports.public_source_resolver import PublicSourceResolver
 from literature_agent.application.ports.research_agent_runtime import RuntimeTurnRequest
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.runtime_execution_control import RuntimeExecutionControl
@@ -31,6 +32,11 @@ from literature_agent.domain.agent_artifact import (
     is_agent_artifact_output_path,
     validate_agent_artifact_content,
     validate_agent_artifact_name_and_type,
+)
+from literature_agent.domain.agent_network import (
+    FormalSourceValidationError,
+    normalize_formal_public_source,
+    validate_formal_public_source_addresses,
 )
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import (
@@ -48,6 +54,8 @@ from literature_agent.domain.run import RunStatus, RunType
 from literature_agent.domain.runtime_execution import RuntimeExecutionPermit
 
 TSession = TypeVar("TSession", bound=Session)
+AGENT_ARTIFACT_MAX_PER_TURN = 8
+AGENT_ARTIFACT_MAX_TOTAL_BYTES_PER_TURN = 50 * 1024 * 1024
 
 
 class AgentArtifactServiceError(Exception):
@@ -78,6 +86,7 @@ class AgentArtifactSubmissionService[TSession: Session]:
         event_repo_factory: Callable[[TSession], EventRepository],
         storage: Storage,
         execution_control: RuntimeExecutionControl,
+        source_resolver: PublicSourceResolver | None = None,
         event_notifier: EventNotifier | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -86,6 +95,7 @@ class AgentArtifactSubmissionService[TSession: Session]:
         self._event_repo_factory = event_repo_factory
         self._storage = storage
         self._execution_control = execution_control
+        self._source_resolver = source_resolver
         self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def submit(
@@ -98,6 +108,7 @@ class AgentArtifactSubmissionService[TSession: Session]:
         path: str,
         name: str,
         media_type: str,
+        source_url: str | None = None,
     ) -> AgentArtifactCandidate:
         candidate_id = agent_artifact_candidate_id(request.turn_run_id, tool_call_id)
         # 先验证 Runtime/Sandbox fence，避免已取消或过期的调用写入拒绝事实或 Storage。
@@ -112,6 +123,32 @@ class AgentArtifactSubmissionService[TSession: Session]:
                     "artifact_path_invalid", "Artifact 只能来自 /workspace/outputs/"
                 )
             validate_agent_artifact_name_and_type(name, media_type)
+            formal_source = None
+            if source_url is not None:
+                try:
+                    formal_source = normalize_formal_public_source(source_url)
+                except FormalSourceValidationError as exc:
+                    raise AgentArtifactValidationError(
+                        exc.code, exc.safe_message
+                    ) from exc
+                if self._source_resolver is None:
+                    raise AgentArtifactValidationError(
+                        "source_resolution_unavailable", "声明来源目标检查暂不可用"
+                    )
+                try:
+                    addresses = await self._source_resolver.resolve(
+                        formal_source.hostname, formal_source.port
+                    )
+                    validate_formal_public_source_addresses(formal_source, addresses)
+                except FormalSourceValidationError as exc:
+                    raise AgentArtifactValidationError(
+                        exc.code, exc.safe_message
+                    ) from exc
+                except Exception as exc:
+                    raise AgentArtifactValidationError(
+                        "source_resolution_failed", "来源地址解析失败"
+                    ) from exc
+                await self._assert_current(request, permit, source)
             content = await source.read_regular_file(path, max_bytes=AGENT_ARTIFACT_MAX_BYTES)
             validated = validate_agent_artifact_content(
                 name=name, media_type=media_type, content=content
@@ -136,6 +173,8 @@ class AgentArtifactSubmissionService[TSession: Session]:
                 content_ref=path,
                 content_hash=validated.content_hash,
                 size_bytes=validated.size_bytes,
+                source_url=formal_source.url if formal_source else None,
+                source_url_hash=formal_source.source_hash if formal_source else None,
             ).validate(
                 tool_call_id=tool_call_id,
                 storage_key=storage_key,
@@ -221,6 +260,8 @@ class AgentArtifactSubmissionService[TSession: Session]:
                 candidate.size_bytes,
                 AgentArtifactCandidateStatus.STAGED,
                 candidate.created_at,
+                source_url=candidate.source_url,
+                source_url_hash=candidate.source_url_hash,
             )
             existing = await repo.get_or_add_candidate(staged)
             if not same_agent_artifact_candidate_fact(existing, staged):
@@ -235,6 +276,22 @@ class AgentArtifactSubmissionService[TSession: Session]:
             if existing.status is AgentArtifactCandidateStatus.REJECTED:
                 raise AgentArtifactServiceError(
                     "artifact_candidate_rejected", "Artifact Candidate 已被拒绝"
+                )
+            candidates = await repo.list_candidates_scoped(
+                request.turn_run_id, request.context_snapshot.owner_id
+            )
+            accepted = tuple(
+                value
+                for value in candidates
+                if value.status is not AgentArtifactCandidateStatus.REJECTED
+            )
+            if (
+                len(accepted) > AGENT_ARTIFACT_MAX_PER_TURN
+                or sum(value.size_bytes for value in accepted)
+                > AGENT_ARTIFACT_MAX_TOTAL_BYTES_PER_TURN
+            ):
+                raise AgentArtifactServiceError(
+                    "artifact_turn_budget_exceeded", "本轮 Artifact 数量或总量超过上限"
                 )
             if not await repo.save_candidate(candidate, expected_status="staged"):
                 current = await repo.get_candidate(candidate.candidate_id)

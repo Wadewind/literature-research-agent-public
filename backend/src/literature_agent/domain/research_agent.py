@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from literature_agent.domain.agent_network import RESEARCH_PUBLIC_EGRESS_PROFILE
 from literature_agent.domain.agent_usage import (
     AGENT_EXECUTE_TIMEOUT_SECONDS,
     AGENT_MAX_INPUT_TOKENS_PER_MODEL_CALL,
@@ -30,9 +31,9 @@ _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
 _AGENT_CANDIDATE_MAX_SIZE_BYTES = 10 * 1024 * 1024
 AGENT_MESSAGE_MAX_ATTACHMENTS = 5
 
-PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v2"
-PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = "agent-policy.project-research-workspace-mcp.v2"
-PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = "agent-policy.project-research-capabilities.v2"
+PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v3"
+PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = "agent-policy.project-research-workspace-mcp.v3"
+PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = "agent-policy.project-research-capabilities.v3"
 PROJECT_RESEARCH_WORKSPACE_TOOLS = (
     "search_project_chunks",
     "read_review_evidence_matrix",
@@ -139,6 +140,8 @@ class AgentArtifactCandidate:
     rejection_code: str | None = None
     validated_at: datetime | None = None
     committed_at: datetime | None = None
+    source_url: str | None = None
+    source_url_hash: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty(
@@ -161,6 +164,14 @@ class AgentArtifactCandidate:
             raise ValueError("AgentArtifactCandidate content_hash 必须是小写 SHA-256")
         if not 0 <= self.size_bytes <= _AGENT_CANDIDATE_MAX_SIZE_BYTES:
             raise ValueError("AgentArtifactCandidate size_bytes 必须在 0..10_MiB 范围内")
+        if (self.source_url is None) != (self.source_url_hash is None):
+            raise ValueError("AgentArtifactCandidate source 引用必须完整")
+        if self.source_url is not None and len(self.source_url) > 2048:
+            raise ValueError("AgentArtifactCandidate source URL 过长")
+        if self.source_url_hash is not None and not _SHA256_PATTERN.fullmatch(
+            self.source_url_hash
+        ):
+            raise ValueError("AgentArtifactCandidate source hash 非法")
         if self.status is AgentArtifactCandidateStatus.STAGED:
             if any(
                 value is not None
@@ -401,6 +412,9 @@ class PolicySnapshot:
     max_output_tokens_per_model_call: int
     snapshot_hash: str
     created_at: datetime
+    network_profile_id: str | None = None
+    network_profile_version: str | None = None
+    network_profile_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,8 +478,8 @@ _FIXED_TOOL_POLICY_REFS = (
     ),
     ToolPolicyRef(
         "submit_artifact",
-        "artifact-tool.v1",
-        "84704a7c9d480e171045a1000a3a7d23a9fde7ead01766804123d7f2f2bd660f",
+        "artifact-tool.v2",
+        "6a5743a89fbc77ecf546be43e89be6dd14031f8fdf96b2dfc555f78c78728cf2",
     ),
 )
 
@@ -596,6 +610,8 @@ def create_agent_artifact_candidate(
     content_ref: str,
     content_hash: str,
     size_bytes: int,
+    source_url: str | None = None,
+    source_url_hash: str | None = None,
 ) -> AgentArtifactCandidate:
     """校验不可信 Runtime descriptor 并创建 staged 候选业务事实。"""
     return AgentArtifactCandidate(
@@ -611,6 +627,8 @@ def create_agent_artifact_candidate(
         size_bytes=size_bytes,
         status=AgentArtifactCandidateStatus.STAGED,
         created_at=datetime.now(UTC),
+        source_url=source_url,
+        source_url_hash=source_url_hash,
     )
 
 
@@ -629,6 +647,8 @@ def same_agent_artifact_candidate_fact(
         left.content_ref,
         left.content_hash,
         left.size_bytes,
+        left.source_url,
+        left.source_url_hash,
     ) == (
         right.owner_id,
         right.project_id,
@@ -639,6 +659,8 @@ def same_agent_artifact_candidate_fact(
         right.content_ref,
         right.content_hash,
         right.size_bytes,
+        right.source_url,
+        right.source_url_hash,
     )
 
 
@@ -746,6 +768,9 @@ def create_policy_snapshot(
     skill_refs: tuple[SkillPolicyRef, ...] = (),
     mcp_refs: tuple[McpPolicyRef, ...] = (),
     network_enabled: bool = False,
+    network_profile_id: str | None = None,
+    network_profile_version: str | None = None,
+    network_profile_hash: str | None = None,
     sandbox_enabled: bool = False,
     approval_required: bool = True,
 ) -> PolicySnapshot:
@@ -759,6 +784,21 @@ def create_policy_snapshot(
     )
     if max_model_calls < 0 or max_tool_calls < 0:
         raise ValueError("调用预算不能小于 0")
+    network_profile_fields = (
+        network_profile_id,
+        network_profile_version,
+        network_profile_hash,
+    )
+    if any(value is not None for value in network_profile_fields) and not all(
+        value is not None and value.strip() for value in network_profile_fields
+    ):
+        raise ValueError("Network Profile 引用必须完整")
+    if network_enabled != all(value is not None for value in network_profile_fields):
+        raise ValueError("network_enabled 必须与 Network Profile 引用一致")
+    if network_profile_hash is not None and not _SHA256_PATTERN.fullmatch(
+        network_profile_hash
+    ):
+        raise ValueError("Network Profile hash 非法")
     if (
         min(
             wall_clock_limit_seconds,
@@ -834,6 +874,9 @@ def create_policy_snapshot(
             for ref in mcp_refs
         ],
         "network_enabled": network_enabled,
+        "network_profile_id": network_profile_id,
+        "network_profile_version": network_profile_version,
+        "network_profile_hash": network_profile_hash,
         "sandbox_enabled": sandbox_enabled,
         "approval_required": approval_required,
         "max_model_calls": max_model_calls,
@@ -872,6 +915,9 @@ def create_policy_snapshot(
         max_output_tokens_per_model_call=max_output_tokens_per_model_call,
         snapshot_hash=_canonical_hash(hash_payload),
         created_at=datetime.now(UTC),
+        network_profile_id=network_profile_id,
+        network_profile_version=network_profile_version,
+        network_profile_hash=network_profile_hash,
     )
 
 
@@ -908,7 +954,10 @@ def create_project_research_workspace_policy_snapshot(
         allowed_skill_names=tuple(ref.name for ref in skill_refs),
         skill_refs=skill_refs,
         mcp_refs=mcp_refs,
-        network_enabled=False,
+        network_enabled=True,
+        network_profile_id=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_id,
+        network_profile_version=RESEARCH_PUBLIC_EGRESS_PROFILE.version,
+        network_profile_hash=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash,
         sandbox_enabled=True,
         approval_required=False,
         max_model_calls=8,

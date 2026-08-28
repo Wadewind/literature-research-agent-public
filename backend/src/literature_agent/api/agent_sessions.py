@@ -1,7 +1,7 @@
 """Project-scoped AgentSession/AgentTurn 最小 API。"""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -180,6 +180,23 @@ class AgentArtifactResponse(BaseModel):
     size_bytes: int
     previewable: bool
     created_at: datetime
+
+
+class AgentArtifactManifestItem(BaseModel):
+    artifact_id: str
+    name: str
+    media_type: str
+    content_hash: str
+    size_bytes: int
+    source_url: str | None
+    source_url_hash: str | None
+    source_status: Literal["not_provided", "declared_public_target_checked"]
+    created_at: datetime
+
+
+class AgentArtifactManifestResponse(BaseModel):
+    run_id: str
+    items: list[AgentArtifactManifestItem]
 
 
 class TurnResponse(BaseModel):
@@ -891,6 +908,43 @@ async def list_agent_artifacts(
         )
         for value in values
     ]
+
+
+@router.get(
+    "/agent-turn-runs/{run_id}/manifest",
+    response_model=AgentArtifactManifestResponse,
+)
+async def get_agent_artifact_manifest(
+    run_id: str,
+    actor: ActorDep,
+    service: AgentArtifactServiceDep,
+) -> AgentArtifactManifestResponse:
+    """只公开有界正式产物/声明目标元数据，不公开 raw Workspace 下载。"""
+    try:
+        values = await service.list_artifacts(actor.owner_id, run_id)
+    except AgentTurnNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "agent_turn_not_found") from exc
+    return AgentArtifactManifestResponse(
+        run_id=run_id,
+        items=[
+            AgentArtifactManifestItem(
+                artifact_id=value.artifact_id,
+                name=value.name,
+                media_type=value.media_type,
+                content_hash=value.content_hash,
+                size_bytes=value.size_bytes,
+                source_url=value.source_url,
+                source_url_hash=value.source_url_hash,
+                source_status=(
+                    "declared_public_target_checked"
+                    if value.source_url
+                    else "not_provided"
+                ),
+                created_at=value.created_at,
+            )
+            for value in values
+        ],
+    )
 
 
 @router.get("/agent-artifacts/{artifact_id}/content", response_class=Response)

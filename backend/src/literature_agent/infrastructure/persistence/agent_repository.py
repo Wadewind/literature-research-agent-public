@@ -366,6 +366,9 @@ class SqlalchemyAgentRepository(AgentRepository):
                     for ref in value.mcp_refs
                 ],
                 network_enabled=value.network_enabled,
+                network_profile_id=value.network_profile_id,
+                network_profile_version=value.network_profile_version,
+                network_profile_hash=value.network_profile_hash,
                 sandbox_enabled=value.sandbox_enabled,
                 approval_required=value.approval_required,
                 max_model_calls=value.max_model_calls,
@@ -478,6 +481,8 @@ class SqlalchemyAgentRepository(AgentRepository):
                 content_ref=value.content_ref,
                 content_hash=value.content_hash,
                 size_bytes=value.size_bytes,
+                source_url=value.source_url,
+                source_url_hash=value.source_url_hash,
                 status=value.status.value,
                 tool_call_id=value.tool_call_id,
                 storage_key=value.storage_key,
@@ -603,6 +608,8 @@ class SqlalchemyAgentRepository(AgentRepository):
                 content_hash=value.content_hash,
                 size_bytes=value.size_bytes,
                 storage_key=value.storage_key,
+                source_url=value.source_url,
+                source_url_hash=value.source_url_hash,
                 created_at=value.created_at,
             )
             .on_conflict_do_nothing(index_elements=[AgentArtifactORM.candidate_id])
@@ -625,6 +632,8 @@ class SqlalchemyAgentRepository(AgentRepository):
             found.content_hash,
             found.size_bytes,
             found.storage_key,
+            found.source_url,
+            found.source_url_hash,
         ) != (
             value.artifact_id,
             value.candidate_id,
@@ -637,6 +646,8 @@ class SqlalchemyAgentRepository(AgentRepository):
             value.content_hash,
             value.size_bytes,
             value.storage_key,
+            value.source_url,
+            value.source_url_hash,
         ):
             raise RunConcurrentModificationError(value.turn_run_id)
         return found
@@ -756,16 +767,16 @@ def _context(row: AgentContextSnapshotORM) -> ContextSnapshot:
 
 def _policy(row: AgentPolicySnapshotORM) -> PolicySnapshot:
     return PolicySnapshot(
-        row.snapshot_id,
-        row.policy_version,
-        row.owner_id,
-        row.project_id,
-        row.session_id,
-        row.turn_run_id,
-        tuple(row.allowed_tool_names),
-        tuple(ToolPolicyRef(**ref) for ref in row.tool_refs),
-        tuple(row.allowed_skill_names),
-        tuple(
+        snapshot_id=row.snapshot_id,
+        policy_version=row.policy_version,
+        owner_id=row.owner_id,
+        project_id=row.project_id,
+        session_id=row.session_id,
+        turn_run_id=row.turn_run_id,
+        allowed_tool_names=tuple(row.allowed_tool_names),
+        tool_refs=tuple(ToolPolicyRef(**ref) for ref in row.tool_refs),
+        allowed_skill_names=tuple(row.allowed_skill_names),
+        skill_refs=tuple(
             SkillPolicyRef(
                 profile_id=ref["profile_id"],
                 profile_revision=ref["profile_revision"],
@@ -778,7 +789,7 @@ def _policy(row: AgentPolicySnapshotORM) -> PolicySnapshot:
             )
             for ref in row.skill_refs
         ),
-        tuple(
+        mcp_refs=tuple(
             McpPolicyRef(
                 profile_id=ref["profile_id"],
                 profile_revision=ref["profile_revision"],
@@ -789,20 +800,23 @@ def _policy(row: AgentPolicySnapshotORM) -> PolicySnapshot:
             )
             for ref in row.mcp_refs
         ),
-        row.network_enabled,
-        row.sandbox_enabled,
-        row.approval_required,
-        row.max_model_calls,
-        row.max_tool_calls,
-        row.wall_clock_limit_seconds,
-        row.tool_timeout_seconds,
-        row.execute_timeout_seconds,
-        row.max_tool_output_bytes,
-        row.max_repeated_tool_calls,
-        row.max_input_tokens_per_model_call,
-        row.max_output_tokens_per_model_call,
-        row.snapshot_hash,
-        row.created_at,
+        network_enabled=row.network_enabled,
+        sandbox_enabled=row.sandbox_enabled,
+        approval_required=row.approval_required,
+        max_model_calls=row.max_model_calls,
+        max_tool_calls=row.max_tool_calls,
+        wall_clock_limit_seconds=row.wall_clock_limit_seconds,
+        tool_timeout_seconds=row.tool_timeout_seconds,
+        execute_timeout_seconds=row.execute_timeout_seconds,
+        max_tool_output_bytes=row.max_tool_output_bytes,
+        max_repeated_tool_calls=row.max_repeated_tool_calls,
+        max_input_tokens_per_model_call=row.max_input_tokens_per_model_call,
+        max_output_tokens_per_model_call=row.max_output_tokens_per_model_call,
+        snapshot_hash=row.snapshot_hash,
+        created_at=row.created_at,
+        network_profile_id=row.network_profile_id,
+        network_profile_version=row.network_profile_version,
+        network_profile_hash=row.network_profile_hash,
     )
 
 
@@ -837,6 +851,8 @@ def _candidate(row: AgentArtifactCandidateORM) -> AgentArtifactCandidate:
         row.rejection_code,
         row.validated_at,
         row.committed_at,
+        row.source_url,
+        row.source_url_hash,
     )
 
 
@@ -854,4 +870,6 @@ def _artifact(row: AgentArtifactORM) -> AgentArtifact:
         row.size_bytes,
         row.storage_key,
         row.created_at,
+        row.source_url,
+        row.source_url_hash,
     )

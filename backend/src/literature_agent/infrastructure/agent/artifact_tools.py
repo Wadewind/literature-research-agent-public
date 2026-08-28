@@ -121,8 +121,9 @@ class AgentArtifactToolFactory:
             name: str,
             media_type: str,
             runtime: ToolRuntime[Any],
+            source_url: str | None = None,
         ) -> str:
-            """提交 /workspace/outputs/ 中已完成文件为本轮正式成果候选。"""
+            """提交 /workspace/outputs/ 中的成果；网络来源可附带 HTTP(S) source_url。"""
             permit = getattr(runtime.context, "runtime_permit", None)
             context_turn_run_id = getattr(runtime.context, "turn_run_id", None)
             if (
@@ -144,6 +145,7 @@ class AgentArtifactToolFactory:
                     path=path,
                     name=name,
                     media_type=media_type,
+                    source_url=source_url,
                 )
             except RuntimeExecutionControlError as exc:
                 raise ResearchAgentRuntimeError(

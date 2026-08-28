@@ -206,6 +206,7 @@ def test_policy_snapshot_is_immutable_and_defaults_to_denied_capabilities() -> N
     assert snapshot.allowed_tool_names == ()
     assert snapshot.allowed_skill_names == ()
     assert snapshot.network_enabled is False
+    assert snapshot.network_profile_id is None
     assert snapshot.sandbox_enabled is False
     assert snapshot.approval_required is True
     assert snapshot.snapshot_hash
@@ -263,6 +264,10 @@ def test_workspace_policy_version_only_changes_for_the_added_capability() -> Non
     assert workspace.max_repeated_tool_calls == 2
     assert workspace.max_input_tokens_per_model_call == 60_000
     assert workspace.max_output_tokens_per_model_call == 2_048
+    assert workspace.network_enabled is True
+    assert workspace.network_profile_id == "research-public-egress"
+    assert workspace.network_profile_version == "v1"
+    assert len(workspace.network_profile_hash or "") == 64
 
 
 def test_runtime_bindings_are_opaque_and_scoped() -> None:

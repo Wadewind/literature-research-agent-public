@@ -103,6 +103,15 @@
 > 保留 Sandbox 内部 loopback，同时在非-loopback 出口拒绝 private/metadata/宿主/LAN。raw
 > Browser/execute 可以访问同 Sandbox 的固定本地服务，但不能访问宿主 loopback；正式 URL/source 输入
 > 仍拒绝 localhost/loopback 字面地址和 DNS 解析结果。自研 egress 镜像并重构本地通道不符合精简交付。
+>
+> v21 变更：Slice 7 真实网络 Smoke 不把下载完整 2.2 MiB PDF 的链路速度作为安全门。固定 arXiv PDF
+> 改为发送 Range 请求、最多读取 64 KiB 后主动关闭，并校验 HTTP 200/206、PDF Content-Type、`%PDF`
+> magic 与前缀 SHA-256；这只证明有界 PDF 前缀可达，不声称完整 PDF 下载已经验证。
+>
+> v22 变更：Slice 7 第三轮显式真实 OpenSandbox Smoke 为 1 passed（39.67s），确认同 Sandbox loopback、
+> `wget` arXiv 首页、固定 `1706.03762` 最多 64 KiB PDF 前缀、Python/Node/Chromium `example.com`、
+> Playwright MCP 与 arXiv Search MCP，并拒绝 metadata、Docker gateway 和 `10.0.0.1`。前两轮分别暴露
+> 固定镜像无 `curl` 与完整 2.2 MiB PDF 超时；最终证据不扩张为完整 PDF、全部公网、协议级只读或生产隔离。
 
 ## 1. 文档用途
 
@@ -1725,7 +1734,7 @@ Workspace、Sandbox、arXiv 访问和文件交付的安全与可靠性；不建�
 - Project Chunk Index、Review Evidence Matrix 与 Artifact Context 工具；
 - Paper/Evidence、固定 Catalog Search/Playwright MCP、正常公网页面和正式资源下载；
 - `research-public-egress.v1`、覆盖 Sandbox 全部进程的统一公网允许与 private/metadata/宿主/LAN 拒绝、
-  正式资源下载隔离和来源记录；
+  raw 下载隔离和正式 Artifact 的声明来源目标记录；
 - 固定 Catalog/Profile、Runtime Tool Policy、硬预算和确定性循环保护；
 - Workspace/Sandbox 生命周期、文件传输和资源限制；
 - Agent Event、Usage、必要 ToolExecution 摘要和 Artifact 审计；
@@ -1733,7 +1742,10 @@ Workspace、Sandbox、arXiv 访问和文件交付的安全与可靠性；不建�
 - 平台安装、版本化、allowlist 控制的 Research Skills 与 owner-scoped 声明式 Skill 治理；
 - 在 ADR-0007 已验证的 OpenSandbox `execute` 基础上强化隔离、网络、资源、审计和用户可见治理；
 - AgentAttachment、WorkspaceSnapshot、AgentArtifactCandidate 与 AgentArtifact 的显式输入/内部状态/输出
-  边界，以及 `submit_artifact` 预览下载闭环。
+  边界，以及 `submit_artifact` v2 的可选声明来源目标、Manifest 与预览下载闭环。Slice 7 实现中
+  PolicySnapshot/SandboxLease 均冻结 `research-public-egress.v1` 的 ID/version/canonical hash；历史 NULL
+  Profile 保持可读但不得被新 v3 Turn 续租；已运行 v2 Turn 仅可在原 default-deny 边界恢复。声明 URL/DNS
+  分类不证明 Artifact 文件字节来自该 URL。
 - 最终 Agent UI 遵循 [`Web UI 应用壳与视觉重设计`](web-ui-app-shell-redesign.md)：左侧固定 Sidebar、轻量
   PageBar、桌面优先三栏工作区和浅色编辑风；功能切片不得重新依赖将被删除的旧 Header、
   `ProjectWorkspaceHeader` 或 `ProjectNav`。
@@ -1894,9 +1906,9 @@ Agent Extension 另需覆盖：
 - Deep Agents 的升级策略和兼容范围（首个 Adapter 版本已固定为 `0.7.8`）；
 - ADR-0006 已固定 ARQ Worker 内 Runtime；仍需确定真实 Provider/Sandbox 的进程资源和部署参数；
 - SDK Checkpoint/Store/压缩的升级策略，以及已固定 TTL/generation/fence 后的孤儿 Lease 清理；
-- Phase 5 固定 Playwright/arXiv MCP 进入精简产品 Profile；ADR-0012 已取代 ADR-0011 的固定 arXiv
-  公网范围，Slice 7 需确定 public-egress/private-network 的统一 egress 实现、Profile/hash/Lease 轮换和
-  正式资源限制参数；
+- Phase 5 固定 Playwright/arXiv MCP 已进入精简产品 Profile；ADR-0012 已取代 ADR-0011 的固定 arXiv
+  公网范围，Phase 6 Slice 7 已完成 public-egress/private-network 的统一 egress、Profile/hash/Lease
+  轮换、正式资源限制与固定目标真实 Smoke；
 - 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的基础版本/Profile 已由 Slice 7.4 固定；内容
   审核、归档/删除、配额、附件/脚本与 Prompt Injection 专项治理仍推迟；
 - OpenSandbox derived image 发布 digest、Server 部署和已固定 TTL/资源参数的真实强制效果；

@@ -1,13 +1,26 @@
 """SqlalchemyAgentRepository 的真实 PostgreSQL 幂等行为测试。"""
 
 import asyncio
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from sqlalchemy import func, select, update
 
+from literature_agent.application.agent_artifact_service import (
+    AGENT_ARTIFACT_MAX_TOTAL_BYTES_PER_TURN,
+    AgentArtifactServiceError,
+    AgentArtifactSubmissionService,
+)
 from literature_agent.application.agent_attachment_service import AgentAttachmentService
+from literature_agent.application.ports.agent_artifact_source import AgentArtifactSourceScope
+from literature_agent.application.ports.research_agent_runtime import RuntimeTurnRequest
+from literature_agent.application.ports.runtime_execution_control import (
+    RuntimeExecutionControl,
+)
 from literature_agent.domain.agent_attachment import AgentAttachmentStatus
 from literature_agent.domain.evidence import AnswerStatus, create_claim_set
 from literature_agent.domain.exceptions import (
@@ -17,11 +30,13 @@ from literature_agent.domain.exceptions import (
     RunConcurrentModificationError,
 )
 from literature_agent.domain.research_agent import (
+    AgentArtifactCandidate,
     AgentMessageRole,
     RuntimeSessionBinding,
     create_agent_artifact_candidate,
     create_agent_message,
 )
+from literature_agent.domain.run import RunStatus
 from literature_agent.infrastructure.persistence.agent_attachment_repository import (
     SqlalchemyAgentAttachmentRepository,
 )
@@ -31,11 +46,16 @@ from literature_agent.infrastructure.persistence.agent_repository import (
 from literature_agent.infrastructure.persistence.claim_set_repository import (
     SqlalchemyClaimSetRepository,
 )
+from literature_agent.infrastructure.persistence.event_repository import (
+    SqlalchemyEventRepository,
+)
 from literature_agent.infrastructure.persistence.models import (
     AgentAttachmentORM,
     AgentMessageAttachmentORM,
     AgentSessionORM,
+    RunORM,
 )
+from literature_agent.infrastructure.persistence.run_repository import SqlalchemyRunRepository
 from tests.fakes.agent_scenario import make_agent_service, seed_agent_scenario
 from tests.integration.conftest import db_engine as db_engine
 
@@ -73,6 +93,90 @@ def _attachment_service(scenario, storage):
         agent_repo_factory=SqlalchemyAgentRepository,
         attachment_repo_factory=SqlalchemyAgentAttachmentRepository,
         storage=storage,
+    )
+
+
+def _artifact_submission_service(scenario) -> AgentArtifactSubmissionService:
+    return AgentArtifactSubmissionService(
+        session_factory=scenario.factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        storage=_Storage(),
+        execution_control=cast(RuntimeExecutionControl, SimpleNamespace()),
+    )
+
+
+async def _running_artifact_request(
+    scenario, *, title: str, idempotency_key: str
+) -> RuntimeTurnRequest:
+    service = make_agent_service(scenario.factory)
+    agent_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title=title
+    )
+    submitted = await service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="验证 Artifact 预算",
+        review_output_id=scenario.matrix.output_id,
+        idempotency_key=idempotency_key,
+        correlation_id=idempotency_key,
+    )
+    async with scenario.factory() as session:
+        await session.execute(
+            update(RunORM)
+            .where(RunORM.run_id == submitted.run_id)
+            .values(status=RunStatus.RUNNING.value)
+        )
+        repo = SqlalchemyAgentRepository(session)
+        turn = await repo.get_turn_scoped(submitted.run_id, scenario.actor.owner_id)
+        assert turn is not None
+        context = await repo.get_context_snapshot(turn.context_snapshot_id)
+        policy = await repo.get_policy_snapshot(turn.policy_snapshot_id)
+        assert context is not None and policy is not None
+        await session.commit()
+    return RuntimeTurnRequest(
+        session_id=agent_session.session_id,
+        turn_run_id=submitted.run_id,
+        user_message_id=context.user_message_id,
+        user_message_content="验证 Artifact 预算",
+        context_snapshot=context,
+        policy_snapshot=policy,
+    )
+
+
+def _validated_candidate(request: RuntimeTurnRequest, index: int, size_bytes: int):
+    tool_call_id = f"budget-call-{index}"
+    content_hash = hashlib.sha256(
+        f"{request.turn_run_id}:{index}".encode()
+    ).hexdigest()
+    return create_agent_artifact_candidate(
+        candidate_id=f"budget-candidate-{request.turn_run_id}-{index}",
+        owner_id=request.context_snapshot.owner_id,
+        project_id=request.context_snapshot.project_id,
+        session_id=request.session_id,
+        turn_run_id=request.turn_run_id,
+        name=f"budget-{index}.txt",
+        media_type="text/plain",
+        content_ref=f"/workspace/outputs/budget-{index}.txt",
+        content_hash=content_hash,
+        size_bytes=size_bytes,
+    ).validate(
+        tool_call_id=tool_call_id,
+        storage_key=f"agent-artifacts/staging/{content_hash}",
+        sandbox_generation=1,
+        sandbox_fencing_token=1,
+    )
+
+
+def _artifact_scope(request: RuntimeTurnRequest) -> AgentArtifactSourceScope:
+    return AgentArtifactSourceScope(
+        request.context_snapshot.owner_id,
+        request.context_snapshot.project_id,
+        request.session_id,
+        request.turn_run_id,
+        1,
+        1,
     )
 
 
@@ -486,6 +590,87 @@ async def test_repository_rejects_candidate_id_collision_with_different_scope(db
         with pytest.raises(RunConcurrentModificationError):
             await repo.get_or_add_candidate(replace(candidate, owner_id="other-owner"))
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_artifact_count_budget_is_serialized_by_run_lock_and_replay_is_free(
+    db_engine,
+) -> None:
+    """第 8/9 项竞争必须只有一个提交；同一 tool_call 重放不重复计数。"""
+    scenario = await seed_agent_scenario(db_engine)
+    request = await _running_artifact_request(
+        scenario,
+        title="artifact-count-budget",
+        idempotency_key="artifact-count-budget-turn",
+    )
+    service = _artifact_submission_service(scenario)
+    scope = _artifact_scope(request)
+    for index in range(7):
+        await service._record_candidate(
+            request, scope, _validated_candidate(request, index, 1)
+        )
+
+    contenders = (
+        _validated_candidate(request, 7, 1),
+        _validated_candidate(request, 8, 1),
+    )
+    results = await asyncio.gather(
+        *(service._record_candidate(request, scope, value) for value in contenders),
+        return_exceptions=True,
+    )
+    failures = [value for value in results if isinstance(value, BaseException)]
+
+    successes = [value for value in results if isinstance(value, AgentArtifactCandidate)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    failure = failures[0]
+    success = successes[0]
+    assert isinstance(failure, AgentArtifactServiceError)
+    assert isinstance(success, AgentArtifactCandidate)
+    assert failure.code == "artifact_turn_budget_exceeded"
+
+    replayed = await service._record_candidate(request, scope, success)
+    assert replayed.candidate_id == success.candidate_id
+    async with scenario.factory() as session:
+        candidates = await SqlalchemyAgentRepository(session).list_candidates_scoped(
+            request.turn_run_id, scenario.actor.owner_id
+        )
+    assert len(candidates) == 8
+    assert all(value.status.value == "validated" for value in candidates)
+
+
+@pytest.mark.asyncio
+async def test_artifact_total_budget_rejects_bytes_above_fifty_mib_without_staged_row(
+    db_engine,
+) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    request = await _running_artifact_request(
+        scenario,
+        title="artifact-byte-budget",
+        idempotency_key="artifact-byte-budget-turn",
+    )
+    service = _artifact_submission_service(scenario)
+    scope = _artifact_scope(request)
+    ten_mib = 10 * 1024 * 1024
+    for index in range(5):
+        await service._record_candidate(
+            request, scope, _validated_candidate(request, index, ten_mib)
+        )
+
+    with pytest.raises(AgentArtifactServiceError) as caught:
+        await service._record_candidate(
+            request, scope, _validated_candidate(request, 5, 1)
+        )
+    assert caught.value.code == "artifact_turn_budget_exceeded"
+
+    async with scenario.factory() as session:
+        candidates = await SqlalchemyAgentRepository(session).list_candidates_scoped(
+            request.turn_run_id, scenario.actor.owner_id
+        )
+    assert len(candidates) == 5
+    assert sum(value.size_bytes for value in candidates) == (
+        AGENT_ARTIFACT_MAX_TOTAL_BYTES_PER_TURN
+    )
 
 
 @pytest.mark.asyncio

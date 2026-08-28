@@ -11,7 +11,13 @@ Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目
 Slice 5 固定能力、Project Context 与硬预算实现完成日期：2026-08-28。
 Slice 6 Workspace/Sandbox 与统一 egress 强化完成日期：2026-08-28。
 ADR-0012 将 Slice 7 从固定 arXiv Host allowlist 调整为版本化 Sandbox public-egress Profile 的日期：
-2026-08-28；当前尚未实现或验证该公网 Profile。
+2026-08-28；Slice 7 实现与显式真实 OpenSandbox public-egress Smoke 完成日期：2026-08-28。首轮 Smoke 已证明
+Sandbox 内部 loopback 可用，但随后因固定镜像没有 `curl` 而在第一条公网命令失败；验收已改用镜像固定
+存在的 `/usr/bin/wget`。第二轮已进一步证明 `wget` 可访问 arXiv 首页；固定 `1706.03762` 的完整
+2,215,244-byte PDF 在 30 秒 Sandbox 命令限制内未下载完成，Adapter 外层最终以 exit 124 结束，尚未执行
+private/MCP 步骤。这是全量下载耗时而不是网络拒绝证据；验收已改为同一 PDF 最多 64 KiB 的有界前缀，
+第三轮真实 Smoke 最终为 1 passed（39.67s）。该结果只证明本节列出的固定目标和进程边界，不证明完整
+PDF 下载、所有公网目标、协议级只读、secure runtime 或生产隔离。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -21,7 +27,7 @@ Slice 1 已完成文档契约审计，形成
 `STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
 Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件。Slice 3 已实现独立
 `BrowserControlLease`、Session/Turn/Sandbox generation/fence 互斥、短时 opaque ticket、平台 VNC
-WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API。Slice 6 已增加 fenced `RETIRED` Lease、持久化 Sandbox cleanup 补偿、Worker cleaner、固定本地 OpenSandbox Server 配置和统一 default-deny egress 的真实行为验证；下一开发切片为 Slice 7。
+WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API。Slice 6 已增加 fenced `RETIRED` Lease、持久化 Sandbox cleanup 补偿、Worker cleaner、固定本地 OpenSandbox Server 配置和统一 default-deny egress 的真实行为验证。Slice 7 已完成 public-egress Profile、Policy/Lease 冻结与漂移轮换、声明来源目标检查、Artifact 每 Turn 配额、Manifest 离线闭环与显式真实 OpenSandbox Smoke；下一步进入 Slice 8 UI/产品整合。
 
 Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
 PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
@@ -300,7 +306,8 @@ Project、Budget 和参数策略。
 - `search_public_resources`：调用固定版本 Search MCP 的审核 Tool 子集；
 - `fetch_public_page`：在当前 public-egress Profile 下用于研究读取正常公网页面；底层 transport 不提供
   协议级只读保证；
-- `download_public_resource`：下载到当前 Workspace；只有正式纳入平台资源时才执行大小/MIME/来源校验；
+- Browser/MCP/`execute` 可把公网文件下载到当前 Workspace；Slice 7 不另行注册
+  `download_public_resource` 平台 Tool，raw 下载也不自动成为产品资源；
 - `write_resource_manifest`：提交结构化 Manifest 候选；
 - `submit_artifact`：请求平台校验并提交 Workspace 中的明确文件；
 - `write_report`：生成 Markdown Artifact，不直接修改数据库正文或其他 Run 文件。
@@ -336,8 +343,8 @@ endpoint、transport、command、env、包版本或认证配置。
 - 当前 Project 内只读 Evidence 查询、`research-public-egress.v1` 公网 transport、Sandbox `execute` 和
   向当前 Project 提交受支持类型的新 Artifact 可以按固定 PolicySnapshot 自动执行；public-egress 只
   表示允许连接正常公网，不表示请求 method 或站点动作只读；
-- raw Workspace 下载可以留在 Sandbox；成为正式 Artifact、Project 资源或已验证来源前，必须经过大小、
-  数量/总量、超时、MIME/magic/hash 和来源校验，但首版不逐文件审批；
+- raw Workspace 下载可以留在 Sandbox；成为正式 Artifact、Project 资源或登记声明来源目标前，必须经过
+  大小、数量/总量、超时、MIME/magic/hash 和目标分类检查，但首版不逐文件审批；
 - 使用平台托管凭据、访问 private/metadata/宿主/LAN、Browser 任意宿主文件上传、覆盖/删除正式 Artifact
   等平台注册能力直接拒绝；平台不注册外部写专用 Tool，并以系统策略要求 Agent 只做研究读取，但 raw
   Browser/Shell/MCP 仍可能发送 POST/表单，当前精简交付不声称能在协议层拒绝；
@@ -362,10 +369,10 @@ default-deny 网络下用 Sandbox 内合成登录页验收；Slice 7 的 public-
 - 首版固定 `research-public-egress.v1`，正常公网 Host 无平台 URL allowlist；优先允许 `https`，确有公开
   站点兼容需要时允许普通公网 `http`；
 - Profile 是 L3/L4/FQDN 出网边界，只判断连接目标，不解析 HTTP method、body、表单或站点业务语义；
-  Browser/MCP/Shell/Python/curl 的公网请求因此不能被基础设施证明为只读；
+  Browser/MCP/Shell/Python/wget 的公网请求因此不能被基础设施证明为只读；
 - Sandbox network namespace 内部 loopback 必须保留，供 CDP、MCP、websockify/VNC 和固定本地服务使用；
   统一 egress 必须在非-loopback 出口阻断 link-local、private、multicast、unspecified、reserved、云元数据、
-  宿主/LAN/容器控制面目标，并覆盖 IPv4/IPv6 与 Browser/MCP/Shell/Python/curl 全部 Sandbox 进程；
+  宿主/LAN/容器控制面目标，并覆盖 IPv4/IPv6 与 Browser/MCP/Shell/Python/wget 全部 Sandbox 进程；
 - 正式 URL/source 输入仍拒绝 `localhost`、loopback 字面地址和 DNS 解析到 loopback 的 Host；raw
   Browser/`execute` 可访问同一 Sandbox 内部服务，但不能访问宿主 loopback；
 - 该强制效果不能只由 Tool 参数、配置字段或 Prompt 声明证明。Slice 7 必须核对 pinned SDK `0.1.15`、
@@ -385,10 +392,11 @@ default-deny 网络下用 Sandbox 内合成登录页验收；Slice 7 的 public-
   文件头、扩展名、大小和内容哈希；
 - 未知归档、可执行文件、脚本、宏文档和嵌套压缩默认拒绝或隔离，不自动执行/解压；
 - 下载文件名只作展示，Storage Key 和 Workspace Path 由平台生成；
-- 公网下载先进入 `/workspace/downloads/`；它仍是 raw Workspace 文件，不是已验证来源、Project
+- 公网下载先进入 `/workspace/downloads/`；它仍是 raw Workspace 文件，不是已证明来源、Project
   Paper/Evidence 或可下载 Artifact。只有明确业务纳入或 Artifact 提交流程能把文件带出 Sandbox；
 - Browser/下载不携带用户 Cookie、数据库凭据、模型 Key 或内部服务 Token；
-- 来源记录包含请求 URL、规范化 URL、最终 URL、获取时间、Content-Type、大小和哈希。
+- 当前 `submit_artifact` 只可选登记经规范化、DNS 公网分类的声明 URL/hash；它不证明文件字节来自该
+  URL。最终 URL、获取时间和响应 Content-Type 只有未来平台受控抓取 Tool 实际观测后才能作为来源事实。
 
 ## Workspace 和 Sandbox 安全
 
@@ -402,7 +410,7 @@ default-deny 网络下用 Sandbox 内合成登录页验收；Slice 7 的 public-
   pandas、numpy、matplotlib 和必要字体，不允许动态安装包；
 - Slice 6 的当前 Lease 默认禁网；Slice 7 新建/轮换到 `research-public-egress.v1` 后允许正常公网
   HTTP(S)，同时统一拒绝 private/metadata/宿主/LAN，策略覆盖 Chromium、Playwright/Search MCP、
-  Python、Shell、`curl` 等全部 Sandbox 进程，并记录有界策略摘要；
+  Python、Shell、`wget` 等全部 Sandbox 进程，并记录有界策略摘要；
 - 限制 CPU、内存、PID、文件数、单文件大小、墙钟时间和输出大小；当前本地 Docker runtime 的 overlay
   物理磁盘硬配额没有请求级实现，依靠 WorkspaceSnapshot 128 文件/10 MiB 单文件/50 MiB 总量和 Artifact
   提交上限约束业务带出量，不把它表述为物理磁盘隔离；
@@ -640,15 +648,35 @@ ADR-0007/0008 本身当作测试结果：
    超时后 Backend 仍可用、输出、60 秒 TTL/重复销毁，以及 Bash/Python/Node/Chromium/Playwright/Search
    MCP 的统一 default-deny；公网仍
    关闭。Docker overlay 物理磁盘硬配额未实现并作为明确限制保留；
-7. **Sandbox 公网与正式资源安全**：实现 `research-public-egress.v1`，让 Browser/MCP/Shell/Python/curl
+7. **Sandbox 公网与正式资源安全（已完成）**：实现
+   `research-public-egress.v1`，让 Browser/MCP/Shell/Python/wget
    访问任意正常公网 HTTP(S)，保留 Sandbox namespace 内部 loopback，并统一拒绝非-loopback
    private/link-local/reserved/metadata/宿主/LAN 出口；正式 URL/source 输入继续拒绝 localhost/loopback；冻结
    PolicySnapshot 与 SandboxLease 的 Profile version/hash，策略变化强制轮换 generation。raw Workspace
-   下载不冒充业务资源；正式 Artifact、Project 资源或已验证来源才执行数量/总量/超时/大小/MIME/magic/
-   hash/来源校验和 effect ledger。离线恶意 Fixture 通过后，显式运行 Sandbox 内部 loopback、arXiv、
+   下载不冒充业务资源；正式 Artifact、Project 资源或登记声明来源目标才执行数量/总量/超时/大小/
+   MIME/magic/hash/目标分类和 effect ledger。离线恶意 Fixture 通过后，显式运行 Sandbox 内部 loopback、arXiv、
    非 arXiv 公网与非-loopback 私网拒绝 Smoke；不建设通用 URL Host allowlist、HTTP method/业务语义代理
    或逐次网络审批，明确 raw 公网通道
-   不具备协议级只读保证；
+   不具备协议级只读保证。当前代码已冻结 canonical Profile hash，PolicySnapshot/Lease 都保存
+   ID/version/hash，旧 NULL Profile 或 hash 漂移会退役旧 Lease 并递增 generation；OpenSandbox Adapter
+   只接受固定 Profile，并翻译为 `defaultAction=allow` 加非-loopback 特殊网段 deny。正式
+   `submit_artifact` v2 可选声明有界 HTTP(S) `source_url`，在读 Sandbox 文件前检查 URL 和全部 DNS
+   结果是否指向正常公网，Candidate/Artifact 保存规范化 URL/hash，Manifest 用
+   `declared_public_target_checked` 明确表示“声明目标已分类”，不表示文件来源已证明；raw Workspace 文件仍不可通过
+   公开下载 API。普通离线测试已覆盖 URL/DNS、Profile/hash、Schema 和 generation 漂移；
+   v2 且 default-deny 的已运行 Turn 可继续在原冻结边界恢复；v3 Turn 遇到历史 NULL Profile Lease 必须
+   退役并递增 generation，其他未知 default-deny PolicySnapshot 稳定 fail closed；
+   `AGENT_RUN_OPENSANDBOX_PUBLIC_EGRESS_TESTS=1` 的首轮真实 Smoke 只确认内部 loopback；固定镜像没有
+   `curl`，第一条公网命令因此失败且没有形成网络拒绝证据。改用 `/usr/bin/wget` 后的第二轮已通过
+   arXiv 首页，但 2,215,244-byte 完整 PDF 超过 30 秒命令限制并由 Adapter 以 exit 124 结束，尚未进入
+   private/MCP 检查；这不是网络拒绝。Smoke 现保留 `wget` 的 Shell 公网/private 检查，并以 Python
+   Range 请求最多读取同一固定 PDF 的 64 KiB 前缀，接受 HTTP 200/206，校验 Content-Type、`%PDF`
+   magic 和 SHA-256 后主动关闭。第三轮显式真实 Smoke 为 1 passed（39.67s）：同一 Sandbox 内部
+   loopback 可用；`wget` 可访问 arXiv 首页；固定 `1706.03762` 最多 64 KiB 前缀返回 HTTP 200/206 且
+   Content-Type、`%PDF` magic、SHA-256 通过；Python、Node、Chromium 可访问 `example.com`；Playwright MCP
+   `browser_navigate` 与 arXiv Search MCP `search_papers` 成功；metadata `169.254.169.254`、Docker
+   gateway `:8080` 和 `10.0.0.1` 均被拒绝。主智能体独立离线复核合计 137 passed，其中 PostgreSQL/
+   Alembic 26 passed。该证据不扩张为完整 PDF、全部公网、协议级只读或生产隔离声明；
 8. **产品整合、验证与复盘**：严格遵循 `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
    4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新，再整合 Turn Detail、
    Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；随后按 ADR-0009 完成本地 noVNC 真实人工
@@ -708,16 +736,16 @@ ADR-0007/0008 本身当作测试结果：
 1. ADR-0007 已选 OpenSandbox；Slice 6 已固定并验证本地 SDK/Server/image digest、TTL、CPU/内存/PID、
    命令/输出、统一禁网与孤儿清理补偿。尚未解决的是 Docker overlay 物理磁盘硬配额、secure runtime、
    公网多租户部署和镜像发布仓库；
-2. ADR-0012 已取代 ADR-0011 的 arXiv 精确 allowlist；Slice 7 必须以 pinned SDK 0.1.15、Server 0.2.2、
-   egress image v1.1.4/commit 前缀 `34653f7` 确认“正常公网允许、private/metadata/宿主/LAN 拒绝”的
-   具体统一 egress 实现，并冻结 Profile/hash/Lease generation 契约；
+2. ADR-0012 已取代 ADR-0011 的 arXiv 精确 allowlist；Slice 7 已以 pinned SDK 0.1.15、Server 0.2.2、
+   egress image v1.1.4/commit 前缀 `34653f7` 完成版本化 Profile/hash/Lease generation 实现，并以固定
+   公网/private/metadata/宿主目标完成显式 Smoke。该证据不代表所有公网目标或生产隔离；
 3. 硬 Budget 已固定为 Slice 5 精简 Profile；Provider `usage_metadata` 可得时 best-effort 渐进记账，
    不可得时保持 NULL，不用近似值冒充精确计费。模型 reservation 只限制逻辑步骤；若 Provider 已接收
    请求后响应/Worker 丢失，重试仍可能重复付费且缺少 usage，checkpoint/reconcile 不能提供物理调用
    Exactly Once。费用与告警平台延期；
-4. Workspace TTL 与清理补偿已在 Slice 6 实现；仍需决定 Agent Artifact 总量上限和 staging GC 策略。
-   单文件上限已固定为 10 MiB，扩展名、声明 MIME、magic/UTF-8/JSON/CSV/SVG 主动内容校验已在 Slice 2
-   实现；
+4. Workspace TTL 与清理补偿已在 Slice 6 实现；Slice 7 已固定每 Turn 最多 8 项、正式候选总量最多
+   50 MiB，并在锁定 Run 的事务内串行复核。仍未实现 Storage staging orphan GC；单文件上限固定为
+   10 MiB，扩展名、声明 MIME、magic/UTF-8/JSON/CSV/SVG 主动内容校验已在 Slice 2 实现；
 5. 当前 pinned Chrome 镜像可复用的 VNC 能力，以及 noVNC/websockify 或等价画面组件的精确版本、认证
    代理拓扑和镜像/前端锁文件影响；
 6. 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的评测、禁用和内容安全方式。
@@ -741,6 +769,8 @@ private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/�
   通用 Coding Agent 或生产级安全浏览器；
 - public-egress 只强制目标网络边界，不检查 HTTP method 或 Browser 业务语义；平台不提供外部写 Tool/
   凭据并要求只做研究读取，但不能保证 raw Browser/Shell/MCP 不会发送 POST、提交表单或触发远端写入；
+- 平台不注册安装 Tool，固定 Prompt 禁止动态安装；但 raw Shell 在公网可下载并执行用户态文件，当前精简
+  交付没有 syscall/内容代理级动态代码阻断，因此这仍是 trusted-local 风险而不是已强制安全结论；
 - Research Agent Extension 可以独立禁用，Demo-ready Core Research Backend v1 仍应完整运行。
 - Slice 2 的 Sandbox Adapter 在读取前拒绝目录、symlink/device 和超限文件，并在 Storage/下载边界复核
   size/hash；这不是无 TOCTOU 竞争的生产级恶意文件扫描器。staging blob 的总量配额和孤儿 GC 留给后续

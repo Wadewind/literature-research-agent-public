@@ -1,6 +1,7 @@
 # Research Agent 精简安全契约
 
-> 状态：Phase 6 Slice 1–6 已确认；Slice 7–8 的实施契约。
+> 状态：Phase 6 Slice 1–7 已确认；Slice 7 显式真实 OpenSandbox Smoke 已通过；Slice 8
+> 为实施契约。
 >
 > 基线：`b0ec3f4`（2026-08-28）。本文把已经由 Phase 5 代码/测试证明的事实与 Phase 6 目标事实分开；
 > “目标”“必须”“验收”不表示对应能力已经实现或经过真实环境验证。
@@ -33,7 +34,7 @@
 | Runtime Port | `ResearchAgentRuntime` 固定为 `execute_turn`、`resume_turn`、`cancel_turn`、`reconcile_turn`、`collect_turn_result` 五个方法；只使用项目 DTO，不暴露 Deep Agents/LangGraph 类型 |
 | Runtime 映射 | Session 与 opaque SDK Thread binding 对应；Turn 与 opaque Runtime execution/checkpoint binding 对应；已有 `RuntimeExecution` lease/fence 和跨进程 reconcile-first 恢复 |
 | 产品上下文 | `ContextSnapshot` 固化 owner/Project/Session/Turn、消息水位、精确 ChunkSet 引用、明确选择的 `ReviewOutput.output_id`、既有 Artifact 引用和本轮明确授权的 Attachment 版本/hash；不保存正文或 SDK State |
-| 产品策略 | `PolicySnapshot` 固化 Tool/Skill/MCP 引用、网络/Sandbox 开关、`approval_required`、模型/工具次数；workspace Profile 为 `network_enabled=false`、`sandbox_enabled=true`、`approval_required=false` |
+| 产品策略 | `PolicySnapshot` 固化 Tool/Skill/MCP 引用、网络/Sandbox 开关、`approval_required`、模型/工具次数；当前 workspace Profile 为 `network_enabled=true`、`network_profile_id=research-public-egress`、`network_profile_version=v1`、固定 canonical hash、`sandbox_enabled=true`、`approval_required=false`；历史 Snapshot 可保留 NULL Profile/default-deny 事实 |
 | Project Tool | 两个固定只读 Project Context Tool 已按 Turn/Context/Policy 作用域读取精确 ChunkSet 与指定 Evidence Matrix，并使用 `ToolExecution` 记录参数 hash、状态与有界结果 |
 | Sandbox | 每个 Session 最多一个短 TTL OpenSandbox Lease；记录 owner/Project/Session、holder Turn、generation 和 fencing token；不跨 owner/Session 共享。过期/脏/关闭 Session 使用 fenced `RETIRED` 与 cleanup fact 做事务外幂等回收 |
 | Workspace | `WorkspaceSnapshot` 有 `STAGED/STABLE`，只允许 STABLE 恢复；上限为 128 个文件、单文件 10 MiB、总计 50 MiB；内容在 Storage，元数据在 PostgreSQL |
@@ -44,8 +45,8 @@
 | Agent Attachment | owner/Project/Session scoped 不可变 `AgentAttachment(version=1)` 已实现上传、列表、受限删除、消息有界有序引用、`agent-context.v2` 冻结和事务外 fenced `/workspace/inbox` 物化；已引用附件不可删除 |
 | API/Event | 已有 Session/Message/Turn、MCP/Skill 配置和通用 Run cancel/Event API；Event 只保存筛选后的 Agent/Tool 生命周期摘要 |
 
-这些事实不证明 OpenSandbox 是生产级隔离，不证明 Sandbox public-egress、公共下载或公网多租户安全已经
-实现。Slice 2 的正式 Agent Artifact 与 Slice 4 的 AgentAttachment 都是本地受限文件能力，不代表已完成
+这些事实与 Slice 7 固定目标 Smoke 不证明 OpenSandbox 是生产级隔离、完整 PDF 下载、全部公网可达或
+公网多租户安全。Slice 2 的正式 Agent Artifact 与 Slice 4 的 AgentAttachment 都是本地受限文件能力，不代表已完成
 生产级恶意文件扫描、隔离检疫、无 TOCTOU 竞争或 Storage GC；
 Slice 3 的真实 Smoke 只证明未配置 API key/secure runtime 的 trusted-local OpenSandbox 功能链路，不是
 noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
@@ -59,7 +60,7 @@ noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
 | `AgentAttachment`、上传/删除、消息引用、ContextSnapshot 冻结与 `/workspace/inbox` 物化 | Slice 4（已完成） |
 | 固定能力 Schema/hash 漂移拒绝、完整调用前 scope 检查、脱敏 Tool 摘要和硬预算 | Slice 5 |
 | 实测资源限制、TTL/清理补偿、Workspace 重建与覆盖全部 Sandbox 进程的 default-deny egress | Slice 6（已完成；Docker overlay 物理磁盘硬配额除外） |
-| 版本化 Sandbox public-egress、private/metadata/宿主/LAN 拒绝、正式资源校验/来源和 Prompt Injection 验证 | Slice 7 |
+| 版本化 Sandbox public-egress、private/metadata/宿主/LAN 拒绝、正式资源校验/来源和 Prompt Injection 验证 | Slice 7（已完成固定目标真实 Smoke；不代表生产隔离） |
 | App Shell、完整 UI/E2E、故障测试、评测、运行文档和完成复盘 | Slice 8 |
 
 未完成切片不得为了方便把目标改写成已有能力，也不得用 Mock/配置字段存在代替真实强制效果。
@@ -246,7 +247,7 @@ SDK Thread/Checkpoint、Sandbox、Workspace、raw MCP 配置、网络策略或 f
 | 3（已实现） | `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/browser-control`；`WS /api/v1/agent-browser-controls/view` | HTTP 开始/查询/结束只使用业务 Session ID；仅开始返回短时 ticket 和平台 view URL；WS 用 subprotocol 传 ticket；不返回 VNC/noVNC/CDP/MCP/OpenSandbox endpoint |
 | 4（已实现） | `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/attachments`；Message 增加有界 attachment ID 引用 | owner 来自 ActorContext；不接受物理路径；已被历史 Turn 引用的输入不可篡改 |
 | 5（已实现） | `GET /api/v1/agent-turn-runs/{run_id}/tool-executions` 与预算/Usage 投影 | 仅安全摘要、版本/hash、计数、状态/时长；不返回原始参数/结果/endpoint |
-| 7 | `GET /api/v1/agent-turn-runs/{run_id}/manifest` | 只返回规范化来源元数据和验证状态，不返回网页/PDF 全文或内部请求凭据 |
+| 7 | `GET /api/v1/agent-turn-runs/{run_id}/manifest` | 只返回规范化声明 URL/hash、目标分类状态和文件元数据，不返回网页/PDF 全文或内部请求凭据，也不声称文件字节来源已证明 |
 
 若实现需要改变路径或 DTO，责任切片必须先更新本文和 Phase 6 Spec。不得为后续功能扩大五方法
 `ResearchAgentRuntime`；文件、Browser 和治理通过 Application Port、Tool Adapter 和持久业务事实组合，
@@ -434,6 +435,21 @@ Artifact 或业务成功。
 
 ### Slice 7：Sandbox 公网与正式资源
 
+当前实现字段与接口：
+
+- `agent_policy_snapshots.network_profile_id/version/hash` 与
+  `agent_sandbox_leases.network_profile_id/version/hash` 均允许历史 NULL；新研究 Turn 必须使用完整固定引用；
+- Profile ID/version/hash、镜像或租约状态任一不匹配时，旧 Sandbox 不得 renew，必须通过既有 cleanup fact
+  退役并以 `generation + 1` 重建；
+- `submit_artifact` v2 新增可选 `source_url`；平台在 Sandbox/Storage I/O 和数据库事务之外规范化 URL、
+  解析 DNS，并拒绝 localhost、loopback、private、link-local、reserved、metadata 及混合 DNS 回答；
+- Candidate/AgentArtifact 只保存规范化 `source_url` 与 SHA-256，
+  `GET /api/v1/agent-turn-runs/{run_id}/manifest` 只返回声明目标/文件元数据；已声明 URL 的状态为
+  `declared_public_target_checked`，只表示 URL/DNS 被分类为正常公网，不证明文件字节来自该 URL；未声明
+  URL 的本地生成 Artifact 标为 `not_provided`；Candidate 的 `VALIDATED` 只表示文件校验通过；
+- `/workspace/downloads` 和 WorkspaceSnapshot 仍是 Runtime 内部状态；只有通过 fenced `submit_artifact`
+  的 `/workspace/outputs` 普通文件才进入正式 Artifact/公开下载边界。
+
 - 固定 `research-public-egress.v1` 允许任意正常公网 HTTP(S)，不维护平台 URL Host allowlist 或逐次网络
   审批；保留 Sandbox network namespace 内部 loopback 供 CDP/MCP/websockify/VNC 与固定本地服务使用，
   统一 egress 必须在非-loopback 出口拒绝 private/link-local/unspecified/multicast/reserved、云元数据、
@@ -444,20 +460,33 @@ Artifact 或业务成功。
   写 Tool/Workflow、不提供平台凭据并要求研究读取，但验收不得把 raw Browser/MCP/Shell 描述为只读；
 - `PolicySnapshot` 冻结 Profile ID/version/hash，`SandboxLease` 保存相同 Profile/hash；Profile 变化、
   deny→public 或任意不匹配都必须轮换 generation，不能续租旧环境；
-- 网络策略覆盖 Browser、MCP、Shell、Python、Node 和 curl。必须核对 pinned `opensandbox==0.1.15`、
+- 网络策略覆盖 Browser、MCP、Shell、Python、Node 和固定 `/usr/bin/wget`。必须核对 pinned `opensandbox==0.1.15`、
   Server `0.2.2`、egress image `v1.1.4`/upstream commit 前缀 `34653f7` 的上游与本地行为；配置字段存在
   不能替代真实强制证据。上游 nft 规则已确认在 CIDR deny set 前固定 `accept` loopback interface；项目
   选择保留现有 CDP/MCP/VNC 拓扑，而不自研 egress 镜像。固定版本做不到 public allow + 非-loopback
   private deny 时停止实现；
 - Browser/MCP/execute 下载可留在 `/workspace/downloads/`，但 raw Workspace 文件不是正式业务资源，
-  不可直接由公开 API 下载；只有成为 `AgentArtifact`、Project 资源或平台已验证来源时，才检查数量/
-  总量、超时、大小、扩展名、MIME、magic、hash 和来源；
+  不可直接由公开 API 下载；只有成为 `AgentArtifact`、Project 资源或登记声明来源目标时，才检查数量/
+  总量、超时、大小、扩展名、MIME、magic、hash 和目标分类；当前没有平台抓取字节与 URL 的绑定证明；
 - 外部网络、Sandbox 和 Storage I/O 不进入数据库事务；稳定 invocation/resource ID、effect ledger、唯一
   约束和 fence 收敛重复/响应丢失，不宣称 Exactly Once；
-- 离线恶意 Fixture 全部通过后，才显式运行 Sandbox 内部 loopback、arXiv 页面/PDF、至少一个非 arXiv
-  公网目标以及非-loopback private/metadata/宿主拒绝 Smoke。真实 Smoke 不进入普通 CI，不调用真实模型，
+- 离线恶意 Fixture 全部通过后，才显式运行 Sandbox 内部 loopback、arXiv 页面、同一固定 arXiv PDF 的
+  最多 64 KiB 有界前缀（接受 HTTP 200/206，并校验 `Content-Type`、`%PDF` magic 和 SHA-256）、至少一个
+  非 arXiv 公网目标以及非-loopback private/metadata/宿主拒绝 Smoke。真实 Smoke 不进入普通 CI，不调用真实模型，
   不使用用户 Cookie，也不绕过
   CAPTCHA/付费墙/robots/授权；Smoke 只证明目标网络边界，不证明 HTTP 业务动作只读。
+
+历史恢复语义：三种 `agent-policy.project-research-*.v2` Snapshot 保持原 default-deny 网络边界，可恢复或
+复用 NULL Profile Lease；新建 v3 Turn 一律冻结 public-egress 三元组，遇到历史 NULL Profile Lease 必须
+轮换 generation，不能把旧环境原地升格为公网。其他未知或不完整 Policy/Profile 组合稳定 fail closed。
+
+2026-08-28 的主智能体独立离线复核合计 137 passed，其中 PostgreSQL/Alembic 26 passed。第三轮显式真实
+Smoke 为 1 passed（39.67s），实际覆盖同一 Sandbox 内部 loopback、`wget` arXiv 首页、固定
+`1706.03762` 最多 64 KiB 前缀的 HTTP 200/206、Content-Type、`%PDF` 与 SHA-256、Python/Node/Chromium
+访问 `example.com`、Playwright MCP `browser_navigate`、arXiv Search MCP `search_papers`；metadata
+`169.254.169.254`、Docker gateway `:8080` 与 `10.0.0.1` 均被拒绝。此前两次分别因固定镜像缺少
+`curl`、完整 2,215,244-byte PDF 超过 30 秒 Sandbox/45 秒 Adapter 限制而未到达全部断言；两者是 Smoke
+设计修正证据，不是网络拒绝。通过结果不声称完整 PDF、所有公网、协议级只读或生产隔离。
 
 ### Slice 8：产品整合
 

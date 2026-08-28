@@ -75,7 +75,7 @@ class _Storage:
 
 
 class _Service(AgentArtifactSubmissionService):
-    def __init__(self, storage):
+    def __init__(self, storage, *, source_resolver=None):
         super().__init__(
             session_factory=lambda: None,
             run_repo_factory=lambda _: None,
@@ -83,6 +83,7 @@ class _Service(AgentArtifactSubmissionService):
             event_repo_factory=lambda _: None,
             storage=storage,
             execution_control=SimpleNamespace(),
+            source_resolver=source_resolver,
         )
         self.recorded = None
         self.rejected = None
@@ -123,6 +124,61 @@ async def test_submit_validates_download_and_records_only_small_fact() -> None:
     assert candidate.content_hash == hashlib.sha256(content).hexdigest()
     assert list(storage.values.values()) == [content]
     assert service.recorded == candidate
+
+
+@pytest.mark.asyncio
+async def test_submit_validates_and_freezes_public_source_before_file_io() -> None:
+    class _Resolver:
+        async def resolve(self, hostname, port):
+            assert (hostname, port) == ("arxiv.org", 443)
+            return ("151.101.3.42",)
+
+    content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    storage = _Storage()
+    service = _Service(storage, source_resolver=_Resolver())
+
+    candidate = await service.submit(
+        request=_request(),
+        permit=RuntimeExecutionPermit("turn-1", "owner-1", "attempt-1", 1),
+        source=_Source(content),
+        tool_call_id="call-source",
+        path="/workspace/outputs/chart.png",
+        name="chart.png",
+        media_type="image/png",
+        source_url="https://arxiv.org/pdf/2401.00001?token=must-not-persist",
+    )
+
+    assert candidate.source_url == "https://arxiv.org/pdf/2401.00001"
+    assert candidate.source_url_hash is not None
+    assert "token" not in candidate.source_url
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_private_dns_answer_before_file_and_storage_io() -> None:
+    class _Resolver:
+        async def resolve(self, hostname, port):
+            return ("93.184.216.34", "127.0.0.1")
+
+    class _UnreadableSource(_Source):
+        async def read_regular_file(self, path, *, max_bytes):
+            raise AssertionError("恶意来源不得读取 Sandbox 文件")
+
+    storage = _Storage()
+    service = _Service(storage, source_resolver=_Resolver())
+    with pytest.raises(AgentArtifactServiceError) as caught:
+        await service.submit(
+            request=_request(),
+            permit=RuntimeExecutionPermit("turn-1", "owner-1", "attempt-1", 1),
+            source=_UnreadableSource(b""),
+            tool_call_id="call-private-source",
+            path="/workspace/outputs/chart.png",
+            name="chart.png",
+            media_type="image/png",
+            source_url="https://example.com/paper",
+        )
+
+    assert caught.value.code == "source_target_forbidden"
+    assert storage.values == {}
 
 
 @pytest.mark.asyncio

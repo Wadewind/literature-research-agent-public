@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from literature_agent.application.ports.research_agent_runtime import RuntimeTurnRequest
 from literature_agent.application.ports.storage import Storage
 from literature_agent.domain.agent_attachment import is_agent_attachment_inbox_path
+from literature_agent.domain.agent_network import RESEARCH_PUBLIC_EGRESS_PROFILE
 from literature_agent.domain.workspace_snapshot import (
     WORKSPACE_MAX_FILE_BYTES,
     WORKSPACE_MAX_FILES,
@@ -23,6 +24,14 @@ from literature_agent.domain.workspace_snapshot import (
     WorkspaceSnapshotStatus,
     create_workspace_snapshot,
     is_workspace_file_path,
+)
+
+_LEGACY_DEFAULT_DENY_POLICY_VERSIONS = frozenset(
+    {
+        "agent-policy.project-research-workspace.v2",
+        "agent-policy.project-research-workspace-mcp.v2",
+        "agent-policy.project-research-capabilities.v2",
+    }
 )
 
 
@@ -171,6 +180,9 @@ class SandboxLeaseRecord:
     generation_started_at: datetime
     expires_at: datetime
     updated_at: datetime
+    network_profile_id: str | None = None
+    network_profile_version: str | None = None
+    network_profile_hash: str | None = None
 
     def as_dirty(self) -> SandboxLeaseRecord:
         """取消/失败后禁止当前物理环境继续承载新 Turn。"""
@@ -226,6 +238,9 @@ class SandboxProvider(Protocol):
         memory_mib: int,
         network_enabled: bool,
         metadata: dict[str, str],
+        network_profile_id: str | None = None,
+        network_profile_version: str | None = None,
+        network_profile_hash: str | None = None,
     ) -> Any: ...
     async def connect(self, sandbox_id: str) -> Any: ...
     async def renew(self, sandbox_id: str, *, ttl_seconds: int) -> None: ...
@@ -259,8 +274,32 @@ class SandboxWorkspaceManager:
     async def acquire(self, request: RuntimeTurnRequest) -> SandboxWorkspaceLease:
         """复用健康 generation，或在 DIRTY/过期时轮换并恢复稳定快照。"""
         policy = request.policy_snapshot
-        if not policy.sandbox_enabled or policy.network_enabled:
+        if not policy.sandbox_enabled:
             raise ValueError("当前 Capability Profile 不允许 OpenSandbox Workspace")
+        requested_profile = (
+            policy.network_profile_id,
+            policy.network_profile_version,
+            policy.network_profile_hash,
+        )
+        public_profile = (
+            RESEARCH_PUBLIC_EGRESS_PROFILE.profile_id,
+            RESEARCH_PUBLIC_EGRESS_PROFILE.version,
+            RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash,
+        )
+        legacy_default_deny = (
+            policy.policy_version in _LEGACY_DEFAULT_DENY_POLICY_VERSIONS
+            and policy.network_enabled is False
+            and requested_profile == (None, None, None)
+        )
+        if policy.network_enabled and requested_profile == public_profile:
+            network_enabled = True
+        elif legacy_default_deny:
+            # 已经开始的 v2 Turn 继续在其冻结的 default-deny 边界恢复；
+            # v3 Turn 永远不会走到这里，也不会把旧 Lease 升格为公网环境。
+            network_enabled = False
+        else:
+            raise ValueError("当前 Capability Profile 的 Network Profile 未注册")
+        profile_id, profile_version, profile_hash = requested_profile
         now = self._clock()
         current = await self._repository.get_lease(request.session_id)
         if current is not None:
@@ -269,6 +308,9 @@ class SandboxWorkspaceManager:
             current is not None
             and current.status is SandboxLeaseStatus.ACTIVE
             and current.image_ref == self._image_ref
+            and current.network_profile_id == policy.network_profile_id
+            and current.network_profile_version == policy.network_profile_version
+            and current.network_profile_hash == policy.network_profile_hash
             and current.expires_at > now
             and current.generation_started_at
             + timedelta(seconds=self._generation_max_seconds)
@@ -315,8 +357,22 @@ class SandboxWorkspaceManager:
             ttl_seconds=self._lease_ttl_seconds,
             cpu=1,
             memory_mib=2048,
-            network_enabled=False,
-            metadata={"session_id": request.session_id, "generation": str(generation)},
+            network_enabled=network_enabled,
+            network_profile_id=profile_id,
+            network_profile_version=profile_version,
+            network_profile_hash=profile_hash,
+            metadata={
+                "session_id": request.session_id,
+                "generation": str(generation),
+            }
+            | (
+                {
+                    "network_profile": f"{profile_id}.{profile_version}",
+                    "network_profile_hash": profile_hash,
+                }
+                if network_enabled
+                else {"network_profile": "legacy-default-deny"}
+            ),
         )
         try:
             await self._restore_latest(request.session_id, backend)
@@ -333,6 +389,9 @@ class SandboxWorkspaceManager:
                 generation_started_at=now,
                 expires_at=now + timedelta(seconds=self._lease_ttl_seconds),
                 updated_at=now,
+                network_profile_id=profile_id,
+                network_profile_version=profile_version,
+                network_profile_hash=profile_hash,
             )
             expected = None if current is None else current.fencing_token
             replaced_cleanup = (
