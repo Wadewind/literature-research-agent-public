@@ -131,6 +131,16 @@ OpenSandbox Server 独立于 `scripts/dev.sh` 启动。项目版本化配置是
 控制面、Docker bridge、无 host volume、drop ALL、no-new-privileges、PID 256 和固定 execd/egress digest。
 它提供本地 default-deny 行为证据，但未配置 secure runtime，不是公网多用户隔离方案。
 
+Phase 6 Slice 7 的目标网络配置由 ADR-0012 固定为 `research-public-egress.v1`，不是 `.env` 或用户设置：
+Sandbox 内允许任意正常公网 HTTP(S)，统一拒绝 loopback/private/link-local/reserved/metadata/宿主/LAN。
+`PolicySnapshot` 与 `SandboxLease` 将保存 Profile version/hash，策略变化必须轮换 generation。该 Profile
+在 Slice 7 实现与真实 Smoke 通过前仍是目标事实；当前已验证事实仍是 Slice 6 的 default-deny。用户不能
+提交 Host allowlist、代理、DNS、例外地址或认证 Secret。
+
+该 Profile 只强制 L3/L4/FQDN 目标边界，不解析 HTTP method、body、表单或站点业务语义。平台不会注册
+外部写专用 Tool，也不提供平台凭据，产品策略要求 Agent 只做研究读取；但 raw Browser/Shell/MCP 仍可能
+发出 POST 等写请求，当前配置不能宣称协议级只读。
+
 ## 3. 版本化 Review Profile
 
 新建 Review Run 使用 `review-default.v2`，并把以下配置连同 Profile/Prompt/Workflow 版本保存到不可变
@@ -207,6 +217,10 @@ Evidence Matrix 的 UI 选择最终绑定具体 `review_output_id`；Project Ind
 - Event/日志不保存 Secret、完整 Prompt、网页正文、论文全文或大型 Tool 输出；
 - 禁止宿主 Shell/Python、`LocalShellBackend`、Docker Socket 和宿主工作区挂载；
 - Sandbox 镜像、资源/网络策略、MCP transport/endpoint/command/env 与 Tool Schema。
+
+正常公网 Host 不作为逐项用户配置；平台固化的是 public-egress Profile 及 private/metadata/宿主/LAN
+拒绝规则。Browser/MCP/execute 的 raw Workspace 下载不是正式业务资源，只有带出 Sandbox 成为 Artifact、
+Project 资源或已验证来源时才执行平台文件与来源校验。
 
 Deep Agents `permissions`、Skill 或 MCP 自身配置不能替代上述平台校验。
 

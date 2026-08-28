@@ -130,7 +130,9 @@ Proxy/websockify 核验 RFB 握手，并让 Playwright MCP 在同一 Sandbox 操
 - 连接异常若服务进程无法执行 `finally`，`viewer_connection_id` 最迟随最长 5 分钟业务 Lease 过期，当前无
   独立后台 sweeper；
 - 不支持多人共享控制、view-only observer、同 Turn interrupt、浏览器文件上传、录屏或跨 generation 登录；
-- 公网仍为 default-deny；固定 arXiv egress、URL/SSRF 与下载安全属于 Slice 6–7。
+- 本模块完成时公网仍为 default-deny；当前 Phase 6 Slice 7 已由 ADR-0012 调整为版本化 public-egress、
+  private/metadata/宿主/LAN 拒绝与正式资源校验。该后续决定不改写本模块已运行 Smoke 的历史范围，也不
+  提供 HTTP/Browser 业务语义级只读保证。
 - 当前本地 OpenSandbox 未配置 API key/secure runtime，真实 Smoke 仅是 trusted-local 功能证据。
 - OpenSandbox Server 0.1.15 在客户端正常以 WebSocket code 1000 关闭后仍可能记录
   `Unexpected websocket proxy failure`/`ClientDisconnected`；这是当前 trusted-local 上游 noisy shutdown

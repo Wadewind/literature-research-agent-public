@@ -7,10 +7,11 @@
 
 ## 1. 用途与适用范围
 
-本文落实 [Phase 6 Spec](../learning-journal/phases/phase-06-research-agent-security.md) 与
-[ADR-0011](../learning-journal/decisions/0011-adopt-phase-06-lean-delivery.md) 的精简交付，供后续代码切片直接
-实现和审查。它只适用于本地、单人演示的 Project-scoped Research Workspace Agent，不是公网多租户或
-通用 Coding Agent 的安全声明。
+本文落实 [Phase 6 Spec](../learning-journal/phases/phase-06-research-agent-security.md)、
+[ADR-0011](../learning-journal/decisions/0011-adopt-phase-06-lean-delivery.md) 的精简交付与
+[ADR-0012](../learning-journal/decisions/0012-use-sandbox-public-egress-profile.md) 的 Sandbox 公网范围，供
+后续代码切片直接实现和审查。它只适用于本地、单人演示的 Project-scoped Research Workspace Agent，
+不是公网多租户、生产级安全浏览器或通用 Coding Agent 的安全声明。
 
 规范词语含义如下：
 
@@ -43,7 +44,7 @@
 | Agent Attachment | owner/Project/Session scoped 不可变 `AgentAttachment(version=1)` 已实现上传、列表、受限删除、消息有界有序引用、`agent-context.v2` 冻结和事务外 fenced `/workspace/inbox` 物化；已引用附件不可删除 |
 | API/Event | 已有 Session/Message/Turn、MCP/Skill 配置和通用 Run cancel/Event API；Event 只保存筛选后的 Agent/Tool 生命周期摘要 |
 
-这些事实不证明 OpenSandbox 是生产级隔离，不证明固定 arXiv 公网、公共下载或公网多租户安全已经
+这些事实不证明 OpenSandbox 是生产级隔离，不证明 Sandbox public-egress、公共下载或公网多租户安全已经
 实现。Slice 2 的正式 Agent Artifact 与 Slice 4 的 AgentAttachment 都是本地受限文件能力，不代表已完成
 生产级恶意文件扫描、隔离检疫、无 TOCTOU 竞争或 Storage GC；
 Slice 3 的真实 Smoke 只证明未配置 API key/secure runtime 的 trusted-local OpenSandbox 功能链路，不是
@@ -58,7 +59,7 @@ noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
 | `AgentAttachment`、上传/删除、消息引用、ContextSnapshot 冻结与 `/workspace/inbox` 物化 | Slice 4（已完成） |
 | 固定能力 Schema/hash 漂移拒绝、完整调用前 scope 检查、脱敏 Tool 摘要和硬预算 | Slice 5 |
 | 实测资源限制、TTL/清理补偿、Workspace 重建与覆盖全部 Sandbox 进程的 default-deny egress | Slice 6（已完成；Docker overlay 物理磁盘硬配额除外） |
-| 固定 arXiv 公网、URL/DNS/IP/Redirect/SSRF、下载隔离/校验/来源和 Prompt Injection 验证 | Slice 7 |
+| 版本化 Sandbox public-egress、private/metadata/宿主/LAN 拒绝、正式资源校验/来源和 Prompt Injection 验证 | Slice 7 |
 | App Shell、完整 UI/E2E、故障测试、评测、运行文档和完成复盘 | Slice 8 |
 
 未完成切片不得为了方便把目标改写成已有能力，也不得用 Mock/配置字段存在代替真实强制效果。
@@ -143,8 +144,8 @@ DNS 结果、下载文件名/MIME/字节、Sandbox 生成文件和迟到的 Prov
 | Session/Message/配置 API | IDOR、跨 Project 引用、任意 Runtime/MCP 配置、重复提交 | ActorContext、scoped repository、extra-forbid DTO、稳定幂等键 |
 | Project Context Tool | 模型伪造 scope、跨 Snapshot 检索、全文泄漏 | 服务端注入 scope、精确 ContextSnapshot refs、有界 Evidence、Citation 校验 |
 | MCP/Skill | Schema 漂移、供应链替换、Prompt Injection、Secret 泄漏 | 固定 Catalog/version/hash、allowlist 投影、只读 Skill、调用前策略复核 |
-| Sandbox `execute` | 宿主逃逸、资源耗尽、网络绕过、读取 Secret、生成危险文件 | 非 root 固定镜像、无宿主挂载、资源上限、统一 egress、显式文件提交 |
-| Browser/URL | SSRF、DNS rebinding、Redirect 到私网、下载炸弹、凭据外泄 | 精确 arXiv allowlist、连接目标绑定、每跳复核、隔离下载和文件策略 |
+| Sandbox `execute` | 宿主逃逸、资源耗尽、网络绕过、读取 Secret、生成危险文件 | 非 root 固定镜像、无宿主挂载、资源上限、public-egress/private-network 边界、显式文件提交 |
+| Browser/URL | Prompt Injection、访问 private/metadata/宿主/LAN、下载炸弹、凭据外泄、意外 POST/表单/远端写入 | L3/L4/FQDN private deny、无平台 Secret、无外部写专用 Tool、正式资源文件策略；不宣称协议级只读 |
 | Browser 人工控制 | 跨 Session 画面、旧 generation 控制、人/Agent 竞争、凭据落库 | BrowserControlLease、短时代理票据、generation/fence、Turn 边界互斥 |
 | Attachment/Artifact（均为已实现的本地受限业务事实） | 路径穿越、symlink、MIME 欺骗、越权下载、重复发布 | opaque ID/path、regular-file 校验、magic/hash/大小、staging 和成功 CAS |
 | 重试/恢复 | 同一消息重复追加、重复 Tool/Artifact、旧 Worker 晚到提交 | reconcile-first、稳定 binding/effect/candidate ID、唯一约束、fence/CAS |
@@ -187,20 +188,24 @@ Browser operation completed != Event/Run committed
 
 ## 6. 精简 Capability Profile 决策矩阵
 
-本阶段没有“可等待审批”的动作。策略结果只有 `AUTO_EXECUTE` 或 `DENY`；`PolicySnapshot`、Catalog 和
-Infrastructure 约束必须同时允许，任一层不匹配即 fail closed。
+本阶段没有“可等待审批”的平台注册动作。平台注册能力的策略结果只有 `AUTO_EXECUTE` 或 `DENY`；
+`PolicySnapshot`、Catalog 和 Infrastructure 约束必须同时允许，任一层不匹配即 fail closed。
+
+`research-public-egress.v1` 的 `AUTO_EXECUTE` 只表示 L3/L4/FQDN 层允许连接正常公网，不表示 HTTP method
+或 Browser/MCP/Shell 业务动作只读。平台不注册外部写专用 Tool、不提供平台凭据，并以系统策略要求 Agent
+只做研究读取；raw 公网通道仍可能发送 POST、提交表单或触发远端写入，当前不能归入可强制的 `DENY`。
 
 | 能力/动作 | 决策 | 前置条件 |
 |---|---|---|
 | 当前 ContextSnapshot 内 Project Paper/Chunk/Evidence/Matrix 只读 | 自动执行 | owner/Project/Session/Turn 闭包、精确版本引用、有界输出 |
-| 固定 arXiv 搜索、摘要页、PDF 只读 | 自动执行（Slice 7 后） | 版本化精确主机 allowlist、统一 egress、URL/SSRF、预算与来源记录全部通过 |
-| Sandbox 离线 `execute` 与固定依赖绘图 | 自动执行 | 当前 Lease generation/fence、禁网、取消/预算预检、资源上限、无动态安装 |
+| 正常公网 HTTP(S) transport | 自动执行（Slice 7 后） | `research-public-egress.v1`、统一 private/metadata/宿主/LAN 拒绝、当前 Lease Profile/hash、预算全部通过；不代表协议级只读 |
+| Sandbox `execute` 与固定依赖绘图 | 自动执行 | 当前 Lease generation/fence/Profile、取消/预算预检、资源上限、无动态安装 |
 | 受支持类型的新 Agent Artifact | 自动执行 | 当前 Project/Turn、显式 `/workspace/outputs/` 路径、校验、不可变新 ID、Turn 成功 |
 | 用户通过 Attachment ID 提供受支持输入 | 自动执行 | 当前 owner/Project/Session、ContextSnapshot 冻结、受控 inbox 路径和文件校验 |
 | 用户在两个 Turn 之间控制当前 Chromium | 自动执行 | 无活动 Turn、健康且 generation 一致的 Lease、短 TTL 控制权、无原始 endpoint |
 | 平台或 Agent 持有/注入用户名、密码、Cookie、验证码、OAuth Token | 直接拒绝 | 不进入 Approval |
-| 表单提交、发帖、发送消息、上传到外站、修改远程资源、购买/发布 | 直接拒绝 | 不进入 Approval |
-| arXiv 精确 allowlist 外的网络、用户/MCP/网页动态增加主机 | 直接拒绝 | 不以用户确认放宽 |
+| 平台外部写专用 Tool/Workflow | 不注册/不支持 | 产品策略禁止，平台不提供凭据；raw Browser/Shell/MCP 可能发起等价网络请求，当前无协议级强制 |
+| private/metadata/宿主/LAN 目标，或用户/MCP/网页修改网络 Profile/代理/DNS | 直接拒绝 | 不以用户确认放宽 |
 | 用户提交 MCP endpoint/URL/transport/command/env/版本/认证 | 直接拒绝 | 只能引用平台固定 Catalog |
 | 用户提交 Tool 代码、可执行 Skill、二进制 Skill、系统 Prompt | 直接拒绝 | owner Skill 仅声明式 Markdown/text |
 | 选择 Sandbox 镜像、挂载宿主路径、使用宿主 Shell/Python | 直接拒绝 | Sandbox 配置只由部署者固定 |
@@ -216,7 +221,7 @@ Infrastructure 约束必须同时允许，任一层不匹配即 fail closed。
   不是“高风险动作也可自动执行”；
 - 旧 Snapshot 按创建时的值保持可读和可审计，不批量回写；
 - `WAITING_INPUT` 继续服务既有通用 Run/Review 能力，Phase 6 不用它模拟 Tool Approval；
-- 将来开放任何外部写、副作用或凭据委托前，必须新增正式业务 Approval 聚合、一次性 decision token、
+- 将来提供正式外部写、副作用或凭据委托产品能力前，必须新增能在受控 Tool 层强制的业务 Approval 聚合、一次性 decision token、
   `WAITING_INPUT`/resume、过期、取消和 Event 审计；Deep Agents 内部 interrupt 不能成为唯一审批事实。
 
 ## 7. API 契约：当前与目标增量
@@ -272,7 +277,7 @@ SDK 类型继续停留在 infrastructure。
 | 4（已实现） | 不为上传泛化 Run-bound Event；`agent_message_accepted` 仅增加 `attachment_count`，不记录内容或物理路径 |
 | 5（已实现） | 新 reservation 产生只含计数/上限的 `agent_budget_updated`；Tool/Policy 拒绝以稳定 Runtime 错误进入既有 Turn 失败事件链，不另存 raw 参数/结果 |
 | 6 | `agent_workspace_created`、`agent_workspace_cleanup_requested`、`agent_workspace_cleaned` 及安全清理失败摘要 |
-| 7 | 有界网络/下载允许或拒绝摘要、Resource Manifest 提交结果；事件名称在实现前冻结 |
+| 7 | public-egress Profile/拒绝摘要、正式资源校验与 Resource Manifest 提交结果；事件名称在实现前冻结 |
 
 Event payload 只能包含稳定业务 ID、版本/hash、类型、状态、计数、大小、时长、策略错误码和安全说明。
 Event、日志、Trace、ToolExecution 和公开 DTO 均不得保存或返回：
@@ -427,15 +432,26 @@ Artifact 或业务成功。
   WorkspaceSnapshot 的 128 文件、单文件 10 MiB、总 50 MiB 与 Artifact 上限属于业务提交边界，不冒充
   物理磁盘隔离；本地 Server 未配置 secure runtime，不能据此声称生产隔离。
 
-### Slice 7：固定 arXiv 公网与下载
+### Slice 7：Sandbox 公网与正式资源
 
-- 初始精确主机只有 `arxiv.org`、`export.arxiv.org`；真实 Redirect 若需要新主机，必须先保存证据并发布
-  新 allowlist 版本；
-- URL/IP/DNS/Redirect 测试覆盖 IPv4/IPv6 编码、私网/loopback/link-local/metadata、DNS rebinding、
-  HTTPS 降级和 Redirect 到私网；连接目标必须绑定已校验解析结果；
-- 下载先进入隔离临时区，检查数量、超时、大小、扩展名、MIME、magic 和 hash，再记录来源；
-- 离线恶意 Fixture 全部通过后，才显式运行真实 arXiv 搜索/页面/PDF Smoke，并同时证明非 allowlist 拒绝；
-- 真实 Smoke 不进入普通 CI，不使用用户 Cookie，不绕过 CAPTCHA/付费墙/robots/授权。
+- 固定 `research-public-egress.v1` 允许任意正常公网 HTTP(S)，不维护平台 URL Host allowlist 或逐次网络
+  审批；统一 egress 必须拒绝 loopback/private/link-local/unspecified/multicast/reserved、云元数据、
+  宿主/LAN/容器控制面；
+- Profile 只提供 L3/L4/FQDN 目标边界，不检查 HTTP method、body、表单或站点业务语义；平台不注册外部
+  写 Tool/Workflow、不提供平台凭据并要求研究读取，但验收不得把 raw Browser/MCP/Shell 描述为只读；
+- `PolicySnapshot` 冻结 Profile ID/version/hash，`SandboxLease` 保存相同 Profile/hash；Profile 变化、
+  deny→public 或任意不匹配都必须轮换 generation，不能续租旧环境；
+- 网络策略覆盖 Browser、MCP、Shell、Python、Node 和 curl。必须核对 pinned `opensandbox==0.1.15`、
+  Server `0.2.2`、egress image `v1.1.4`/upstream commit 前缀 `34653f7` 的上游与本地行为；配置字段存在
+  不能替代真实强制证据，固定版本做不到 public allow + private deny 时停止实现；
+- Browser/MCP/execute 下载可留在 `/workspace/downloads/`，但 raw Workspace 文件不是正式业务资源，
+  不可直接由公开 API 下载；只有成为 `AgentArtifact`、Project 资源或平台已验证来源时，才检查数量/
+  总量、超时、大小、扩展名、MIME、magic、hash 和来源；
+- 外部网络、Sandbox 和 Storage I/O 不进入数据库事务；稳定 invocation/resource ID、effect ledger、唯一
+  约束和 fence 收敛重复/响应丢失，不宣称 Exactly Once；
+- 离线恶意 Fixture 全部通过后，才显式运行 arXiv 页面/PDF、至少一个非 arXiv 公网目标以及 private/
+  metadata 拒绝 Smoke。真实 Smoke 不进入普通 CI，不调用真实模型，不使用用户 Cookie，也不绕过
+  CAPTCHA/付费墙/robots/授权；Smoke 只证明目标网络边界，不证明 HTTP 业务动作只读。
 
 ### Slice 8：产品整合
 
@@ -465,16 +481,19 @@ Artifact 或业务成功。
 Phase 6 完成后仍不得宣称：
 
 - 公网多租户、零信任部署、生产级恶意文件扫描、SLA、完整备份/灾难恢复已经完成；
-- 支持任意互联网、任意 MCP/Tool/Skill、动态依赖、通用 Coding Agent、多 Agent 或长期 Memory；
-- 支持通用 Approval Center、OAuth/Credential Vault、外部写操作或不可逆操作；
+- 支持 private/metadata/宿主/LAN、用户自定义网络策略、任意 MCP/Tool/Skill、动态依赖、通用 Coding
+  Agent、多 Agent 或长期 Memory；
+- 提供通用 Approval Center、OAuth/Credential Vault 或正式外部写/不可逆产品能力；raw 公网通道可能
+  发起写请求属于已知风险，不得反向表述为已强制拒绝；
 - OpenSandbox、容器、Prompt 或 Deep Agents `permissions` 单独构成完整安全边界；
 - Runtime/Tool/Storage/Sandbox/Artifact 实现 Exactly Once；
 - 人工登录态会跨 Sandbox generation 恢复，或平台能安全托管用户凭据；
 - arXiv 下载自动成为 Project Paper/Evidence，或 Agent 输出等同经过人工审核的系统性文献综述；
 - 合成页面、Fake MCP、Fake Model 或本地 Docker Smoke 能证明真实公网/Provider 的全部行为。
 
-以下能力明确延期：完整 Registry/Catalog 管理后台、通用 Approval/Interrupt UI、OAuth/Credential、外部写、
-开放互联网、Browser 任意文件上传、Artifact 覆盖/删除、可执行 Skill、动态包安装、Sandbox 集群调度/
+以下能力明确延期：完整 Registry/Catalog 管理后台、通用 Approval/Interrupt UI、OAuth/Credential、正式
+外部写产品能力及其强制、能解析 HTTP/Browser 动作的通用 egress proxy、Browser 任意文件上传、Artifact
+覆盖/删除、可执行 Skill、动态包安装、Sandbox 集群调度/
 预热/扩缩容、精确计费、组织 RBAC、公网多租户、SLA 和完整容灾。
 
 ## 13. 审查清单
@@ -488,6 +507,7 @@ Phase 6 完成后仍不得宣称：
 - 取消后不会发起新模型/Tool/MCP/Browser/Sandbox/Storage 发布；
 - Event/日志/Trace/API 没有 Prompt、思考、全文、Secret、raw endpoint 或大型输出；
 - 普通测试离线、确定性、零外部费用；真实 Smoke 明确 opt-in；
+- public-egress 测试只据实声明目标网络允许/拒绝，不把 L3/L4/FQDN 结果写成 HTTP/Browser 协议级只读；
 - 没有混入后续切片、无关重构、依赖升级或延期范围；
 - 新 UI 组件遵循 App Shell 强制契约。
 
@@ -499,6 +519,7 @@ Phase 6 完成后仍不得宣称：
 - [ADR-0009：跨 Turn 人工浏览器控制](../learning-journal/decisions/0009-use-turn-boundary-browser-control.md)
 - [ADR-0010：显式 Agent 文件交换](../learning-journal/decisions/0010-use-explicit-agent-file-exchange.md)
 - [ADR-0011：Phase 6 精简交付](../learning-journal/decisions/0011-adopt-phase-06-lean-delivery.md)
+- [ADR-0012：Sandbox 公网 egress Profile](../learning-journal/decisions/0012-use-sandbox-public-egress-profile.md)
 - [Agent Runtime 业务契约笔记](../learning-journal/modules/agent-runtime-contract.md)
 - [Agent Sandbox Workspace 笔记](../learning-journal/modules/agent-sandbox-workspace.md)
 - [Agent MCP 配置笔记](../learning-journal/modules/agent-mcp-configuration.md)

@@ -75,6 +75,13 @@ Agent 绘图 Artifact 与同 generation 合成页面人工操作，再处理输�
 egress、URL/SSRF 与 PDF 下载安全，以及最小硬预算、Sandbox 清理和资源限制；通用 Approval Center、
 开放互联网、OAuth/Credential、完整 Registry 和生产级 Sandbox 平台明确延期。
 
+上述固定 arXiv 网络范围随后被
+[ADR-0012：Sandbox 公网 egress Profile](decisions/0012-use-sandbox-public-egress-profile.md)定向取代：
+Slice 7 改为允许任意正常公网 HTTP(S)，统一拒绝 private/metadata/宿主/LAN，并只在文件离开 Sandbox
+成为正式业务资源时执行来源与文件校验。ADR-0011 的其他精简交付边界继续有效；Phase 5 与 Slice 6 的
+default-deny 结果仍是当时的历史证据。该 Profile 只约束 L3/L4/FQDN 目标，不保证 raw Browser/Shell/MCP
+协议级只读；平台不注册外部写 Tool、不提供凭据，把意外写请求记录为当前精简交付的已知风险。
+
 [Phase 6：Research Agent 与安全强化](phases/phase-06-research-agent-security.md)已进入实施。Slice 1 已完成
 契约缺口审计并形成 [`Research Agent 精简安全契约`](../spec/research-agent-security-contract.md)：明确区分
 Phase 5 已验证事实与后续目标，冻结 owner/Project/Session/Turn/Sandbox generation/Workspace/Artifact
@@ -91,5 +98,7 @@ API key/secure runtime 的 trusted-local 功能验证，未验证 noVNC 人工�
 已完成 [Agent 输入附件](modules/agent-input-attachments.md)：不可变业务附件、消息/快照引用、事务外 fenced inbox 物化、WorkspaceSnapshot 隔离与壳层无关 UI 已落地。Slice 5 的
 [Agent Tool 策略与硬预算](modules/agent-tool-policy.md)也已实现：全部允许 Tool 的冻结契约、持久化
 Usage/reservation、取消与 fence 复核、墙钟/单次调用/输出/循环上限及脱敏查询 API 均已形成离线和
-PostgreSQL 证据；下一切片为 Workspace/Sandbox 与统一 egress 强化。最终 UI 同时受
+PostgreSQL 证据。Slice 6 已完成 Workspace/Sandbox Lease 退役、清理补偿、资源约束和 default-deny
+统一 egress 的真实验证；下一切片按 ADR-0012 实现版本化 public-egress/private-network 边界和正式资源
+校验。最终 UI 同时受
 [`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-redesign.md)约束，前置功能组件必须保持壳层无关。

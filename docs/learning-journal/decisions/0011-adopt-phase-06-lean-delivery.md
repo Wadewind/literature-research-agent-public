@@ -4,6 +4,11 @@
 - 日期：2026-08-28
 - 决策者：项目维护者
 
+> 2026-08-28 修订：ADR-0012 仅取代本文的固定 arXiv 精确主机网络范围。Phase 6 精简交付、固定能力、
+> 硬预算、Sandbox/Artifact 边界和其他延期项继续有效。以下固定 arXiv 内容作为原决策历史保留，不再是
+> Slice 7 的当前实施契约。本文“外部写直接拒绝”也只适用于平台注册能力；ADR-0012 的 raw 公网通道
+> 不解析 HTTP/Browser 业务语义，不能提供协议级只读保证。
+
 ## 背景
 
 Phase 5 已验证 Project-scoped AgentSession/Turn、Deep Agents Runtime、OpenSandbox Workspace、固定 MCP、

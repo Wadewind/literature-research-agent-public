@@ -4,6 +4,9 @@
 - 日期：2026-08-28
 - 决策者：项目维护者
 
+> 2026-08-28 网络范围对齐：人工控制、凭据和 Turn 互斥决策不变；公共站点验收改为遵循 ADR-0012 的
+> 版本化 public-egress/private-network Profile，不再要求固定站点 Host allowlist。
+
 ## 背景
 
 Phase 5 已验证固定 Playwright MCP 可以连接 AgentSession 专属 OpenSandbox 中的同一个 Chromium，操作
@@ -53,9 +56,10 @@ Turn N：Agent 导航到需要人工操作的页面并结束回答
 Profile、Cookie 或 Local Storage 纳入 `/workspace` 快照，也不跨 generation 自动恢复登录。Lease 过期、
 环境污染、取消后轮换或 Provider 丢失时，用户可能需要重新登录。
 
-人工控制不绕过网络策略。当前 default-deny Sandbox 只能用于本地合成页面验收；访问真实固定站点必须先
-完成 Phase 6 的统一 egress、URL/DNS/Redirect/SSRF 和域名策略。平台不自动绕过 CAPTCHA、付费墙、站点
-限制，也不允许 Agent 借人工登录执行未审批的对外写操作。
+人工控制不绕过网络策略。Slice 3 的 default-deny Sandbox 只用于本地合成页面验收；访问真实公共站点
+必须先完成 ADR-0012 的统一 public-egress/private-network 真实验证。平台不自动绕过 CAPTCHA、付费墙、
+站点限制，也不提供借人工登录执行对外写操作的产品 Tool/Workflow。ADR-0012 的 egress 不解析 Browser
+业务语义，因此这一产品策略不等于协议级强制拒绝。
 
 ## 实施顺序
 
@@ -65,7 +69,8 @@ Profile、Cookie 或 Local Storage 纳入 `/workspace` 快照，也不跨 genera
 3. **Agent UI**：在 Research Agent 右侧面板加入“打开浏览器/接管/完成操作”，并明确当前是人工还是
    Agent 控制；断线、刷新、过期和 generation 变化可恢复到稳定 UI 状态；
 4. **本地真实验收**：只用 Sandbox 内合成登录页验证用户输入后下一 Turn 的 `browser_snapshot` 能识别；
-5. **公共站点验收**：仅在统一 egress 和固定域名策略完成后，使用专用测试账号显式运行，不进入普通 CI。
+5. **公共站点验收**：仅在统一 public-egress/private-network 策略完成后，使用专用测试账号显式运行，
+   不进入普通 CI。
 
 第二阶段若确有“同一 Turn 等待用户”的必要，再单独引入 `WAITING_INPUT + BrowserTakeoverRequest +
 LangGraph interrupt/resume`；它不是首版前置条件。

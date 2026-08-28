@@ -128,7 +128,8 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
 
 - 已验证本地 Docker OpenSandbox proxy Host/header 和单 generation endpoint；未验证远程/Kubernetes
   Provider、跨主机 endpoint、secure runtime 或长时间稳定性；
-- Sandbox 仍默认禁网，未验证真实 arXiv 查询、公共浏览、redirect/SSRF、统一 egress 或下载扫描；
+- 本模块完成时 Sandbox 仍默认禁网，未验证真实 arXiv 查询、公共浏览、public-egress/private-network 或
+  正式资源校验；后续 public-egress 只约束目标网络，不会把 raw MCP/Browser 请求强制为协议级只读；
 - OpenSandbox 创建固定传入 `entrypoint=['/entrypoint']`，以保留 pinned Chrome 镜像的 Chromium/execd
   启动 recipe；该值是平台镜像契约，不允许用户配置；
 - 用户不能配置任意开源 MCP，只能选择平台固定的两个 Catalog 条目；OAuth/Secret 委托不在 Phase 5；
@@ -138,8 +139,8 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
   Tool 副作用仍受 invocation 账本约束。
 - 当前派生镜像和 Web UI 没有面向用户的 noVNC 画面、Browser 控制权状态或鉴权代理；用户不能操作
   Session Chromium，也没有 Cookie/Profile 跨 generation 恢复。ADR-0009 已将首版固定为两个 Turn
-  之间、同一 generation 的人工控制，先以 Sandbox 内合成登录页验证；公共登录仍由 Phase 6 统一 egress
-  和 URL 安全阻塞。
+  之间、同一 generation 的人工控制，先以 Sandbox 内合成登录页验证；ADR-0012 后的公共站点验收仍由
+  Phase 6 Slice 7 的 public-egress/private-network 真实证据阻塞。
 - `browser_file_upload` 继续不在 Catalog allowlist。用户附件和网页上传必须经过 ADR-0010 的业务
   Attachment ID 与后续平台包装 Tool，不能直接让模型选择 Workspace 路径。
 
