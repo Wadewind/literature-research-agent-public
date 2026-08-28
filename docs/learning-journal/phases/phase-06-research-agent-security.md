@@ -26,7 +26,16 @@ Project 四模式索引导航、版本化折叠偏好和 232px/56px 桌面栏，
 `npm run test:e2e -- phase-05.spec.ts` 为 1 passed（36.1s），并验证独立滚动的 Evidence Margin 可展开、
 定位候选成果。另一项 Phase 4 失败为来源列表期望 4、实际 3；现有证据指向后台 Fixture/时序，尚未形成
 与 Sidebar 的因果证据，因此保持原业务断言，留待后续完整回归复核。完整五流程 E2E 与桌面截图走查仍未
-闭环，本记录不宣称视觉验收已经完成。`ProjectWorkspaceHeader`/`ProjectNav` 仍按顺序保留到子切片 8.2。
+闭环，本记录不宣称 Slice 8 的全部视觉验收已经完成。
+Slice 8 的轻页头子切片 8.2 完成日期：2026-08-28；全部主页面、Run/Document 诊断页和错误态已切换到
+56px `PageBar`，项目四模式导航只保留在 `AppSidebar`，旧 `ProjectWorkspaceHeader`、`ProjectNav`、
+Hero 与重复模式入口已经删除。TDD 首先得到 PageBar 模块缺失失败，完成后定向 3 passed；完整
+`npm test` 为 25 files / 164 passed，`npm run build` 与 `git diff --check` 通过。完整离线 E2E 为
+4 passed / 1 failed：Phase 1/2/3/5 通过；Phase 4 仍为来源列表期望 4、实际 3 的既有 Fixture/时序失败，
+未修改业务断言。1440×1000 截图走查覆盖首页、综述和研究助手；研究助手实测 PageBar 56px、document
+`scrollHeight` 等于 1000px viewport、三栏未横向裁剪。浏览器仅另外记录 favicon 404 和无选中 Session
+首页既有的空 `session_id` 附件请求 404；两者不属于 8.2 行为，未在本切片顺便修复。深色 Agent welcome、
+Review workbench 与视觉 token 仍按顺序保留到 8.3/8.4，不能据此宣称最终视觉重设计完成。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -686,7 +695,7 @@ ADR-0007/0008 本身当作测试结果：
    `browser_navigate` 与 arXiv Search MCP `search_papers` 成功；metadata `169.254.169.254`、Docker
    gateway `:8080` 和 `10.0.0.1` 均被拒绝。主智能体独立离线复核合计 137 passed，其中 PostgreSQL/
    Alembic 26 passed。该证据不扩张为完整 PDF、全部公网、协议级只读或生产隔离声明；
-8. **产品整合、验证与复盘（进行中：应用壳子切片 8.1 已实现）**：严格遵循
+8. **产品整合、验证与复盘（进行中：应用壳子切片 8.1、轻页头子切片 8.2 已实现）**：严格遵循
    `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
    4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新，再整合 Turn Detail、
    Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；随后按 ADR-0009 完成本地 noVNC 真实人工

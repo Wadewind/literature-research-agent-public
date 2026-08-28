@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { Run } from "../api/types";
+import PageBar from "../components/PageBar";
 import { useRunEvents } from "../runs/useRunEvents";
 import { isCancellable, isTerminal, statusLabel } from "../runs/runStatus";
 
@@ -41,44 +42,36 @@ export default function RunDetailPage() {
     run && typeof run.input_payload.version_id === "string"
       ? run.input_payload.version_id
       : null;
-  const runTitle = run?.run_type === "rag_answer" ? "RAG 回答 Run" : "导入与索引 Run";
+  const runTitle = !run
+    ? "正在读取 Run…"
+    : run.run_type === "rag_answer" ? "RAG 回答 Run" : "导入与索引 Run";
 
   if (runQuery.isError) {
     return (
-      <section className="panel">
-        <p className="error-text">{errorMessage(runQuery.error)}</p>
-        <Link to="/">返回 Project 列表</Link>
-      </section>
+      <div className="stack">
+        <PageBar breadcrumbs={[{ label: "研究项目", to: "/" }, { label: `Run ${runId.slice(0, 8)}` }]} title="Run 不可用" />
+        <section className="panel">
+          <p className="error-text">{errorMessage(runQuery.error)}</p>
+          <Link to="/">返回 Project 列表</Link>
+        </section>
+      </div>
     );
   }
 
   return (
     <div className="stack">
+      <PageBar
+        breadcrumbs={run ? [{ label: "文献库", to: `/projects/${run.project_id}` }, { label: `Run ${runId.slice(0, 8)}` }] : [{ label: `Run ${runId.slice(0, 8)}` }]}
+        title={runTitle}
+        actions={run ? <div className="page-bar-action-group"><span className={statusBadgeClass(run.status)}>{statusLabel(run.status)}</span>{isCancellable(run.status) ? <button type="button" className="danger" onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>{cancelMutation.isPending ? "取消中…" : "取消 Run"}</button> : null}</div> : undefined}
+      />
       <section className="panel">
-        <p className="breadcrumb">
-          {run && <Link to={`/projects/${run.project_id}`}>文献库</Link>} / Run{" "}
-          <span className="mono">{runId.slice(0, 8)}</span>
-        </p>
-        <h1>
-          {runTitle} <span className="mono muted">{runId.slice(0, 8)}</span>
-        </h1>
         {run && (
           <div className="run-meta">
-            <span className={statusBadgeClass(run.status)}>{statusLabel(run.status)}</span>
             <span className="muted">
               类型 {run.run_type} · 事件 {stream.lastSequence} 条 ·{" "}
               {stream.closed ? "流已收束" : "实时跟随中"}
             </span>
-            {isCancellable(run.status) && (
-              <button
-                type="button"
-                className="danger"
-                onClick={() => cancelMutation.mutate()}
-                disabled={cancelMutation.isPending}
-              >
-                {cancelMutation.isPending ? "取消中…" : "取消 Run"}
-              </button>
-            )}
           </div>
         )}
         {cancelMutation.isError && (

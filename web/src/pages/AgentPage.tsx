@@ -51,7 +51,7 @@ import AgentAttachmentComposer from "../components/AgentAttachmentComposer";
 import AgentEvidenceMargin from "../components/AgentEvidenceMargin";
 import AgentResizeSeparator from "../components/AgentResizeSeparator";
 import AgentSessionRail from "../components/AgentSessionRail";
-import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
+import PageBar from "../components/PageBar";
 import { isCancellable, isTerminal, statusLabel } from "../runs/runStatus";
 import { useRunEvents } from "../runs/useRunEvents";
 
@@ -420,14 +420,17 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   );
   if (projectQuery.isError || sessionsQuery.isError || sessionQuery.isError || sessionProjectMismatch) {
     return (
-      <section className="notice">
-        <p className="error-text">
-          {sessionProjectMismatch
-            ? "资源不存在或无权访问"
-            : errorMessage(projectQuery.error ?? sessionsQuery.error ?? sessionQuery.error)}
-        </p>
-        <Link to="/">返回项目</Link>
-      </section>
+      <div className="viewport-workspace-page agent-page">
+        <PageBar breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "研究助手", to: `/projects/${projectId}/agent` }]} title="研究助手" />
+        <section className="notice">
+          <p className="error-text">
+            {sessionProjectMismatch
+              ? "资源不存在或无权访问"
+              : errorMessage(projectQuery.error ?? sessionsQuery.error ?? sessionQuery.error)}
+          </p>
+          <Link to="/">返回项目</Link>
+        </section>
+      </div>
     );
   }
 
@@ -462,13 +465,10 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
 
   return (
     <div className="viewport-workspace-page agent-page">
-      <ProjectWorkspaceHeader
-        projectId={projectId}
-        project={project}
-        active="agent"
-        eyebrow="研究助手"
-        description="持续分析项目论文，并把每轮执行、证据与候选成果保留为平台事实。"
-        actions={<span className="workspace-context-chip">{sessionsQuery.data?.length ?? "—"} 个会话</span>}
+      <PageBar
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: project?.name ?? "正在读取项目…", to: `/projects/${projectId}` }]}
+        title="研究助手"
+        actions={<span className="page-bar-stat"><strong>{sessionsQuery.data?.length ?? "—"}</strong> 个会话</span>}
       />
 
       <div className="agent-workspace" ref={workspaceRef} style={workspaceStyle}>

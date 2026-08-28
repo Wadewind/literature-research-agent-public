@@ -14,7 +14,7 @@ import type {
 } from "../api/types";
 import { createScopeSelection, toggleScopePaper, type ScopeSelection } from "../conversations/scopeSelection";
 import { ensureUploadIntent, type UploadIntent } from "../library/uploadIntent";
-import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
+import PageBar from "../components/PageBar";
 import { chatHomePath, chatPreselectionPath } from "../workspace/projectWorkspace";
 
 function formatSize(bytes: number): string {
@@ -160,23 +160,24 @@ export default function LibraryPage() {
 
   if (projectQuery.isError) {
     return (
-      <section className="notice">
-        <p className="error-text">{errorMessage(projectQuery.error)}</p>
-        <Link to="/">返回项目</Link>
-      </section>
+      <div className="page-flow">
+        <PageBar breadcrumbs={[{ label: "研究项目", to: "/" }]} title="文献库" />
+        <section className="notice">
+          <p className="error-text">{errorMessage(projectQuery.error)}</p>
+          <Link to="/">返回项目</Link>
+        </section>
+      </div>
     );
   }
 
   return (
     <div className="page-flow">
-      <ProjectWorkspaceHeader
-        projectId={projectId}
-        project={project}
-        active="library"
-        eyebrow="文献库"
-        description={project?.description || "集中管理本课题三种研究模式共享的文献、解析结果与固定索引。"}
-        actions={<div className="project-heading-actions">
-          <div className="metric-block"><strong>{papersQuery.data?.length ?? "—"}</strong><span>已收录</span></div>
+      <PageBar
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: project?.name ?? "正在读取项目…", to: `/projects/${projectId}` }]}
+        title="文献库"
+        actions={<div className="page-bar-action-group">
+          {archived ? <span className="badge badge-warn">已归档</span> : null}
+          <span className="page-bar-stat"><strong>{papersQuery.data?.length ?? "—"}</strong> 篇文献</span>
           <button type="button" className="button-quiet" disabled={projectArchiveMutation.isPending} onClick={() => projectArchiveMutation.mutate(archived)}>
             {archived ? "恢复 Project" : "归档 Project"}
           </button>
@@ -187,12 +188,6 @@ export default function LibraryPage() {
       {archived && (
         <p className="readonly-note">该 Project 当前只读：历史问答、综述、研究会话与引用仍可查看，不能修改文献或创建新的研究执行。</p>
       )}
-
-      <section className="project-mode-entry-grid" aria-label="Project 研究模式">
-        <Link to={chatHomePath(projectId)}><span>文献问答</span><strong>针对固定范围提出可引用的问题</strong><small>Claim → Citation → Evidence</small></Link>
-        <Link to={`/projects/${projectId}/reviews`}><span>综述</span><strong>按固定 Workflow 聚合证据与章节</strong><small>Evidence Matrix → Artifact</small></Link>
-        <Link to={`/projects/${projectId}/agent`}><span>研究助手</span><strong>持续分析项目材料与研究上下文</strong><small>Session → Turn → Candidate</small></Link>
-      </section>
 
       {editing && !archived && (
         <form className="project-edit-form panel" onSubmit={onRename}>

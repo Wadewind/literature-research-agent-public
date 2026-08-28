@@ -6,7 +6,7 @@ import { apiFetch, errorMessage } from "../api/client";
 import type { Conversation, PaperListItem, Project } from "../api/types";
 import ChatWorkspaceFrame from "../components/ChatWorkspaceFrame";
 import ConversationRail from "../components/ConversationRail";
-import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
+import PageBar from "../components/PageBar";
 import {
   createScopeSelection,
   scopeRequest,
@@ -62,10 +62,13 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
 
   if (projectQuery.isError) {
     return (
-      <section className="notice">
-        <p className="error-text">{errorMessage(projectQuery.error)}</p>
-        <Link to="/">返回项目</Link>
-      </section>
+      <div className="viewport-workspace-page chat-page">
+        <PageBar breadcrumbs={[{ label: "研究项目", to: "/" }]} title="文献问答" />
+        <section className="notice">
+          <p className="error-text">{errorMessage(projectQuery.error)}</p>
+          <Link to="/">返回项目</Link>
+        </section>
+      </div>
     );
   }
 
@@ -78,13 +81,10 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
 
   return (
     <div className="viewport-workspace-page chat-page">
-      <ProjectWorkspaceHeader
-        projectId={projectId}
-        project={project}
-        active="chat"
-        eyebrow="文献问答"
-        description="用可回查的 Claim、Citation 与 Evidence 回答一个明确问题。"
-        actions={<span className="workspace-context-chip">{conversationsQuery.data?.length ?? "—"} 条问答</span>}
+      <PageBar
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: project?.name ?? "正在读取项目…", to: `/projects/${projectId}` }]}
+        title="文献问答"
+        actions={<span className="page-bar-stat"><strong>{conversationsQuery.data?.length ?? "—"}</strong> 条问答</span>}
       />
       <ChatWorkspaceFrame
         rail={

@@ -6,6 +6,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { ApiError, apiFetch, errorMessage } from "../api/client";
 import type { DocElement, DocumentOverview } from "../api/types";
+import PageBar from "../components/PageBar";
 
 const ELEMENT_TYPE_LABELS: Record<string, string> = {
   title: "标题",
@@ -107,17 +108,20 @@ export default function DocumentPage() {
       documentQuery.error instanceof ApiError &&
       documentQuery.error.detail === "document_not_ready";
     return (
-      <section className="panel">
-        {notReady ? (
-          <>
-            <h1>解析尚未完成</h1>
-            <p className="muted">该版本还没有可用的解析结果，请稍后在文献库中刷新。</p>
-          </>
-        ) : (
-          <p className="error-text">{errorMessage(documentQuery.error)}</p>
-        )}
-        <Link to={`/projects/${projectId}`}>返回文献库</Link>
-      </section>
+      <div className="stack">
+        <PageBar breadcrumbs={[{ label: "文献库", to: `/projects/${projectId}` }]} title="文档结构" />
+        <section className="panel">
+          {notReady ? (
+            <>
+              <h2>解析尚未完成</h2>
+              <p className="muted">该版本还没有可用的解析结果，请稍后在文献库中刷新。</p>
+            </>
+          ) : (
+            <p className="error-text">{errorMessage(documentQuery.error)}</p>
+          )}
+          <Link to={`/projects/${projectId}`}>返回文献库</Link>
+        </section>
+      </div>
     );
   }
 
@@ -125,17 +129,17 @@ export default function DocumentPage() {
 
   return (
     <div className="stack">
+      <PageBar
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "文献库", to: `/projects/${projectId}` }]}
+        title="文档结构"
+        actions={overview ? <div className="page-bar-action-group"><span className="page-bar-stat"><strong>{overview.element_count}</strong> 个 Element</span>{overview.degraded ? <span className="badge badge-warn">降级解析</span> : null}</div> : undefined}
+      />
       <section className="panel">
-        <p className="breadcrumb">
-          <Link to={`/projects/${projectId}`}>文献库</Link> / 文档结构
-        </p>
         {overview && (
           <div className="run-meta">
             <span className="muted">
-              {overview.parser_name} {overview.parser_version} · {overview.element_count} 个
-              Element
+              {overview.parser_name} {overview.parser_version}
             </span>
-            {overview.degraded && <span className="badge badge-warn">降级解析</span>}
           </div>
         )}
         {overview && overview.warnings.length > 0 && (

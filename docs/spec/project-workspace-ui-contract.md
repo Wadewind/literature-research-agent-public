@@ -31,14 +31,21 @@ Project 工作区 canonical 路由为：
 既有 `/projects/:projectId/conversations/:conversationId` 继续可直接访问，避免旧书签失效；产品内部新链接
 统一生成 `/chat/:conversationId`。兼容路由不复制页面或状态。
 
-## 3. 共享 Project Chrome
+## 3. 共享应用壳与轻页头
 
-文献库、文献问答、综述和研究助手使用同一个紧凑 `ProjectWorkspaceHeader` 与 `ProjectNav`：
+全站使用固定 `AppSidebar`；进入 `/projects/:projectId/*` 后，Sidebar 读取 owner-scoped Project 查询并增加
+当前项目分区。项目的“文献库 / 文献问答 / 综述 / 研究助手”四个入口只在这个分区呈现，Library 页面不再
+复制模式 tabs 或三卡入口：
 
-- 标题、Project 状态和模式入口位置一致；
-- 工作区标题不沿用营销 Hero 尺度，不挤占对话 viewport；
-- 导航固定为“文献库 / 文献问答 / 综述 / 研究助手”；
-- Library 页面突出三个研究模式入口，同时明确文献库是资源底座；
+- Sidebar 桌面宽 232px，用户可折叠为 56px icon rail；折叠偏好只进入版本化 `localStorage` UI 状态，
+  不保存 Project、Session 或其他业务事实；
+- 四个入口使用 canonical route 和 `aria-current="page"` 表达当前位置；当前 Project 名只来自平台查询，
+  不信任 URL 或本地缓存伪造所有权；
+- 所有主页面自行渲染统一 `PageBar`：语义化 breadcrumb、唯一页面 `h1`（≤20px）和可选 actions，
+  高度不超过 56px；Project 名出现在 breadcrumb，当前模式出现在标题，不再叠加营销 Hero、副标题和 tabs；
+- 归档/修改/取消等页面级操作放在 `PageBar` actions；工作区页把 PageBar 置于
+  `.viewport-workspace-page` 首行，整个页面保持 `100dvh`，剩余高度交给三栏内容；
+- 错误、加载、Run Detail 与 Document 等诊断页也保留同一 PageBar，避免状态切换时页面 identity 跳动；
 - 保留既有冷灰纸面、墨蓝、朱红、Inter / IBM Plex Mono 与零圆角视觉语言。
 
 ## 4. 文献问答首页与范围
@@ -99,6 +106,6 @@ Conversation rail | 消息时间线 + 固定 Composer | Evidence Margin
 - Vitest 覆盖 canonical 路由、Project-scoped URL 预选过滤、scope 请求和版本化栏宽存储；
 - production build 通过 TypeScript strict；
 - Phase 2 E2E 经 canonical `/chat` 完成 Project/单篇范围、刷新恢复与 Evidence 回跳；
-- Phase 5 E2E 证明共享 Project chrome 没有破坏 Agent 两轮旅程；
+- Phase 5 E2E 证明共享 AppSidebar + PageBar 没有破坏 Agent 两轮旅程；
 - 1440×1000 桌面验收应确认 document 不滚动、三栏独立滚动、Composer 位于中栏底部，separator 的 pointer/
   keyboard/reset 与宽度持久化可用。

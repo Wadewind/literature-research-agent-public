@@ -4,7 +4,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { ReviewDetail, ReviewSource } from "../api/types";
-import ProjectNav from "../components/ProjectNav";
+import PageBar from "../components/PageBar";
 import ReviewResults from "../components/ReviewResults";
 import {
   reviewStageRail,
@@ -87,9 +87,9 @@ export default function ReviewDetailPage() {
   });
 
   if (detailQuery.isError) {
-    return <section className="notice"><p className="error-text">{errorMessage(detailQuery.error)}</p><Link to={`/projects/${projectId}/reviews`}>返回 Reviews</Link></section>;
+    return <div className="page-flow"><PageBar breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "综述", to: `/projects/${projectId}/reviews` }]} title="Review 不可用" /><section className="notice"><p className="error-text">{errorMessage(detailQuery.error)}</p><Link to={`/projects/${projectId}/reviews`}>返回 Reviews</Link></section></div>;
   }
-  if (!detailQuery.data) return <div className="skeleton-block">正在恢复 Review 事实…</div>;
+  if (!detailQuery.data) return <div className="page-flow"><PageBar breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "综述", to: `/projects/${projectId}/reviews` }]} title="正在读取 Review…" /><div className="skeleton-block">正在恢复 Review 事实…</div></div>;
 
   const detail = detailQuery.data;
   const { run, review, steps } = detail;
@@ -98,17 +98,11 @@ export default function ReviewDetailPage() {
 
   return (
     <div className="page-flow review-detail-page">
-      <header className="review-detail-heading">
-        <div>
-          <p className="breadcrumb"><Link to={`/projects/${projectId}/reviews`}>Reviews</Link><span>/</span><span className="mono">{run.run_id.slice(0, 8)}</span></p>
-          <p className="eyebrow">RESEARCH QUESTION</p>
-          <h1>{review.research_question}</h1>
-          <div className="run-meta"><span className={badgeClass(run.status)}>{statusLabel(run.status)}</span><span>当前：{stageLabel(review.current_stage)}</span><span className="mono">review.v1</span></div>
-        </div>
-        {isCancellable(run.status) && <button className="danger" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>{cancelMutation.isPending ? "正在请求取消…" : "取消 Review"}</button>}
-      </header>
-
-      <ProjectNav projectId={projectId} active="reviews" />
+      <PageBar
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "综述", to: `/projects/${projectId}/reviews` }, { label: run.run_id.slice(0, 8) }]}
+        title={review.research_question}
+        actions={<div className="page-bar-action-group"><span className={badgeClass(run.status)}>{statusLabel(run.status)}</span><span className="page-bar-meta">当前：{stageLabel(review.current_stage)}</span><span className="mono page-bar-meta">review.v1</span>{isCancellable(run.status) ? <button className="danger" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>{cancelMutation.isPending ? "正在请求取消…" : "取消 Review"}</button> : null}</div>}
+      />
       {cancelMutation.isError && <p className="notice error-text">{errorMessage(cancelMutation.error)}</p>}
 
       <section className={`review-state-notice ${notice.tone}`} aria-live="polite"><span className="status-dot" aria-hidden="true"/><div><strong>{notice.title}</strong><p>{notice.text}</p></div></section>

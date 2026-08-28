@@ -1,7 +1,7 @@
 # Web UI 应用壳与视觉重设计
 
-> 状态：设计已确认，待实施。本文档供后续 code agent 直接执行；实施时同步更新
-> `docs/spec/project-workspace-ui-contract.md` 中被取代的条款（见第 8 节）。
+> 状态：实施中。应用壳骨架与轻页头替换已完成；工作区空间回收、视觉 token 刷新仍待后续切片。
+> `docs/spec/project-workspace-ui-contract.md` 第 3 节已同步改为当前 `AppSidebar + PageBar` 契约。
 
 ## 1. 背景与要解决的痛点
 
@@ -119,10 +119,17 @@
 
 **切片 2：轻页头替换**
 
-- 新增 `web/src/components/PageBar.tsx`（面包屑 + 页面标题 ≤20px + actions 插槽，高约 48–56px）。
-- 七个页面逐一接入；删除 `ProjectNav.tsx`、`ProjectWorkspaceHeader.tsx` 及其 CSS
+- **已实现（2026-08-28）**：新增 `web/src/components/PageBar.tsx`（语义化面包屑 + 页面标题 20px +
+  actions 插槽，固定高 56px）。
+- Projects、Personal Library、Project Library、Chat、Conversation、Reviews、Agent、Review Detail，以及
+  Run Detail、Document 和 Not Found 状态均已接入；删除 `ProjectNav.tsx`、`ProjectWorkspaceHeader.tsx` 及其 CSS
   （`.project-workspace-*`、`.project-nav`、`.page-heading`、`.hero-grid`、`.project-mode-entry-grid`）。
-- 验证：`npm test` + e2e 断言更新 + 截图走查。
+- 验证：PageBar TDD 先得到缺少模块的失败，再转为定向 3 passed；完整 `npm test` 为 25 files / 164 passed，
+  `npm run build` 通过。完整离线 E2E 为 4 passed / 1 failed：Phase 1/2/3/5 通过，Phase 4 仍是已有的
+  来源列表期望 4、实际 3 的 Fixture/时序问题，未放宽断言。1440×1000 截图走查覆盖首页、综述和研究助手；
+  研究助手实测 PageBar 56px，document `scrollHeight` 与 viewport 均为 1000px，既有三栏没有横向裁剪。
+- 已知限制：研究助手无选中 Session 的首页仍会发出既有空 `session_id` 附件请求并得到 404；该数据请求
+  不属于轻页头切片，未在此顺便修改。深色 Agent welcome 和 Review workbench 按顺序留给切片 3/4。
 
 **切片 3：工作区空间回收**
 

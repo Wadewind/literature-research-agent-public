@@ -15,7 +15,7 @@ import type {
 } from "../api/types";
 import ChatWorkspaceFrame from "../components/ChatWorkspaceFrame";
 import ConversationRail, { conversationScopeLabel } from "../components/ConversationRail";
-import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
+import PageBar from "../components/PageBar";
 import {
   ensureMessageIntent,
   type MessageIntent,
@@ -155,14 +155,17 @@ function ConversationWorkspace() {
     (conversationQuery.data && !conversationMatchesRoute)
   ) {
     return (
-      <section className="panel">
-        <p className="error-text">
-          {conversationQuery.data && !conversationMatchesRoute
-            ? "资源不存在或无权访问"
-            : errorMessage(conversationQuery.error ?? projectQuery.error)}
-        </p>
-        <Link to={`/projects/${projectId}/chat`}>返回文献问答</Link>
-      </section>
+      <div className="viewport-workspace-page chat-page">
+        <PageBar breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "文献问答", to: `/projects/${projectId}/chat` }]} title="问答不可用" />
+        <section className="panel">
+          <p className="error-text">
+            {conversationQuery.data && !conversationMatchesRoute
+              ? "资源不存在或无权访问"
+              : errorMessage(conversationQuery.error ?? projectQuery.error)}
+          </p>
+          <Link to={`/projects/${projectId}/chat`}>返回文献问答</Link>
+        </section>
+      </div>
     );
   }
 
@@ -177,13 +180,10 @@ function ConversationWorkspace() {
 
   return (
     <div className="viewport-workspace-page chat-page">
-      <ProjectWorkspaceHeader
-        projectId={projectId}
-        project={project}
-        active="chat"
-        eyebrow="文献问答"
-        description="每个问题独立检索固定范围，并沿引用回到 Evidence 与原文。"
-        actions={<span className="workspace-context-chip">{conversation ? conversationScopeLabel(conversation) : "读取范围…"}</span>}
+      <PageBar
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: project?.name ?? "正在读取项目…", to: `/projects/${projectId}` }, { label: "文献问答", to: `/projects/${projectId}/chat` }]}
+        title={conversation?.title || "文献问答"}
+        actions={<span className="page-bar-stat">{conversation ? conversationScopeLabel(conversation) : "读取范围…"}</span>}
       />
       <ChatWorkspaceFrame
         rail={
@@ -198,8 +198,7 @@ function ConversationWorkspace() {
         <header className="chat-heading">
           <div>
             <p className="eyebrow">CITED RAG / {conversation ? conversationScopeLabel(conversation) : "读取中"}</p>
-            <h1>{conversation?.title || "新对话"}</h1>
-            <p>{project?.name} · 回答中的每个段落都必须绑定已验证 Evidence。</p>
+            <p>回答中的每个段落都必须绑定已验证 Evidence。</p>
           </div>
           {project?.archived_at && <span className="badge badge-warn">已归档 · 只读</span>}
         </header>

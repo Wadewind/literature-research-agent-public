@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { CreateReviewResult, Project, ReviewListItem } from "../api/types";
-import ProjectWorkspaceHeader from "../components/ProjectWorkspaceHeader";
+import PageBar from "../components/PageBar";
 import { ensureReviewIntent, type ReviewIntent } from "../reviews/reviewIntent";
 import { reviewListRefetchInterval } from "../reviews/reviewListRefresh";
 import { stageLabel } from "../reviews/reviewPresentation";
@@ -64,18 +64,15 @@ export default function ReviewsPage() {
   };
 
   if (projectQuery.isError) {
-    return <section className="notice"><p className="error-text">{errorMessage(projectQuery.error)}</p><Link to="/">返回项目</Link></section>;
+    return <div className="page-flow"><PageBar breadcrumbs={[{ label: "研究项目", to: "/" }]} title="综述" /><section className="notice"><p className="error-text">{errorMessage(projectQuery.error)}</p><Link to="/">返回项目</Link></section></div>;
   }
 
   return (
     <div className="page-flow">
-      <ProjectWorkspaceHeader
-        projectId={projectId}
-        project={project}
-        active="reviews"
-        eyebrow="综述"
-        description="从检索、导入、Evidence Matrix 到 Artifact 追踪固定 Workflow。"
-        actions={<div className="metric-block"><strong>{reviewsQuery.data?.length ?? "—"}</strong><span>Review Runs</span></div>}
+      <PageBar
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: project?.name ?? "正在读取项目…", to: `/projects/${projectId}` }]}
+        title="综述"
+        actions={<span className="page-bar-stat"><strong>{reviewsQuery.data?.length ?? "—"}</strong> 个 Review</span>}
       />
 
       <section className="review-workbench">

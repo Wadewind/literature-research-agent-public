@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { PaperListItem, Project } from "../api/types";
+import PageBar from "../components/PageBar";
 
 export default function ProjectsPage() {
   const queryClient = useQueryClient();
@@ -49,15 +50,16 @@ export default function ProjectsPage() {
   };
   const projects = projectsQuery.data ?? [];
   const papers = libraryQuery.data ?? [];
+  const activeProjectCount = projects.filter((project) => !project.archived_at).length;
 
   return (
     <div className="page-flow">
-      <section className="hero-grid">
-        <div className="hero-copy"><p className="eyebrow">RESEARCH WORKSPACE / 02</p><h1>把文献变成<br /><em>可追溯的证据</em></h1><p className="hero-lead">在 Project 中组织论文，针对整个项目或选中文献提问，并从每条引用回到 PDF 页码。</p></div>
-        <aside className="workspace-summary" aria-label="工作台摘要"><p>当前工作台</p><div><strong>{projects.filter((project) => !project.archived_at).length}</strong><span>Active projects</span></div><div><strong>{papers.length}</strong><span>Unique papers</span></div><Link to="/library">查看个人文献库 <span aria-hidden="true">→</span></Link></aside>
-      </section>
+      <PageBar
+        title="研究项目"
+        actions={<div className="page-bar-action-group"><span className="page-bar-stat"><strong>{activeProjectCount}</strong> 个活跃项目</span><Link className="page-bar-link" to="/library">{papers.length} 篇个人文献</Link></div>}
+      />
       <section className="section-block">
-        <div className="section-title-row"><div><p className="eyebrow">COLLECTIONS</p><h2>研究项目</h2></div><div className="section-tools"><label><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />显示已归档</label><span className="section-count">{String(projects.length).padStart(2, "0")}</span></div></div>
+        <div className="section-title-row"><div><p className="eyebrow">COLLECTIONS</p><h2>项目列表</h2></div><div className="section-tools"><label><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />显示已归档</label><span className="section-count">{String(projects.length).padStart(2, "0")}</span></div></div>
         {projectsQuery.isError && <p className="notice error-text">{errorMessage(projectsQuery.error)}</p>}
         {projectsQuery.isPending && <div className="skeleton-block">正在读取项目…</div>}
         {projects.length > 0 && <div className="project-grid">{projects.map((project, index) => {

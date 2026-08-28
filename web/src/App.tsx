@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 
 import AppSidebar from "./components/AppSidebar";
+import PageBar from "./components/PageBar";
 import DocumentPage from "./pages/DocumentPage";
 import AgentPage from "./pages/AgentPage";
 import ConversationPage from "./pages/ConversationPage";
@@ -67,11 +68,13 @@ function ScrollToTop() {
 
 function NotFound() {
   return (
-    <section className="panel">
-      <h1>页面不存在</h1>
-      <p>
-        你访问的地址没有对应的页面。返回 <Link to="/">Project 列表</Link>。
-      </p>
-    </section>
+    <div className="stack">
+      <PageBar title="页面不存在" />
+      <section className="panel">
+        <p>
+          你访问的地址没有对应的页面。返回 <Link to="/">Project 列表</Link>。
+        </p>
+      </section>
+    </div>
   );
 }

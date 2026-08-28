@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { PaperListItem, Project } from "../api/types";
+import PageBar from "../components/PageBar";
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -32,8 +33,8 @@ export default function PersonalLibraryPage() {
 
   return (
     <div className="page-flow">
-      <header className="page-heading"><div><p className="eyebrow">PERSONAL REPOSITORY</p><h1>个人文献库</h1><p>每份 PDF 只保存和解析一次。归档个人库资产不会把它从已收录的 Project 中移出。</p></div><div className="metric-block"><strong>{papersQuery.data?.length ?? "—"}</strong><span>唯一文献</span></div></header>
-      <div className="library-toolbar"><label><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />显示已归档文献</label><p>若要停止某篇文献参与 Project 的新检索，请进入对应 Project 使用“移出项目”。</p></div>
+      <PageBar title="个人文献库" actions={<span className="page-bar-stat"><strong>{papersQuery.data?.length ?? "—"}</strong> 篇唯一文献</span>} />
+      <div className="library-toolbar"><label><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />显示已归档文献</label><p>每份 PDF 只保存和解析一次；若要停止参与 Project 新检索，请在对应 Project 使用“移出项目”。</p></div>
       {papersQuery.isError && <div className="notice error-text">{errorMessage(papersQuery.error)}</div>}
       {papersQuery.isPending && <div className="skeleton-block">正在整理文献索引…</div>}
       {papersQuery.data?.length === 0 && <section className="empty-state"><span className="empty-glyph" aria-hidden="true">≡</span><h2>文献库还是空的</h2><p>进入任意项目上传 PDF，文献会自动进入这里。</p><Link className="button-link" to="/">选择项目</Link></section>}
