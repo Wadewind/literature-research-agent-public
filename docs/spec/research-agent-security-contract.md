@@ -1,6 +1,6 @@
 # Research Agent 精简安全契约
 
-> 状态：Phase 6 Slice 1–4 已确认；Slice 5–8 的实施契约。
+> 状态：Phase 6 Slice 1–5 已确认；Slice 6–8 的实施契约。
 >
 > 基线：`b0ec3f4`（2026-08-28）。本文把已经由 Phase 5 代码/测试证明的事实与 Phase 6 目标事实分开；
 > “目标”“必须”“验收”不表示对应能力已经实现或经过真实环境验证。
@@ -240,7 +240,7 @@ SDK Thread/Checkpoint、Sandbox、Workspace、raw MCP 配置、网络策略或 f
 | 2（已实现） | `GET /api/v1/agent-turn-runs/{run_id}/artifacts`；`GET /api/v1/agent-artifacts/{artifact_id}/content` | 每次 owner/Project/Session/Turn 授权；Candidate 不可下载；不返回 storage key/Sandbox path |
 | 3（已实现） | `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/browser-control`；`WS /api/v1/agent-browser-controls/view` | HTTP 开始/查询/结束只使用业务 Session ID；仅开始返回短时 ticket 和平台 view URL；WS 用 subprotocol 传 ticket；不返回 VNC/noVNC/CDP/MCP/OpenSandbox endpoint |
 | 4（已实现） | `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/attachments`；Message 增加有界 attachment ID 引用 | owner 来自 ActorContext；不接受物理路径；已被历史 Turn 引用的输入不可篡改 |
-| 5 | `GET /api/v1/agent-turn-runs/{run_id}/tool-executions`，必要的预算/Usage 投影 | 仅安全摘要、版本/hash、计数、状态/时长；不返回原始参数/结果/endpoint |
+| 5（已实现） | `GET /api/v1/agent-turn-runs/{run_id}/tool-executions` 与预算/Usage 投影 | 仅安全摘要、版本/hash、计数、状态/时长；不返回原始参数/结果/endpoint |
 | 7 | `GET /api/v1/agent-turn-runs/{run_id}/manifest` | 只返回规范化来源元数据和验证状态，不返回网页/PDF 全文或内部请求凭据 |
 
 若实现需要改变路径或 DTO，责任切片必须先更新本文和 Phase 6 Spec。不得为后续功能扩大五方法
@@ -270,7 +270,7 @@ SDK 类型继续停留在 infrastructure。
 | 2（已实现） | `agent_artifact_validated`、`agent_artifact_committed`、`agent_artifact_rejected` |
 | 3（已实现） | `agent_browser_control_started`、`agent_browser_control_ended`、`agent_browser_control_expired` |
 | 4（已实现） | 不为上传泛化 Run-bound Event；`agent_message_accepted` 仅增加 `attachment_count`，不记录内容或物理路径 |
-| 5 | `agent_budget_updated`、`agent_tool_rejected`、`agent_policy_violation`、有界 Step 状态 |
+| 5（已实现） | 新 reservation 产生只含计数/上限的 `agent_budget_updated`；Tool/Policy 拒绝以稳定 Runtime 错误进入既有 Turn 失败事件链，不另存 raw 参数/结果 |
 | 6 | `agent_workspace_created`、`agent_workspace_cleanup_requested`、`agent_workspace_cleaned` 及安全清理失败摘要 |
 | 7 | 有界网络/下载允许或拒绝摘要、Resource Manifest 提交结果；事件名称在实现前冻结 |
 
@@ -380,11 +380,23 @@ Artifact 或业务成功。
 - `WorkspaceSnapshot` 暂存时排除 inbox，恢复时拒绝含 inbox 的旧/异常快照；Deep Agents 只看到受控路径和必要元数据。不开放 `browser_file_upload`，Project PDF 仍优先通过 Project Library/Index 提供；
 - Storage 写入成功后 DB 提交失败可产生内部孤儿 blob；本切片保持不可见且可用同一幂等键重试，不声称已实现 Storage GC。
 
-### Slice 5：固定能力、Project Context 与硬预算
+### Slice 5：固定能力、Project Context 与硬预算（已完成）
 
-- 固定 Catalog/Profile/Schema/hash 漂移必须 fail closed；Tool 调用前后都复核 scope、取消、fence 和预算；
-- 硬限制至少覆盖模型/Tool 次数、墙钟、单 Tool、输出、Workspace/Artifact/下载以及相同调用循环；
-- `ToolExecution` 和 Event 只含安全摘要；普通测试用 Fake Model/MCP，验证超限后不再发起调用。
+- `PolicySnapshot` 冻结全部允许 Tool 的 version/input schema hash，以及模型 8 次、Tool 12 次、首次 Runtime
+  后 300 秒墙钟、固定 Tool/MCP 30 秒、`execute` 60 秒、单次 64 KiB 安全输出、同 Tool+args hash 最多
+  2 个 invocation、每次约 60,000 输入 Token 与 Provider 2,048 输出 Token；snapshot hash 覆盖这些字段；
+- 每个 Turn 同事务创建 `AgentTurnUsage`，模型使用稳定 ordinal reservation，Tool 使用稳定 tool_call ID；
+  PostgreSQL 行锁、唯一约束和条件更新保证重放不重复计数/认领。Provider Usage 允许可空字段逐步
+  `NULL → value`，总 Token/费用不可得时不做虚假硬拒绝；
+- 模型 reservation 约束的是逻辑模型步骤。Provider 已接收请求后若响应或 Worker 在结果可判定前丢失，
+  重试仍可能产生重复付费请求且 `usage_metadata` 可能缺失；checkpoint/reconcile 只能缩小和对账窗口，
+  不保证物理 Provider 调用 Exactly Once，也不把逻辑步骤上限宣称为物理调用或精确费用硬上限；
+- Runtime 对有限 canonical JSON args、实际 Tool schema、owner/Project/Session/Context/Policy、取消与
+  fence 在外部调用边界 fail closed，并把剩余墙钟纳入 graph/model/tool timeout；外部 I/O 不在事务中；
+- Project Context、MCP 与 `submit_artifact` 只有下层 stable effect cache 可对账时才进入 handler 重放；
+  文件/`execute` 的 RUNNING 或终态 effect 禁止重执行；成功 hash/size 和失败安全错误冲突均拒绝；
+- 公开 Tool API 与 `agent_budget_updated` Event 只含安全摘要。Workspace 50 MiB、单文件/Artifact 10 MiB
+  沿用既有契约；下载数量/总量必须在 Slice 7 实现，不能由本切片宣称完成。
 
 ### Slice 6：Workspace/Sandbox 与统一 egress
 

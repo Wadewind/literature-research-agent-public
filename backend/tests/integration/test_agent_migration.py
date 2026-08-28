@@ -14,13 +14,16 @@ from literature_agent.infrastructure.persistence.models import (
     AgentBrowserControlLeaseORM,
     AgentContextSnapshotORM,
     AgentMcpProfileORM,
+    AgentModelCallReservationORM,
     AgentOwnerSkillORM,
     AgentOwnerSkillVersionORM,
     AgentPolicySnapshotORM,
     AgentRuntimeExecutionORM,
     AgentSandboxLeaseORM,
     AgentSkillProfileORM,
+    AgentToolCallORM,
     AgentTurnRunORM,
+    AgentTurnUsageORM,
     AgentWorkspaceSnapshotORM,
 )
 
@@ -230,6 +233,34 @@ def test_native_skill_versions_profiles_and_policy_refs_remain_sdk_neutral() -> 
     }.isdisjoint(AgentOwnerSkillVersionORM.__table__.columns.keys())
 
 
+def test_agent_usage_and_tool_summary_tables_are_sdk_neutral_and_content_free() -> None:
+    usage_targets = {
+        foreign_key.target_fullname for foreign_key in AgentTurnUsageORM.__table__.foreign_keys
+    }
+    assert usage_targets == {
+        "agent_turn_runs.turn_run_id",
+        "agent_policy_snapshots.snapshot_id",
+        "agent_sessions.session_id",
+        "projects.project_id",
+    }
+    assert {
+        foreign_key.target_fullname
+        for foreign_key in AgentModelCallReservationORM.__table__.foreign_keys
+    } == {"agent_turn_usages.turn_run_id"}
+    assert {
+        foreign_key.target_fullname for foreign_key in AgentToolCallORM.__table__.foreign_keys
+    } == {"agent_turn_usages.turn_run_id"}
+    columns = set(AgentToolCallORM.__table__.columns.keys())
+    assert {"args_hash", "result_hash", "input_size_bytes", "output_size_bytes"} <= columns
+    assert {
+        "arguments",
+        "result_payload",
+        "endpoint",
+        "prompt",
+        "secret",
+    }.isdisjoint(columns)
+
+
 def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
     """在临时 PostgreSQL 上验证 head → -1 → head 与 schema check。"""
     with PostgresContainer("pgvector/pgvector:pg18") as postgres:
@@ -293,6 +324,9 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_browser_control_leases")
         assert has_table("agent_attachments")
         assert has_table("agent_message_attachments")
+        assert has_table("agent_turn_usages")
+        assert has_table("agent_model_call_reservations")
+        assert has_table("agent_tool_calls")
         assert {
             "ck_agent_attachment_version",
             "ck_agent_attachment_size",
@@ -302,11 +336,15 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         } <= attachment_constraints()
         run_alembic("downgrade", "-1")
         assert has_table("agent_browser_control_leases")
-        assert not has_table("agent_attachments")
-        assert not has_table("agent_message_attachments")
+        assert has_table("agent_attachments")
+        assert has_table("agent_message_attachments")
+        assert not has_table("agent_turn_usages")
+        assert not has_table("agent_model_call_reservations")
+        assert not has_table("agent_tool_calls")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("upgrade", "head")
         assert has_table("agent_browser_control_leases")
         assert has_table("agent_attachments")
+        assert has_table("agent_turn_usages")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("check")

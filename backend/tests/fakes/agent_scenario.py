@@ -32,6 +32,9 @@ from literature_agent.infrastructure.persistence.agent_attachment_repository imp
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
 )
+from literature_agent.infrastructure.persistence.agent_usage_repository import (
+    SqlalchemyAgentUsageRepository,
+)
 from literature_agent.infrastructure.persistence.browser_control_repository import (
     SqlalchemyBrowserControlRepository,
 )
@@ -176,4 +179,5 @@ def make_agent_service(
         platform_skills=platform_skills,
         browser_control_repo_factory=SqlalchemyBrowserControlRepository,
         attachment_repo_factory=attachment_repo_factory,
+        agent_usage_repo_factory=SqlalchemyAgentUsageRepository,
     )

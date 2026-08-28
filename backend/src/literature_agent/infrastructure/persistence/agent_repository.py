@@ -27,6 +27,7 @@ from literature_agent.domain.research_agent import (
     ProjectIndexContextRef,
     RuntimeSessionBinding,
     RuntimeTurnBinding,
+    ToolPolicyRef,
     same_agent_artifact_candidate_fact,
 )
 from literature_agent.domain.skill_configuration import SkillPolicyRef, SkillSource
@@ -325,6 +326,14 @@ class SqlalchemyAgentRepository(AgentRepository):
                 session_id=value.session_id,
                 turn_run_id=value.turn_run_id,
                 allowed_tool_names=list(value.allowed_tool_names),
+                tool_refs=[
+                    {
+                        "name": ref.name,
+                        "version": ref.version,
+                        "input_schema_hash": ref.input_schema_hash,
+                    }
+                    for ref in value.tool_refs
+                ],
                 allowed_skill_names=list(value.allowed_skill_names),
                 skill_refs=[
                     {
@@ -361,6 +370,13 @@ class SqlalchemyAgentRepository(AgentRepository):
                 approval_required=value.approval_required,
                 max_model_calls=value.max_model_calls,
                 max_tool_calls=value.max_tool_calls,
+                wall_clock_limit_seconds=value.wall_clock_limit_seconds,
+                tool_timeout_seconds=value.tool_timeout_seconds,
+                execute_timeout_seconds=value.execute_timeout_seconds,
+                max_tool_output_bytes=value.max_tool_output_bytes,
+                max_repeated_tool_calls=value.max_repeated_tool_calls,
+                max_input_tokens_per_model_call=value.max_input_tokens_per_model_call,
+                max_output_tokens_per_model_call=value.max_output_tokens_per_model_call,
                 snapshot_hash=value.snapshot_hash,
                 created_at=value.created_at,
             )
@@ -747,6 +763,7 @@ def _policy(row: AgentPolicySnapshotORM) -> PolicySnapshot:
         row.session_id,
         row.turn_run_id,
         tuple(row.allowed_tool_names),
+        tuple(ToolPolicyRef(**ref) for ref in row.tool_refs),
         tuple(row.allowed_skill_names),
         tuple(
             SkillPolicyRef(
@@ -777,6 +794,13 @@ def _policy(row: AgentPolicySnapshotORM) -> PolicySnapshot:
         row.approval_required,
         row.max_model_calls,
         row.max_tool_calls,
+        row.wall_clock_limit_seconds,
+        row.tool_timeout_seconds,
+        row.execute_timeout_seconds,
+        row.max_tool_output_bytes,
+        row.max_repeated_tool_calls,
+        row.max_input_tokens_per_model_call,
+        row.max_output_tokens_per_model_call,
         row.snapshot_hash,
         row.created_at,
     )

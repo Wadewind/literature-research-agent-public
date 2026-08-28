@@ -67,6 +67,19 @@ def test_factory_rejects_model_drift_and_does_not_echo_secret() -> None:
         raise AssertionError("未拒绝非固定 Research Agent 模型")
 
 
+@pytest.mark.parametrize("value", [0, 2049])
+def test_factory_rejects_output_budget_outside_policy(value: int) -> None:
+    with pytest.raises(ValueError, match="MAX_OUTPUT_TOKENS"):
+        build_deepseek_research_model(
+            base_url="https://agent.example/v1",
+            api_key="offline-secret",
+            model="deepseek-v4-flash",
+            max_output_tokens=value,
+            timeout_seconds=12.5,
+            max_retries=1,
+        )
+
+
 async def test_model_close_releases_sync_and_async_clients() -> None:
     """Worker shutdown 通过 factory 伴随的清理函数释放 HTTP 客户端。"""
     async_client = AsyncMock()

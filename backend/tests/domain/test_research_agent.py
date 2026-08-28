@@ -232,6 +232,7 @@ def test_workspace_policy_version_only_changes_for_the_added_capability() -> Non
         content_hash="c" * 64,
         required_tool_names=("search_project_chunks",),
     )
+
     def create_workspace_policy(
         *,
         mcp_refs: tuple[McpPolicyRef, ...] = (),
@@ -253,6 +254,15 @@ def test_workspace_policy_version_only_changes_for_the_added_capability() -> Non
     assert workspace.policy_version == PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION
     assert mcp_only.policy_version == PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION
     assert with_skill.policy_version == PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION
+    assert {ref.name for ref in workspace.tool_refs} == set(workspace.allowed_tool_names)
+    assert {ref.name for ref in mcp_only.tool_refs} == set(mcp_only.allowed_tool_names)
+    assert workspace.wall_clock_limit_seconds == 300
+    assert workspace.tool_timeout_seconds == 30
+    assert workspace.execute_timeout_seconds == 60
+    assert workspace.max_tool_output_bytes == 64 * 1024
+    assert workspace.max_repeated_tool_calls == 2
+    assert workspace.max_input_tokens_per_model_call == 60_000
+    assert workspace.max_output_tokens_per_model_call == 2_048
 
 
 def test_runtime_bindings_are_opaque_and_scoped() -> None:

@@ -7,6 +7,7 @@ from langchain_deepseek import ChatDeepSeek
 from pydantic import SecretStr
 
 _FIXED_MODEL = "deepseek-v4-flash"
+_FIXED_MAX_OUTPUT_TOKENS = 2_048
 
 
 def build_deepseek_research_model(
@@ -23,8 +24,8 @@ def build_deepseek_research_model(
         raise ValueError("AGENT_RESEARCH_MODEL 当前只允许 deepseek-v4-flash")
     if not api_key:
         raise ValueError("deep_agents 模式必须设置 AGENT_RESEARCH_MODEL_API_KEY")
-    if max_output_tokens <= 0:
-        raise ValueError("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须为正整数")
+    if not 0 < max_output_tokens <= _FIXED_MAX_OUTPUT_TOKENS:
+        raise ValueError("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须在 1..2048 范围内")
     if timeout_seconds <= 0:
         raise ValueError("AGENT_MODEL_TIMEOUT_SECONDS 必须为正数")
     if max_retries < 0:

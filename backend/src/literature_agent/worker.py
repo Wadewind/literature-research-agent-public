@@ -42,6 +42,7 @@ from literature_agent.application.agent_turn_executor import AgentTurnExecutor
 from literature_agent.application.agent_turn_lifecycle_service import (
     AgentTurnLifecycleService,
 )
+from literature_agent.application.agent_usage_service import AgentUsageService
 from literature_agent.application.arxiv_import_service import ArxivProjectImportService
 from literature_agent.application.evidence_service import EvidenceService
 from literature_agent.application.indexing_executor import IndexingExecutor
@@ -140,6 +141,9 @@ from literature_agent.infrastructure.persistence.agent_attachment_repository imp
 )
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
+)
+from literature_agent.infrastructure.persistence.agent_usage_repository import (
+    SqlalchemyAgentUsageRepository,
 )
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
@@ -413,6 +417,13 @@ def _build_research_agent_runtime(
         chunk_repo_factory=SqlalchemyChunkRepository,
         event_notifier=event_notifier,
     )
+    usage_control = AgentUsageService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        agent_repo_factory=SqlalchemyAgentRepository,
+        usage_repo_factory=SqlalchemyAgentUsageRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+    )
 
     def runtime_factory(
         checkpointer: BaseCheckpointSaver[str],
@@ -427,6 +438,7 @@ def _build_research_agent_runtime(
             execution_control=execution_control,
             runtime_owner_id=runtime_owner_id,
             before_succeed=before_succeed,
+            usage_control=usage_control,
         )
 
     def runtime_with_tools_factory(
@@ -444,6 +456,7 @@ def _build_research_agent_runtime(
             execution_control=execution_control,
             runtime_owner_id=runtime_owner_id,
             before_succeed=before_succeed,
+            usage_control=usage_control,
         )
 
     def runtime_with_capabilities_factory(
@@ -464,6 +477,7 @@ def _build_research_agent_runtime(
             before_succeed=before_succeed,
             skill_backend=skills.backend,
             skill_sources=skills.sources,
+            usage_control=usage_control,
         )
 
     mcp_guard = McpToolExecutionService(

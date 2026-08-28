@@ -10,6 +10,7 @@ import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, Any, NotRequired, cast
 from uuid import uuid4
 
@@ -33,11 +34,18 @@ from langchain.agents.middleware.types import (
 from langchain.tools import ToolRuntime
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.types import Command, StateSnapshot
 
+from literature_agent.application.agent_usage_service import AgentUsageError
+from literature_agent.application.ports.agent_usage_control import (
+    AgentUsageControl,
+    RuntimeBudget,
+    ToolCallReservationRequest,
+)
 from literature_agent.application.ports.project_research_context import (
     ProjectContextToolResult,
     ProjectResearchContext,
@@ -65,7 +73,9 @@ from literature_agent.application.runtime_execution_control import (
     RuntimeExecutionControlError,
 )
 from literature_agent.domain.agent_answer import parse_agent_answer
+from literature_agent.domain.agent_usage import AgentToolCallStatus
 from literature_agent.domain.research_agent import (
+    PolicySnapshot,
     RuntimeSessionBinding,
     RuntimeTurnBinding,
 )
@@ -83,9 +93,7 @@ _EXECUTION_METADATA_KEY = "agent_runtime_execution_id"
 _FENCING_METADATA_KEY = "agent_runtime_fencing_token"
 _RUNTIME_REVISION_METADATA_KEY = "agent_runtime_revision"
 _GRAPH_REVISION_METADATA_KEY = "agent_graph_revision"
-_FILESYSTEM_TOOL_NAMES = frozenset(
-    {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}
-)
+_FILESYSTEM_TOOL_NAMES = frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep"})
 _FORBIDDEN_CUSTOM_TOOL_NAMES = frozenset({"execute", "task"})
 _ALWAYS_FORBIDDEN_TOOL_NAMES = frozenset({"task"})
 
@@ -98,6 +106,7 @@ class _TurnContext:
     allowed_tool_names: frozenset[str]
     max_model_calls: int
     max_tool_calls: int
+    replayable_tool_names: frozenset[str] = frozenset()
     runtime_permit: RuntimeExecutionPermit | None = None
 
 
@@ -140,9 +149,7 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
     def _allowed(self, context: _TurnContext) -> frozenset[str]:
         return context.allowed_tool_names & self._registered_tool_names
 
-    def _filtered(
-        self, request: ModelRequest[_TurnContext]
-    ) -> list[BaseTool | dict[str, Any]]:
+    def _filtered(self, request: ModelRequest[_TurnContext]) -> list[BaseTool | dict[str, Any]]:
         allowed = self._allowed(request.runtime.context)
         return [tool for tool in request.tools if _tool_name(tool) in allowed]
 
@@ -160,7 +167,9 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
         handler: Callable[[ModelRequest[_TurnContext]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
         await self._assert_active(request.runtime.context)
-        return await handler(request.override(tools=self._filtered(request)))
+        response = await handler(request.override(tools=self._filtered(request)))
+        await self._assert_active(request.runtime.context)
+        return response
 
     def wrap_tool_call(
         self,
@@ -181,7 +190,9 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
     ) -> ToolMessage | Command[Any]:
         await self._assert_active(cast(_TurnContext, request.runtime.context))
         self._require_allowed_tool(request)
-        return await handler(request)
+        result = await handler(request)
+        await self._assert_active(cast(_TurnContext, request.runtime.context))
+        return result
 
     async def _assert_active(self, context: _TurnContext) -> None:
         if self._execution_control is None:
@@ -217,9 +228,7 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
             )
 
 
-class _RuntimeModelCallBudgetMiddleware(
-    AgentMiddleware[_ModelCallBudgetState, _TurnContext, Any]
-):
+class _RuntimeModelCallBudgetMiddleware(AgentMiddleware[_ModelCallBudgetState, _TurnContext, Any]):
     """在主 Agent model node 前预留逐 Turn 额度并随 Checkpoint 恢复。"""
 
     state_schema = _ModelCallBudgetState
@@ -261,9 +270,155 @@ class _RuntimeModelCallBudgetMiddleware(
         return self._reserve(state, cast(_TurnContext, runtime.context))
 
 
-class _RuntimeToolCallBudgetMiddleware(
-    AgentMiddleware[_ToolCallBudgetState, _TurnContext, Any]
-):
+class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
+    """在每个 Provider/Tool 边界使用 PostgreSQL 预算事实。"""
+
+    def __init__(self, control: AgentUsageControl) -> None:
+        self._control = control
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[_TurnContext],
+        handler: Callable[[ModelRequest[_TurnContext]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        context = request.runtime.context
+        ordinal = int(request.state.get("agent_model_budget_reserved_calls", 1))
+        messages = list(request.messages)
+        if request.system_message is not None:
+            messages.insert(0, request.system_message)
+        approximate = count_tokens_approximately(messages, tools=request.tools)
+        try:
+            usage = await self._control.reserve_model_call(
+                context.turn_run_id,
+                ordinal,
+                approximate_input_tokens=approximate,
+            )
+            assert usage.deadline_at is not None
+            async with asyncio.timeout(_remaining_seconds(usage.deadline_at)):
+                response = await handler(request)
+            input_tokens, output_tokens = _model_usage(response)
+            await self._control.record_model_usage(
+                context.turn_run_id,
+                ordinal,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+            return response
+        except TimeoutError as exc:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "agent_turn_deadline_exceeded",
+                "Agent Turn 已超过墙钟预算",
+            ) from exc
+        except AgentUsageError as exc:
+            raise _usage_error(exc) from exc
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        context = cast(_TurnContext, request.runtime.context)
+        name = str(request.tool_call.get("name", ""))
+        invocation_id = str(request.tool_call.get("id", ""))
+        try:
+            args_bytes = _strict_canonical_bytes(request.tool_call.get("args", {}))
+        except (TypeError, ValueError) as exc:
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT,
+                "runtime_tool_args_invalid",
+                "Runtime Tool 参数不是有限 JSON",
+            ) from exc
+        call = None
+        claimed = False
+        try:
+            call = await self._control.reserve_tool_call(
+                context.turn_run_id,
+                ToolCallReservationRequest(
+                    invocation_id=invocation_id,
+                    tool_name=name,
+                    input_schema_hash=_tool_schema_hash(request.tool),
+                    args_hash=hashlib.sha256(args_bytes).hexdigest(),
+                    input_size_bytes=len(args_bytes),
+                ),
+            )
+            replayable = name in context.replayable_tool_names
+            if call.status is AgentToolCallStatus.RESERVED:
+                await self._control.start_tool_call(context.turn_run_id, call.reservation_key)
+                claimed = True
+            elif not replayable:
+                raise AgentUsageError(
+                    "agent_tool_effect_not_replayable",
+                    "Tool effect 缺少结果缓存，禁止重复执行",
+                )
+            budget = await self._control.start_turn(context.turn_run_id)
+            timeout = min(
+                budget.execute_timeout_seconds
+                if name == "execute"
+                else budget.tool_timeout_seconds,
+                _remaining_seconds(budget.deadline_at),
+            )
+            async with asyncio.timeout(timeout):
+                result = await handler(request)
+            result_bytes = _tool_result_bytes(result)
+            if len(result_bytes) > budget.max_tool_output_bytes:
+                raise AgentUsageError("agent_tool_output_too_large", "Tool 输出超过安全上限")
+            await self._control.succeed_tool_call(
+                context.turn_run_id,
+                call.reservation_key,
+                output_size_bytes=len(result_bytes),
+                result_hash=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            return result
+        except TimeoutError as exc:
+            if call is not None and claimed:
+                await _record_tool_failure(
+                    self._control,
+                    context,
+                    call.reservation_key,
+                    "agent_tool_timeout",
+                    "Tool 调用超时",
+                )
+            raise _runtime_error(
+                RuntimeErrorKind.PERMANENT, "runtime_tool_timeout", "Runtime Tool 调用超时"
+            ) from exc
+        except AgentUsageError as exc:
+            if call is not None and claimed:
+                await _record_tool_failure(
+                    self._control,
+                    context,
+                    call.reservation_key,
+                    exc.code,
+                    exc.safe_message,
+                )
+            raise _usage_error(exc) from exc
+        except ResearchAgentRuntimeError as exc:
+            if call is not None and claimed:
+                await _record_tool_failure(
+                    self._control,
+                    context,
+                    call.reservation_key,
+                    exc.code,
+                    exc.safe_message,
+                )
+            raise
+        except Exception as exc:
+            if call is not None and claimed:
+                await _record_tool_failure(
+                    self._control,
+                    context,
+                    call.reservation_key,
+                    "agent_tool_execution_failed",
+                    "Tool 调用失败",
+                )
+            raise _runtime_error(
+                RuntimeErrorKind.TEMPORARY,
+                "runtime_tool_execution_failed",
+                "Runtime Tool 调用暂时失败",
+            ) from exc
+
+
+class _RuntimeToolCallBudgetMiddleware(AgentMiddleware[_ToolCallBudgetState, _TurnContext, Any]):
     """在 Tool node 前一次性预留模型本轮产生的全部 Tool calls。"""
 
     state_schema = _ToolCallBudgetState
@@ -320,6 +475,7 @@ class _RuntimeToolCallBudgetMiddleware(
     ) -> dict[str, Any] | None:
         return self._reserve(state, cast(_TurnContext, runtime.context))
 
+
 class DeepAgentsResearchAgentRuntime:
     """用原生 ``create_deep_agent`` 实现五方法业务 Port 的受限 Spike。"""
 
@@ -339,6 +495,7 @@ class DeepAgentsResearchAgentRuntime:
         before_succeed: Callable[[RuntimeTurnRequest], Awaitable[None]] | None = None,
         skill_backend: BackendProtocol | None = None,
         skill_sources: Sequence[str] = (),
+        usage_control: AgentUsageControl | None = None,
     ) -> None:
         if lease_heartbeat_interval_seconds <= 0:
             raise ValueError("Runtime lease heartbeat interval 必须为正数")
@@ -350,6 +507,7 @@ class DeepAgentsResearchAgentRuntime:
         )
         self._lease_heartbeat_interval_seconds = lease_heartbeat_interval_seconds
         self._before_succeed = before_succeed
+        self._usage_control = usage_control
 
         backend = backend or StateBackend()
         if skill_sources and skill_backend is None:
@@ -387,9 +545,9 @@ class DeepAgentsResearchAgentRuntime:
         if supports_execution(backend):
             filesystem_tool_names.append("execute")
         registered_tool_names = (
-            frozenset(filesystem_tool_names) | frozenset(item.name for item in all_tools)
-        ) - _ALWAYS_FORBIDDEN_TOOL_NAMES - (
-            _FORBIDDEN_CUSTOM_TOOL_NAMES if not supports_execution(backend) else frozenset()
+            (frozenset(filesystem_tool_names) | frozenset(item.name for item in all_tools))
+            - _ALWAYS_FORBIDDEN_TOOL_NAMES
+            - (_FORBIDDEN_CUSTOM_TOOL_NAMES if not supports_execution(backend) else frozenset())
         )
         filesystem = FilesystemMiddleware(
             backend=backend,
@@ -418,9 +576,8 @@ class DeepAgentsResearchAgentRuntime:
                     filesystem,
                     summarization,
                     _RuntimeModelCallBudgetMiddleware(),
-                    _RuntimeToolCallBudgetMiddleware(
-                        registered_tool_names=registered_tool_names
-                    ),
+                    _RuntimeToolCallBudgetMiddleware(registered_tool_names=registered_tool_names),
+                    *((_PersistentUsageMiddleware(usage_control),) if usage_control else ()),
                     _RuntimeToolPolicyMiddleware(
                         registered_tool_names=registered_tool_names,
                         execution_control=execution_control,
@@ -453,9 +610,7 @@ class DeepAgentsResearchAgentRuntime:
                             "runtime_checkpoint_unavailable",
                             "Runtime 成功 Checkpoint 暂时不可用",
                         )
-                    async for event in self._replay_succeeded(
-                        request.turn_run_id, existing
-                    ):
+                    async for event in self._replay_succeeded(request.turn_run_id, existing):
                         yield event
                     return
                 raise _runtime_error(
@@ -525,12 +680,18 @@ class DeepAgentsResearchAgentRuntime:
             allowed_tool_names=frozenset(request.policy_snapshot.allowed_tool_names),
             max_model_calls=request.policy_snapshot.max_model_calls,
             max_tool_calls=request.policy_snapshot.max_tool_calls,
+            replayable_tool_names=_replayable_tool_names(request.policy_snapshot),
             runtime_permit=permit,
+        )
+        runtime_budget = (
+            await self._usage_control.start_turn(request.turn_run_id)
+            if self._usage_control is not None
+            else None
         )
         stream: AsyncIterator[Any] | None = None
         heartbeat = self._start_lease_heartbeat(permit)
         try:
-            stream = self._graph.astream(
+            raw_stream = self._graph.astream(
                 {
                     "messages": [
                         HumanMessage(
@@ -543,6 +704,11 @@ class DeepAgentsResearchAgentRuntime:
                 context=context,
                 stream_mode="updates",
                 durability="sync",
+            )
+            stream = (
+                _stream_with_deadline(raw_stream, runtime_budget)
+                if runtime_budget is not None
+                else raw_stream
             )
             # Deep Agents 固定的 before_agent 首个更新会先形成真实 Checkpoint，
             # 但尚未进入模型调用；STARTED 后取消因此既可对账，也不会新增模型/Tool。
@@ -635,9 +801,7 @@ class DeepAgentsResearchAgentRuntime:
     def resume_turn(self, request: RuntimeResumeRequest) -> AsyncIterator[RuntimeEvent]:
         return self._resume_stream(request)
 
-    async def _resume_stream(
-        self, request: RuntimeResumeRequest
-    ) -> AsyncIterator[RuntimeEvent]:
+    async def _resume_stream(self, request: RuntimeResumeRequest) -> AsyncIterator[RuntimeEvent]:
         reconciliation = await self.reconcile_turn(request.turn_run_id)
         if reconciliation.state is RuntimeExecutionState.CANCELLED:
             raise _runtime_error(
@@ -725,12 +889,16 @@ class DeepAgentsResearchAgentRuntime:
         )
         context = _TurnContext(
             turn_run_id=turn_request.turn_run_id,
-            allowed_tool_names=frozenset(
-                turn_request.policy_snapshot.allowed_tool_names
-            ),
+            allowed_tool_names=frozenset(turn_request.policy_snapshot.allowed_tool_names),
             max_model_calls=turn_request.policy_snapshot.max_model_calls,
             max_tool_calls=turn_request.policy_snapshot.max_tool_calls,
+            replayable_tool_names=_replayable_tool_names(turn_request.policy_snapshot),
             runtime_permit=permit,
+        )
+        runtime_budget = (
+            await self._usage_control.start_turn(turn_request.turn_run_id)
+            if self._usage_control is not None
+            else None
         )
         stream: AsyncIterator[Any] | None = None
         heartbeat = self._start_lease_heartbeat(permit)
@@ -742,12 +910,17 @@ class DeepAgentsResearchAgentRuntime:
                 RuntimeEventKind.RESUMED,
                 "Deep Agents 已从 Checkpoint 恢复",
             )
-            stream = self._graph.astream(
+            raw_stream = self._graph.astream(
                 None,
                 config,
                 context=context,
                 stream_mode="updates",
                 durability="sync",
+            )
+            stream = (
+                _stream_with_deadline(raw_stream, runtime_budget)
+                if runtime_budget is not None
+                else raw_stream
             )
             async for _ in stream:
                 await self._raise_if_heartbeat_failed(heartbeat)
@@ -1108,9 +1281,7 @@ class DeepAgentsResearchAgentRuntime:
             evidence_ids=evidence_ids,
         )
 
-    def _reconciliation_from_record(
-        self, record: RuntimeExecution
-    ) -> RuntimeTurnReconciliation:
+    def _reconciliation_from_record(self, record: RuntimeExecution) -> RuntimeTurnReconciliation:
         state = {
             RuntimeControlState.RUNNING: RuntimeExecutionState.RUNNING,
             RuntimeControlState.INTERRUPTED: RuntimeExecutionState.INTERRUPTED,
@@ -1125,9 +1296,7 @@ class DeepAgentsResearchAgentRuntime:
             turn_run_id=record.turn_run_id,
             state=state,
             session_binding=self._session_binding(record.session_id),
-            turn_binding=self._turn_binding(
-                record.session_id, record.turn_run_id, checkpoint_id
-            ),
+            turn_binding=self._turn_binding(record.session_id, record.turn_run_id, checkpoint_id),
             last_event_sequence=4 if state is RuntimeExecutionState.SUCCEEDED else 2,
             result_available=state is RuntimeExecutionState.SUCCEEDED,
         )
@@ -1152,8 +1321,7 @@ class DeepAgentsResearchAgentRuntime:
         self._require_record_revision(record)
         if (
             record.session_id != request.session_id
-            or record.runtime_execution_id
-            != _opaque_id("execution", request.turn_run_id)
+            or record.runtime_execution_id != _opaque_id("execution", request.turn_run_id)
             or record.request_hash != _request_hash(request)
         ):
             raise _runtime_error(
@@ -1165,10 +1333,8 @@ class DeepAgentsResearchAgentRuntime:
     @staticmethod
     def _require_checkpoint_revision(checkpoint: CheckpointTuple) -> None:
         if (
-            checkpoint.metadata.get(_RUNTIME_REVISION_METADATA_KEY)
-            != RUNTIME_CONTRACT_REVISION
-            or checkpoint.metadata.get(_GRAPH_REVISION_METADATA_KEY)
-            != RUNTIME_GRAPH_REVISION
+            checkpoint.metadata.get(_RUNTIME_REVISION_METADATA_KEY) != RUNTIME_CONTRACT_REVISION
+            or checkpoint.metadata.get(_GRAPH_REVISION_METADATA_KEY) != RUNTIME_GRAPH_REVISION
         ):
             raise _runtime_error(
                 RuntimeErrorKind.PERMANENT,
@@ -1344,8 +1510,7 @@ class DeepAgentsResearchAgentRuntime:
         if (
             metadata.get(_TURN_METADATA_KEY) != request.turn_run_id
             or metadata.get(_SESSION_METADATA_KEY) != request.session_id
-            or metadata.get(_EXECUTION_METADATA_KEY)
-            != _opaque_id("execution", request.turn_run_id)
+            or metadata.get(_EXECUTION_METADATA_KEY) != _opaque_id("execution", request.turn_run_id)
             or metadata.get(_REQUEST_HASH_METADATA_KEY) != _request_hash(request)
         ):
             raise _runtime_error(
@@ -1393,11 +1558,7 @@ class DeepAgentsResearchAgentRuntime:
                 _EXECUTION_METADATA_KEY: execution_id,
                 _RUNTIME_REVISION_METADATA_KEY: RUNTIME_CONTRACT_REVISION,
                 _GRAPH_REVISION_METADATA_KEY: RUNTIME_GRAPH_REVISION,
-                **(
-                    {_FENCING_METADATA_KEY: permit.fencing_token}
-                    if permit is not None
-                    else {}
-                ),
+                **({_FENCING_METADATA_KEY: permit.fencing_token} if permit is not None else {}),
             },
         }
 
@@ -1434,19 +1595,13 @@ class DeepAgentsResearchAgentRuntime:
         params = model._get_ls_params()  # noqa: SLF001 - LangChain 的 Provider 识别扩展点
         provider = params.get("ls_provider")
         model_name = params.get("ls_model_name")
-        if not _valid_profile_component(provider) or not _valid_profile_component(
-            model_name
-        ):
+        if not _valid_profile_component(provider) or not _valid_profile_component(model_name):
             raise ValueError(
                 "Deep Agents model 必须提供可用于精确 Profile 的 ls_provider/ls_model_name"
             )
-        resolved_identifier = getattr(model, "model_name", None) or getattr(
-            model, "model", None
-        )
+        resolved_identifier = getattr(model, "model_name", None) or getattr(model, "model", None)
         if resolved_identifier != model_name:
-            raise ValueError(
-                "Deep Agents model 的 ls_model_name 必须匹配可解析的模型标识"
-            )
+            raise ValueError("Deep Agents model 的 ls_model_name 必须匹配可解析的模型标识")
         register_harness_profile(
             f"{provider}:{model_name}",
             HarnessProfile(
@@ -1476,13 +1631,128 @@ def _tool_name(tool: BaseTool | dict[str, Any]) -> str | None:
     return name if isinstance(name, str) else None
 
 
-def _valid_profile_component(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value)
-        and value == value.strip()
-        and ":" not in value
+def _tool_schema_hash(tool_value: BaseTool | None) -> str:
+    if tool_value is None:
+        raise _runtime_error(
+            RuntimeErrorKind.PERMANENT,
+            "runtime_tool_contract_missing",
+            "Runtime Tool 缺少 Schema",
+        )
+    # langchain-mcp-adapters 把 MCP 原始 inputSchema 保存在 args_schema(dict)；
+    # tool_call_schema 会额外注入 Tool description，不能用于 Catalog 契约哈希。
+    args_schema = tool_value.args_schema
+    if isinstance(args_schema, dict):
+        schema = args_schema
+    else:
+        schema_value = tool_value.tool_call_schema
+        schema = (
+            schema_value
+            if isinstance(schema_value, dict)
+            else cast(Any, schema_value).model_json_schema()
+        )
+    return hashlib.sha256(_strict_canonical_bytes(schema)).hexdigest()
+
+
+def _strict_canonical_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+
+
+def _tool_result_bytes(result: ToolMessage | Command[Any]) -> bytes:
+    if isinstance(result, ToolMessage):
+        return _strict_canonical_bytes(
+            {
+                "status": result.status,
+                "content": result.content,
+                "artifact": result.artifact,
+            }
+        )
+    raise AgentUsageError("agent_tool_result_unsupported", "Tool 结果类型无法形成稳定摘要")
+
+
+def _remaining_seconds(deadline_at: datetime) -> float:
+    remaining = (deadline_at - datetime.now(UTC)).total_seconds()
+    if remaining <= 0:
+        raise AgentUsageError("agent_turn_deadline_exceeded", "Agent Turn 已超过墙钟预算")
+    return remaining
+
+
+def _replayable_tool_names(policy_snapshot: PolicySnapshot) -> frozenset[str]:
+    """只从冻结 Policy 明确产生可由底层 effect cache 对账的 Tool 名。"""
+    fixed = {
+        "search_project_chunks",
+        "read_review_evidence_matrix",
+        "submit_artifact",
+    }
+    mcp = {tool.name for ref in policy_snapshot.mcp_refs for tool in ref.tools}
+    return frozenset((fixed | mcp) & set(policy_snapshot.allowed_tool_names))
+
+
+async def _stream_with_deadline(
+    stream: AsyncIterator[Any], budget: RuntimeBudget
+) -> AsyncIterator[Any]:
+    """在不改变 LangGraph 原始迭代语义的前提下约束整个执行墙钟。"""
+    try:
+        while True:
+            try:
+                async with asyncio.timeout(_remaining_seconds(budget.deadline_at)):
+                    item = await anext(stream)
+            except StopAsyncIteration:
+                return
+            except (TimeoutError, AgentUsageError) as exc:
+                raise _runtime_error(
+                    RuntimeErrorKind.PERMANENT,
+                    "agent_turn_deadline_exceeded",
+                    "Agent Turn 已超过墙钟预算",
+                ) from exc
+            # timeout 只包围图的推进；消费者处理 item 时不得遗留悬挂 timer。
+            yield item
+    finally:
+        await _close_stream(stream)
+
+
+def _model_usage(response: ModelResponse[Any]) -> tuple[int | None, int | None]:
+    for message in reversed(response.result):
+        if isinstance(message, AIMessage) and message.usage_metadata:
+            return (
+                message.usage_metadata.get("input_tokens"),
+                message.usage_metadata.get("output_tokens"),
+            )
+    return None, None
+
+
+async def _record_tool_failure(
+    usage_control: AgentUsageControl,
+    context: _TurnContext,
+    reservation_key: str,
+    code: str,
+    safe_message: str,
+) -> None:
+    with suppress(AgentUsageError):
+        await usage_control.fail_tool_call(
+            context.turn_run_id,
+            reservation_key,
+            error_code=code,
+            safe_message=safe_message,
+        )
+
+
+def _usage_error(error: AgentUsageError) -> ResearchAgentRuntimeError:
+    kind = (
+        RuntimeErrorKind.CANCELLED
+        if error.code == "agent_turn_cancelled"
+        else RuntimeErrorKind.PERMANENT
     )
+    return _runtime_error(kind, error.code, error.safe_message)
+
+
+def _valid_profile_component(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and value == value.strip() and ":" not in value
 
 
 def _runtime_user_message_content(request: RuntimeTurnRequest) -> str:

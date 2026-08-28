@@ -227,6 +227,7 @@ class AgentPolicySnapshotORM(Base):
     )
     turn_run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id"), unique=True, nullable=False)
     allowed_tool_names: Mapped[list] = mapped_column(JSONB, nullable=False)
+    tool_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     allowed_skill_names: Mapped[list] = mapped_column(JSONB, nullable=False)
     skill_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
     mcp_refs: Mapped[list] = mapped_column(JSONB, nullable=False)
@@ -235,8 +236,25 @@ class AgentPolicySnapshotORM(Base):
     approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     max_model_calls: Mapped[int] = mapped_column(Integer, nullable=False)
     max_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    wall_clock_limit_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    execute_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_tool_output_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_repeated_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_input_tokens_per_model_call: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_output_tokens_per_model_call: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint(
+            "wall_clock_limit_seconds > 0 AND tool_timeout_seconds > 0 "
+            "AND execute_timeout_seconds > 0 AND max_tool_output_bytes > 0 "
+            "AND max_repeated_tool_calls > 0 "
+            "AND max_input_tokens_per_model_call > 0 "
+            "AND max_output_tokens_per_model_call > 0",
+            name="ck_agent_policy_positive_limits",
+        ),
+    )
 
 
 class AgentMcpProfileORM(Base):
@@ -692,6 +710,162 @@ class AgentToolExecutionORM(Base):
             "tool_name",
             "args_hash",
             name="uq_agent_tool_executions_turn_tool_args",
+        ),
+    )
+
+
+class AgentTurnUsageORM(Base):
+    """Agent Turn 的版本化硬预算与累计业务用量。"""
+
+    __tablename__ = "agent_turn_usages"
+    turn_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_turn_runs.turn_run_id"), primary_key=True
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"), nullable=False)
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.session_id"), nullable=False)
+    policy_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_policy_snapshots.snapshot_id"), nullable=False
+    )
+    max_model_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    wall_clock_limit_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    execute_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_tool_output_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_repeated_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_input_tokens_per_model_call: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_output_tokens_per_model_call: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_calls_reserved: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_calls_reserved: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint(
+            "max_model_calls >= 0 AND model_calls_reserved BETWEEN 0 AND max_model_calls",
+            name="ck_agent_usage_model_calls",
+        ),
+        CheckConstraint(
+            "max_tool_calls >= 0 AND tool_calls_reserved BETWEEN 0 AND max_tool_calls",
+            name="ck_agent_usage_tool_calls",
+        ),
+        CheckConstraint(
+            "wall_clock_limit_seconds > 0 AND tool_timeout_seconds > 0 "
+            "AND execute_timeout_seconds > 0 AND max_tool_output_bytes > 0 "
+            "AND max_repeated_tool_calls > 0 "
+            "AND max_input_tokens_per_model_call > 0 "
+            "AND max_output_tokens_per_model_call > 0",
+            name="ck_agent_usage_positive_limits",
+        ),
+        CheckConstraint(
+            "input_tokens IS NULL OR input_tokens >= 0",
+            name="ck_agent_usage_input_tokens",
+        ),
+        CheckConstraint(
+            "output_tokens IS NULL OR output_tokens >= 0",
+            name="ck_agent_usage_output_tokens",
+        ),
+        CheckConstraint(
+            "(started_at IS NULL AND deadline_at IS NULL) OR "
+            "(started_at IS NOT NULL AND deadline_at > started_at)",
+            name="ck_agent_usage_deadline",
+        ),
+    )
+
+
+class AgentModelCallReservationORM(Base):
+    """模型调用的稳定预留键；不保存 Prompt 或响应。"""
+
+    __tablename__ = "agent_model_call_reservations"
+    reservation_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    turn_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_turn_usages.turn_run_id"), index=True, nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("ordinal >= 1", name="ck_agent_model_call_ordinal"),
+        CheckConstraint(
+            "input_tokens IS NULL OR input_tokens >= 0",
+            name="ck_agent_model_call_input_tokens",
+        ),
+        CheckConstraint(
+            "output_tokens IS NULL OR output_tokens >= 0",
+            name="ck_agent_model_call_output_tokens",
+        ),
+        UniqueConstraint("turn_run_id", "ordinal", name="uq_agent_model_calls_turn_ordinal"),
+    )
+
+
+class AgentToolCallORM(Base):
+    """所有 Runtime Tool invocation 的脱敏执行摘要。"""
+
+    __tablename__ = "agent_tool_calls"
+    reservation_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    turn_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_turn_usages.turn_run_id"), index=True, nullable=False
+    )
+    invocation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    tool_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    input_schema_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    args_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    input_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    result_hash: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    safe_message: Mapped[str | None] = mapped_column(String(500))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('reserved','running','succeeded','failed')",
+            name="ck_agent_tool_call_status",
+        ),
+        CheckConstraint(
+            "input_size_bytes >= 0 AND "
+            "(output_size_bytes IS NULL OR output_size_bytes BETWEEN 0 AND 65536)",
+            name="ck_agent_tool_call_sizes",
+        ),
+        CheckConstraint(
+            "duration_ms IS NULL OR duration_ms >= 0",
+            name="ck_agent_tool_call_duration",
+        ),
+        CheckConstraint(
+            "(status = 'reserved' AND started_at IS NULL AND completed_at IS NULL "
+            "AND output_size_bytes IS NULL AND result_hash IS NULL "
+            "AND error_code IS NULL AND safe_message IS NULL AND duration_ms IS NULL) OR "
+            "(status = 'running' AND started_at IS NOT NULL AND completed_at IS NULL "
+            "AND output_size_bytes IS NULL AND result_hash IS NULL "
+            "AND error_code IS NULL AND safe_message IS NULL AND duration_ms IS NULL) OR "
+            "(status = 'succeeded' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND output_size_bytes IS NOT NULL AND result_hash IS NOT NULL "
+            "AND error_code IS NULL AND safe_message IS NULL AND duration_ms IS NOT NULL) OR "
+            "(status = 'failed' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND output_size_bytes IS NULL AND result_hash IS NULL "
+            "AND error_code IS NOT NULL AND safe_message IS NOT NULL "
+            "AND duration_ms IS NOT NULL)",
+            name="ck_agent_tool_call_state_fields",
+        ),
+        UniqueConstraint(
+            "turn_run_id", "invocation_id", name="uq_agent_tool_calls_turn_invocation"
+        ),
+        Index(
+            "ix_agent_tool_calls_turn_name_args",
+            "turn_run_id",
+            "tool_name",
+            "args_hash",
         ),
     )
 

@@ -1,21 +1,28 @@
 """AgentSessionService 的真实行为与原子 bundle 测试。"""
 
 import pytest
+from sqlalchemy import update
 
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.exceptions import (
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
+    AgentTurnNotFoundError,
     ProjectNotFoundError,
 )
+from literature_agent.domain.project import create_project
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
 )
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
 )
+from literature_agent.infrastructure.persistence.models import AgentTurnUsageORM
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
+)
+from literature_agent.infrastructure.persistence.project_repository import (
+    SqlalchemyProjectRepository,
 )
 from literature_agent.infrastructure.persistence.run_repository import SqlalchemyRunRepository
 from tests.fakes.agent_scenario import make_agent_service, seed_agent_scenario
@@ -170,3 +177,61 @@ async def test_post_message_rejects_unscoped_review_before_writing_bundle(db_eng
     assert await service.list_messages(scenario.actor, agent_session.session_id) == []
     loaded = await service.get_session(scenario.actor, agent_session.session_id)
     assert loaded.active_turn_run_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drift", ["owner", "project", "session", "policy"])
+async def test_tool_execution_query_fails_closed_on_scope_or_policy_drift(
+    db_engine, drift: str
+) -> None:
+    scenario = await seed_agent_scenario(db_engine)
+    service = make_agent_service(scenario.factory)
+    agent_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title="Tool 摘要"
+    )
+    other_session = await service.create_session(
+        scenario.actor, scenario.project.project_id, title="其他会话"
+    )
+    submitted = await service.post_message(
+        scenario.actor,
+        agent_session.session_id,
+        content="生成安全 Tool 摘要",
+        review_output_id=scenario.matrix.output_id,
+        idempotency_key=f"tool-execution-closure-{drift}",
+        correlation_id=f"tool-execution-closure-{drift}",
+    )
+
+    view = await service.list_tool_executions(scenario.actor, submitted.run_id)
+    assert view.usage.turn_run_id == submitted.run_id
+    assert view.items == ()
+    with pytest.raises(AgentTurnNotFoundError):
+        await service.list_tool_executions(
+            ActorContext(owner_id="other-owner"), submitted.run_id
+        )
+
+    async with scenario.factory() as session:
+        values: dict[str, object]
+        if drift == "owner":
+            values = {"owner_id": "other-owner"}
+        elif drift == "session":
+            values = {"session_id": other_session.session_id}
+        elif drift == "policy":
+            values = {"max_tool_calls": 11}
+        else:
+            other_project = create_project(
+                owner_id=scenario.actor.owner_id,
+                name="其他 Project",
+                description="",
+            )
+            await SqlalchemyProjectRepository(session).add(other_project)
+            await session.flush()
+            values = {"project_id": other_project.project_id}
+        await session.execute(
+            update(AgentTurnUsageORM)
+            .where(AgentTurnUsageORM.turn_run_id == submitted.run_id)
+            .values(**values)
+        )
+        await session.commit()
+
+    with pytest.raises(AgentTurnNotFoundError):
+        await service.list_tool_executions(scenario.actor, submitted.run_id)

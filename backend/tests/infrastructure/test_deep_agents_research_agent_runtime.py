@@ -4,7 +4,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from deepagents import create_deep_agent
@@ -14,13 +15,19 @@ from deepagents.backends.protocol import (
     FileUploadResponse,
 )
 from deepagents.backends.sandbox import BaseSandbox
-from langchain_core.messages import AIMessage, HumanMessage
+from deepagents.middleware.filesystem import FilesystemMiddleware
+from langchain.agents.middleware.types import ToolCallRequest
+from langchain.tools import ToolRuntime
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
 from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.memory import MemorySaver
+from mcp.types import Tool
 from pydantic import Field
 
+from literature_agent.application.ports.agent_usage_control import RuntimeBudget
 from literature_agent.application.ports.project_research_context import (
     ProjectContextToolResult,
     ProjectResearchContextError,
@@ -38,19 +45,38 @@ from literature_agent.application.runtime_execution_control import (
     RuntimeExecutionControlError,
     RuntimeExecutionControlService,
 )
+from literature_agent.domain.agent_usage import (
+    AgentToolCallStatus,
+    create_agent_tool_call,
+    create_agent_turn_usage,
+)
+from literature_agent.domain.mcp_configuration import (
+    McpPolicyRef,
+    McpPolicyToolRef,
+    canonical_json_hash,
+)
 from literature_agent.domain.research_agent import (
     create_context_snapshot,
     create_policy_snapshot,
+    create_project_research_workspace_policy_snapshot,
 )
 from literature_agent.domain.run import RunStatus, create_run
 from literature_agent.domain.run_attempt import AttemptStatus, RunAttempt
-from literature_agent.domain.runtime_execution import RuntimeControlState
+from literature_agent.domain.runtime_execution import RuntimeControlState, RuntimeExecutionPermit
 from literature_agent.domain.tool_execution import ToolErrorKind
+from literature_agent.infrastructure.agent import (
+    deep_agents_research_agent_runtime as runtime_module,
+)
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
     _checkpoint_id,
     _opaque_id,
+    _PersistentUsageMiddleware,
+    _replayable_tool_names,
     _request_hash,
+    _RuntimeToolPolicyMiddleware,
+    _stream_with_deadline,
+    _tool_schema_hash,
     _TurnContext,
 )
 from tests.fakes.deep_agent_model import ScriptedDeepAgentChatModel
@@ -60,6 +86,93 @@ from tests.fakes.fake_run_repository import FakeRunRepository
 from tests.fakes.fake_runtime_execution_repository import FakeRuntimeExecutionRepository
 
 _LEASE_NOW = datetime(2026, 8, 26, 10, 0, tzinfo=UTC)
+
+
+class _UsageControl:
+    def __init__(self) -> None:
+        self.usage = create_agent_turn_usage(
+            turn_run_id="turn-1",
+            owner_id="owner-1",
+            project_id="project-1",
+            session_id="session-1",
+            policy_snapshot_id="policy-1",
+            max_model_calls=8,
+            max_tool_calls=12,
+            now=_LEASE_NOW,
+        ).start(now=datetime.now(UTC))
+        self.model_ordinals: list[int] = []
+        self.calls = {}
+        self.succeeded_calls: list[str] = []
+        self.failed_calls: list[tuple[str, str]] = []
+
+    async def start_turn(self, turn_run_id):
+        assert turn_run_id == "turn-1"
+        assert self.usage.deadline_at is not None
+        return RuntimeBudget(
+            deadline_at=self.usage.deadline_at,
+            tool_timeout_seconds=30,
+            execute_timeout_seconds=60,
+            max_tool_output_bytes=64 * 1024,
+            max_input_tokens_per_model_call=60_000,
+            max_output_tokens_per_model_call=2_048,
+        )
+
+    async def reserve_model_call(self, turn_run_id, ordinal, *, approximate_input_tokens):
+        assert turn_run_id == "turn-1"
+        assert approximate_input_tokens < 60_000
+        self.model_ordinals.append(ordinal)
+        return self.usage
+
+    async def record_model_usage(self, *args, **kwargs):
+        return None
+
+    async def reserve_tool_call(self, turn_run_id, request):
+        existing = self.calls.get(request.invocation_id)
+        if existing is not None:
+            return existing
+        value = create_agent_tool_call(
+            turn_run_id=turn_run_id,
+            invocation_id=request.invocation_id,
+            tool_name=request.tool_name,
+            tool_version="project-context.v1",
+            input_schema_hash=request.input_schema_hash,
+            args_hash=request.args_hash,
+            input_size_bytes=request.input_size_bytes,
+        )
+        self.calls[request.invocation_id] = value
+        return value
+
+    async def start_tool_call(self, turn_run_id, reservation_key):
+        value = next(v for v in self.calls.values() if v.reservation_key == reservation_key)
+        started = value.start()
+        self.calls[value.invocation_id] = started
+        return started
+
+    async def succeed_tool_call(
+        self, turn_run_id, reservation_key, *, output_size_bytes, result_hash
+    ):
+        value = next(v for v in self.calls.values() if v.reservation_key == reservation_key)
+        if value.status is AgentToolCallStatus.SUCCEEDED:
+            assert value.output_size_bytes == output_size_bytes
+            assert value.result_hash == result_hash
+            return value
+        succeeded = value.succeed(output_size_bytes=output_size_bytes, result_hash=result_hash)
+        self.calls[value.invocation_id] = succeeded
+        self.succeeded_calls.append(value.invocation_id)
+        return succeeded
+
+    async def fail_tool_call(
+        self,
+        turn_run_id,
+        reservation_key,
+        *,
+        error_code,
+        safe_message,
+    ):
+        del turn_run_id, safe_message
+        value = next(v for v in self.calls.values() if v.reservation_key == reservation_key)
+        self.failed_calls.append((value.invocation_id, error_code))
+        return value
 
 
 async def _controlled_runtime_dependencies(turn_run_id: str):
@@ -116,9 +229,7 @@ class _ProjectContext:
             result_hash="a" * 64,
         )
 
-    async def read_review_evidence_matrix(
-        self, turn_run_id: str
-    ) -> ProjectContextToolResult:
+    async def read_review_evidence_matrix(self, turn_run_id: str) -> ProjectContextToolResult:
         self.matrix_calls.append(turn_run_id)
         return ProjectContextToolResult(
             effect_id="effect-matrix-1",
@@ -139,19 +250,14 @@ class _ProjectToolModel(ScriptedDeepAgentChatModel):
         **kwargs: Any,
     ):
         self.visible_tool_schemas.append(
-            {
-                item.name: item.tool_call_schema.model_json_schema()
-                for item in tools
-            }
+            {item.name: item.tool_call_schema.model_json_schema() for item in tools}
         )
         return super().bind_tools(tools, tool_choice=tool_choice, **kwargs)
 
     def _next_message(self, messages: list[Any]) -> AIMessage:
         self.model_call_count += 1
         if self._tool_requested:
-            return AIMessage(
-                content="该方法得到本地论文支持 [evidence:evidence-agent-1]"
-            )
+            return AIMessage(content="该方法得到本地论文支持 [evidence:evidence-agent-1]")
         self._tool_requested = True
         return AIMessage(
             content="",
@@ -186,9 +292,7 @@ class _MatrixToolModel(_ProjectToolModel):
 
 
 class _FailingMatrixContext(_ProjectContext):
-    async def read_review_evidence_matrix(
-        self, turn_run_id: str
-    ) -> ProjectContextToolResult:
+    async def read_review_evidence_matrix(self, turn_run_id: str) -> ProjectContextToolResult:
         self.matrix_calls.append(turn_run_id)
         raise ProjectResearchContextError(
             "project_context_matrix_unavailable",
@@ -316,6 +420,486 @@ async def test_unified_tool_budget_counts_project_and_execute_once_each() -> Non
     assert events[-1].kind is RuntimeEventKind.COMPLETED
     assert context.search_calls == [("turn-1", "统一预算")]
     assert sandbox.commands == ["python -c 'print(1)'"]
+
+
+async def test_persistent_usage_wraps_model_and_project_tool_boundaries() -> None:
+    usage = _UsageControl()
+    middleware = _PersistentUsageMiddleware(usage)
+
+    @tool
+    async def search_project_chunks(query: str) -> str:
+        """离线 Project Context effect cache 夹具。"""
+        return query
+
+    context = _TurnContext(
+        turn_run_id="turn-1",
+        allowed_tool_names=frozenset({"search_project_chunks"}),
+        max_model_calls=8,
+        max_tool_calls=12,
+        replayable_tool_names=frozenset({"search_project_chunks"}),
+        runtime_permit=None,
+    )
+    runtime = ToolRuntime(
+        state={},
+        context=context,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="project-search-1",
+        store=None,
+        tools=[search_project_chunks],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": "search_project_chunks",
+            "args": {"query": "图神经网络"},
+            "id": "project-search-1",
+            "type": "tool_call",
+        },
+        tool=search_project_chunks,
+        state={},
+        runtime=runtime,
+    )
+    effects: list[str] = []
+
+    async def cached_handler(_: ToolCallRequest) -> ToolMessage:
+        effects.append("effect-or-cache-read")
+        return ToolMessage(content='{"result_hash":"a"}', tool_call_id="project-search-1")
+
+    await middleware.awrap_tool_call(request, cached_handler)
+    await middleware.awrap_tool_call(request, cached_handler)
+
+    assert usage.calls["project-search-1"].status is AgentToolCallStatus.SUCCEEDED
+    assert effects == ["effect-or-cache-read", "effect-or-cache-read"]
+
+
+async def test_persistent_usage_never_reexecutes_terminal_execute_effect() -> None:
+    usage = _UsageControl()
+    middleware = _PersistentUsageMiddleware(usage)
+
+    @tool
+    async def execute(command: str) -> str:
+        """离线 execute 夹具。"""
+        return command
+
+    runtime = ToolRuntime(
+        state={},
+        context=_TurnContext(
+            turn_run_id="turn-1",
+            allowed_tool_names=frozenset({"execute"}),
+            max_model_calls=8,
+            max_tool_calls=12,
+            runtime_permit=None,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="execute-1",
+        store=None,
+        tools=[execute],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": "execute",
+            "args": {"command": "python -c 'print(1)'"},
+            "id": "execute-1",
+            "type": "tool_call",
+        },
+        tool=execute,
+        state={},
+        runtime=runtime,
+    )
+    effects = 0
+
+    async def handler(_: ToolCallRequest) -> ToolMessage:
+        nonlocal effects
+        effects += 1
+        return ToolMessage(content="ok", tool_call_id="execute-1")
+
+    await middleware.awrap_tool_call(request, handler)
+    with pytest.raises(ResearchAgentRuntimeError) as replay:
+        await middleware.awrap_tool_call(request, handler)
+
+    assert replay.value.code == "agent_tool_effect_not_replayable"
+    assert effects == 1
+
+
+async def test_persistent_usage_rejects_non_finite_tool_args_before_effect() -> None:
+    usage = _UsageControl()
+    middleware = _PersistentUsageMiddleware(usage)
+
+    @tool
+    async def execute(value: float) -> str:
+        """离线 execute 夹具。"""
+        return str(value)
+
+    runtime = ToolRuntime(
+        state={},
+        context=_TurnContext(
+            turn_run_id="turn-1",
+            allowed_tool_names=frozenset({"execute"}),
+            max_model_calls=8,
+            max_tool_calls=12,
+            runtime_permit=None,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="execute-nan",
+        store=None,
+        tools=[execute],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": "execute",
+            "args": {"value": float("nan")},
+            "id": "execute-nan",
+            "type": "tool_call",
+        },
+        tool=execute,
+        state={},
+        runtime=runtime,
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as rejected:
+        await middleware.awrap_tool_call(
+            request,
+            lambda _: pytest.fail("参数拒绝后不得执行 Tool"),
+        )
+    assert rejected.value.code == "runtime_tool_args_invalid"
+
+
+async def test_expired_runtime_wall_budget_does_not_advance_graph_stream() -> None:
+    advanced = False
+
+    async def graph_stream():
+        nonlocal advanced
+        advanced = True
+        yield {"model": "must-not-run"}
+
+    budget = RuntimeBudget(
+        deadline_at=datetime.now(UTC) - timedelta(milliseconds=1),
+        tool_timeout_seconds=30,
+        execute_timeout_seconds=60,
+        max_tool_output_bytes=64 * 1024,
+        max_input_tokens_per_model_call=60_000,
+        max_output_tokens_per_model_call=2_048,
+    )
+    with pytest.raises(ResearchAgentRuntimeError) as expired:
+        await anext(_stream_with_deadline(graph_stream(), budget))
+
+    assert expired.value.code == "agent_turn_deadline_exceeded"
+    assert advanced is False
+
+
+async def test_stream_deadline_does_not_leave_timer_active_while_consumer_handles_item() -> None:
+    async def graph_stream():
+        yield "first"
+        yield "second"
+
+    budget = RuntimeBudget(
+        deadline_at=datetime.now(UTC) + timedelta(milliseconds=40),
+        tool_timeout_seconds=30,
+        execute_timeout_seconds=60,
+        max_tool_output_bytes=64 * 1024,
+        max_input_tokens_per_model_call=60_000,
+        max_output_tokens_per_model_call=2_048,
+    )
+    wrapped = _stream_with_deadline(graph_stream(), budget)
+
+    assert await anext(wrapped) == "first"
+    # 消费者处理期间没有悬挂 asyncio.timeout 来取消当前 Task；绝对 deadline
+    # 仍然流逝，下一次推进会在接触底层 stream 前拒绝。
+    await asyncio.sleep(0.06)
+    with pytest.raises(ResearchAgentRuntimeError) as expired:
+        await anext(wrapped)
+    assert expired.value.code == "agent_turn_deadline_exceeded"
+
+
+def test_project_tool_actual_schemas_match_frozen_policy_refs() -> None:
+    policy = create_project_research_workspace_policy_snapshot(
+        owner_id="owner-1",
+        project_id="project-1",
+        session_id="session-1",
+        turn_run_id="turn-1",
+    )
+    expected = {ref.name: ref.input_schema_hash for ref in policy.tool_refs}
+    actual = {
+        value.name: _tool_schema_hash(value)
+        for value in DeepAgentsResearchAgentRuntime._project_context_tools(  # noqa: SLF001
+            _ProjectContext()
+        )
+    }
+
+    assert actual == {name: expected[name] for name in actual}
+
+
+def test_deepagents_builtin_tool_schemas_match_frozen_policy_refs() -> None:
+    policy = create_project_research_workspace_policy_snapshot(
+        owner_id="owner-1",
+        project_id="project-1",
+        session_id="session-1",
+        turn_run_id="turn-1",
+    )
+    expected = {ref.name: ref.input_schema_hash for ref in policy.tool_refs}
+    file_names = ["ls", "read_file", "write_file", "edit_file", "glob", "grep"]
+    tools = FilesystemMiddleware(
+        backend=_ExecuteSandbox(),
+        tools=[*file_names, "execute"],
+        max_execute_timeout=60,
+    ).tools
+
+    actual = {value.name: _tool_schema_hash(value) for value in tools}
+    assert actual == {name: expected[name] for name in actual}
+
+
+def test_converted_mcp_tool_hashes_raw_input_schema_not_description() -> None:
+    input_schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    definition = Tool(
+        name="search_papers",
+        description="非空描述不能进入 MCP inputSchema 契约哈希",
+        inputSchema=input_schema,
+    )
+    converted = convert_mcp_tool_to_langchain_tool(
+        cast(Any, object()),
+        definition,
+        server_name="arxiv-search",
+        tool_name_prefix=True,
+    )
+    tool_ref = McpPolicyToolRef(converted.name, canonical_json_hash(input_schema))
+    mcp_ref = McpPolicyRef(
+        profile_id="profile-1",
+        profile_revision=1,
+        catalog_id="arxiv-search",
+        version="0.6.2",
+        config_hash="a" * 64,
+        tools=(tool_ref,),
+    )
+    policy = create_project_research_workspace_policy_snapshot(
+        owner_id="owner-1",
+        project_id="project-1",
+        session_id="session-1",
+        turn_run_id="turn-1",
+        mcp_refs=(mcp_ref,),
+    )
+
+    expected = next(ref for ref in policy.tool_refs if ref.name == converted.name)
+    assert _tool_schema_hash(converted) == expected.input_schema_hash
+    assert "description" in cast(dict[str, Any], converted.tool_call_schema)
+
+
+async def test_only_policy_declared_mcp_tool_is_effect_cache_replayable() -> None:
+    usage = _UsageControl()
+    middleware = _PersistentUsageMiddleware(usage)
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    tool_ref = McpPolicyToolRef("arxiv-search_search_papers", canonical_json_hash(schema))
+    mcp_ref = McpPolicyRef(
+        profile_id="profile-1",
+        profile_revision=1,
+        catalog_id="arxiv-search",
+        version="0.6.2",
+        config_hash="a" * 64,
+        tools=(tool_ref,),
+    )
+    policy = create_project_research_workspace_policy_snapshot(
+        owner_id="owner-1",
+        project_id="project-1",
+        session_id="session-1",
+        turn_run_id="turn-1",
+        mcp_refs=(mcp_ref,),
+    )
+
+    @tool("arxiv-search_search_papers", args_schema=schema)
+    async def catalogued(query: str) -> str:
+        """Catalog 固定 MCP Tool。"""
+        return query
+
+    context = _TurnContext(
+        turn_run_id="turn-1",
+        allowed_tool_names=frozenset(policy.allowed_tool_names),
+        max_model_calls=8,
+        max_tool_calls=12,
+        replayable_tool_names=_replayable_tool_names(policy),
+    )
+    runtime = ToolRuntime(
+        state={},
+        context=context,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="mcp-call-1",
+        store=None,
+        tools=[catalogued],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": catalogued.name,
+            "args": {"query": "budget"},
+            "id": "mcp-call-1",
+            "type": "tool_call",
+        },
+        tool=catalogued,
+        state={},
+        runtime=runtime,
+    )
+    effects = 0
+
+    async def handler(_: ToolCallRequest) -> ToolMessage:
+        nonlocal effects
+        effects += 1
+        return ToolMessage(content="cached", tool_call_id="mcp-call-1")
+
+    await middleware.awrap_tool_call(request, handler)
+    await middleware.awrap_tool_call(request, handler)
+    assert effects == 2
+
+
+async def test_prefix_lookalike_custom_tool_is_not_effect_cache_replayable() -> None:
+    usage = _UsageControl()
+    middleware = _PersistentUsageMiddleware(usage)
+
+    @tool("arxiv_unregistered_custom")
+    async def lookalike(query: str) -> str:
+        """名称相似但不属于冻结 MCP Policy。"""
+        return query
+
+    context = _TurnContext(
+        turn_run_id="turn-1",
+        allowed_tool_names=frozenset({lookalike.name}),
+        max_model_calls=8,
+        max_tool_calls=12,
+    )
+    runtime = ToolRuntime(
+        state={},
+        context=context,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="custom-call-1",
+        store=None,
+        tools=[lookalike],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": lookalike.name,
+            "args": {"query": "budget"},
+            "id": "custom-call-1",
+            "type": "tool_call",
+        },
+        tool=lookalike,
+        state={},
+        runtime=runtime,
+    )
+    effects = 0
+
+    async def handler(_: ToolCallRequest) -> ToolMessage:
+        nonlocal effects
+        effects += 1
+        return ToolMessage(content="uncached", tool_call_id="custom-call-1")
+
+    await middleware.awrap_tool_call(request, handler)
+    with pytest.raises(ResearchAgentRuntimeError) as replay:
+        await middleware.awrap_tool_call(request, handler)
+    assert replay.value.code == "agent_tool_effect_not_replayable"
+    assert effects == 1
+
+
+async def test_post_tool_fence_failure_is_recorded_as_failure_not_success() -> None:
+    class _ExecutionControl:
+        checks = 0
+
+        async def assert_active(self, permit) -> None:
+            del permit
+            self.checks += 1
+            if self.checks == 2:
+                raise RuntimeExecutionControlError(
+                    "runtime_execution_lease_lost",
+                    "Runtime Execution lease 已失效",
+                    temporary=True,
+                )
+
+    usage = _UsageControl()
+    policy = _RuntimeToolPolicyMiddleware(
+        registered_tool_names=frozenset({"search_project_chunks"}),
+        execution_control=cast(Any, _ExecutionControl()),
+    )
+    persistent = _PersistentUsageMiddleware(usage)
+
+    @tool
+    async def search_project_chunks(query: str) -> str:
+        """离线 Project Context Tool。"""
+        return query
+
+    context = _TurnContext(
+        turn_run_id="turn-1",
+        allowed_tool_names=frozenset({search_project_chunks.name}),
+        max_model_calls=8,
+        max_tool_calls=12,
+        replayable_tool_names=frozenset({search_project_chunks.name}),
+        runtime_permit=RuntimeExecutionPermit("turn-1", "holder-1", "attempt-1", 1),
+    )
+    runtime = ToolRuntime(
+        state={},
+        context=context,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="guarded-call-1",
+        store=None,
+        tools=[search_project_chunks],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": search_project_chunks.name,
+            "args": {"query": "fence"},
+            "id": "guarded-call-1",
+            "type": "tool_call",
+        },
+        tool=search_project_chunks,
+        state={},
+        runtime=runtime,
+    )
+
+    async def actual_handler(_: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(content="effect", tool_call_id="guarded-call-1")
+
+    with pytest.raises(ResearchAgentRuntimeError) as lost:
+        await persistent.awrap_tool_call(
+            request,
+            lambda inner: policy.awrap_tool_call(inner, actual_handler),
+        )
+    assert lost.value.code == "runtime_execution_lease_lost"
+    assert usage.succeeded_calls == []
+    assert usage.failed_calls == [("guarded-call-1", "runtime_execution_lease_lost")]
+
+
+def test_persistent_usage_is_outside_runtime_policy_in_middleware_order(monkeypatch) -> None:
+    captured: list[object] = []
+
+    def capture_graph(**kwargs):
+        captured.extend(kwargs["middleware"])
+        return SimpleNamespace()
+
+    monkeypatch.setattr(runtime_module, "create_deep_agent", capture_graph)
+    DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(),
+        checkpointer=MemorySaver(),
+        usage_control=_UsageControl(),
+    )
+
+    persistent_index = next(
+        index
+        for index, value in enumerate(captured)
+        if isinstance(value, _PersistentUsageMiddleware)
+    )
+    policy_index = next(
+        index
+        for index, value in enumerate(captured)
+        if isinstance(value, _RuntimeToolPolicyMiddleware)
+    )
+    assert persistent_index < policy_index
 
 
 async def test_unified_tool_budget_rejects_execute_before_second_tool_effect() -> None:
@@ -514,9 +1098,7 @@ async def test_real_adapter_uses_sync_checkpoint_durability() -> None:
     proxy = _GraphProxy(runtime._graph)  # noqa: SLF001
     runtime._graph = proxy  # type: ignore[assignment]  # noqa: SLF001
 
-    await _collect(
-        runtime.execute_turn(_request(turn_run_id="turn-2", allowed_tool_names=()))
-    )
+    await _collect(runtime.execute_turn(_request(turn_run_id="turn-2", allowed_tool_names=())))
 
     assert proxy.durabilities == ["sync"]
 
@@ -725,9 +1307,7 @@ async def test_new_adapter_resumes_running_checkpoint_without_readding_human_mes
 async def test_persistent_execution_fences_old_owner_and_new_owner_resumes() -> None:
     """旧 owner 失权后不能进入模型边界，新 owner 沿同一 Checkpoint 完成。"""
     request = _request(turn_run_id="turn-2", allowed_tool_names=())
-    control, clock, attempts, _ = await _controlled_runtime_dependencies(
-        request.turn_run_id
-    )
+    control, clock, attempts, _ = await _controlled_runtime_dependencies(request.turn_run_id)
     checkpointer = MemorySaver()
     old_model = ScriptedDeepAgentChatModel()
     old_runtime = DeepAgentsResearchAgentRuntime(
@@ -795,9 +1375,7 @@ async def test_persistent_execution_fences_old_owner_and_new_owner_resumes() -> 
 async def test_recovery_without_checkpoint_adds_the_first_human_message_once() -> None:
     """DB claim 后、首个 Checkpoint 前崩溃时可安全执行首次图输入。"""
     request = _request(turn_run_id="turn-2", allowed_tool_names=())
-    control, clock, attempts, _ = await _controlled_runtime_dependencies(
-        request.turn_run_id
-    )
+    control, clock, attempts, _ = await _controlled_runtime_dependencies(request.turn_run_id)
     first = await control.claim(
         turn_run_id=request.turn_run_id,
         session_id=request.session_id,
@@ -875,9 +1453,7 @@ async def test_recovery_uses_synced_checkpoint_when_control_record_was_not_advan
     assert (await anext(stream)).kind is RuntimeEventKind.STARTED
     recorded = await executions.get(request.turn_run_id)
     assert recorded is not None and recorded.last_checkpoint_id is not None
-    assert await executions.save(
-        replace(recorded, last_checkpoint_id=None), expected=recorded
-    )
+    assert await executions.save(replace(recorded, last_checkpoint_id=None), expected=recorded)
     await stream.aclose()
 
     await attempts.finish_if_running(
@@ -946,9 +1522,7 @@ async def test_recovery_uses_synced_checkpoint_when_control_record_was_not_advan
 async def test_recovery_prefers_newer_synced_checkpoint_over_stale_control_watermark() -> None:
     """控制水位停在 C1 时必须从物理最新 C2 恢复，不重放 C2 已确认模型。"""
     request = _request()
-    control, clock, attempts, _ = await _controlled_runtime_dependencies(
-        request.turn_run_id
-    )
+    control, clock, attempts, _ = await _controlled_runtime_dependencies(request.turn_run_id)
     saver = MemorySaver()
     tool_calls: list[str] = []
 
@@ -1039,9 +1613,7 @@ async def test_recovery_prefers_newer_synced_checkpoint_over_stale_control_water
 
         def astream(self, input, config, *args, **kwargs):
             self.inputs.append(input)
-            self.checkpoint_ids.append(
-                config.get("configurable", {}).get("checkpoint_id")
-            )
+            self.checkpoint_ids.append(config.get("configurable", {}).get("checkpoint_id"))
             return self._graph.astream(input, config, *args, **kwargs)
 
         def __getattr__(self, name):
@@ -1160,9 +1732,7 @@ async def test_record_checkpoint_lookup_rejects_v2_graph_revision() -> None:
 async def test_persistent_failed_and_cancelled_states_survive_adapter_recreation() -> None:
     """FAILED/CANCELLED 不依赖旧 Adapter 的 `_local_turns`。"""
     failed_request = _request()
-    failed_control, _, _, _ = await _controlled_runtime_dependencies(
-        failed_request.turn_run_id
-    )
+    failed_control, _, _, _ = await _controlled_runtime_dependencies(failed_request.turn_run_id)
     failed_saver = MemorySaver()
     failing = DeepAgentsResearchAgentRuntime(
         model=ScriptedDeepAgentChatModel(),
@@ -1271,9 +1841,7 @@ async def test_same_thread_appends_only_new_message_and_native_summary_offloads_
     )
 
     await _collect(runtime.execute_turn(_request()))
-    await _collect(
-        runtime.execute_turn(_request(turn_run_id="turn-2", max_model_calls=1))
-    )
+    await _collect(runtime.execute_turn(_request(turn_run_id="turn-2", max_model_calls=1)))
     first = await runtime.reconcile_turn("turn-1")
     second = await runtime.reconcile_turn("turn-2")
     second_result = await runtime.collect_turn_result("turn-2")
@@ -1302,14 +1870,14 @@ async def test_same_thread_appends_only_new_message_and_native_summary_offloads_
     assert latest["agent_model_budget_turn_run_id"] == "turn-2"
     assert latest["agent_model_budget_reserved_calls"] == 1
     assert "agent_turn_model_call_counts" not in latest
-    assert {
-        key for key in latest if key.startswith("agent_model_budget_")
-    } == {"agent_model_budget_turn_run_id", "agent_model_budget_reserved_calls"}
+    assert {key for key in latest if key.startswith("agent_model_budget_")} == {
+        "agent_model_budget_turn_run_id",
+        "agent_model_budget_reserved_calls",
+    }
     history_files = [path for path in latest["files"] if path.startswith("/conversation_history/")]
     assert len(history_files) == 1
     assert any(
-        "已压缩：第一轮完成了受控研究记录" in item
-        for item in model.observed_message_text[-1]
+        "已压缩：第一轮完成了受控研究记录" in item for item in model.observed_message_text[-1]
     )
     assert all("turn-1：第一轮研究" not in item for item in model.observed_message_text[-1])
 
@@ -1403,9 +1971,7 @@ async def test_hidden_custom_tool_is_also_denied_at_execution_boundary() -> None
     )
 
     with pytest.raises(ResearchAgentRuntimeError) as exc_info:
-        await _collect(
-            runtime.execute_turn(_request(allowed_tool_names=(), max_tool_calls=0))
-        )
+        await _collect(runtime.execute_turn(_request(allowed_tool_names=(), max_tool_calls=0)))
 
     assert exc_info.value.kind is RuntimeErrorKind.PERMANENT
     assert exc_info.value.code == "runtime_tool_not_allowed"
@@ -1515,16 +2081,12 @@ async def test_unapproved_project_tool_is_hidden_and_rejected_before_port_call()
     )
 
     with pytest.raises(ResearchAgentRuntimeError) as exc_info:
-        await _collect(
-            runtime.execute_turn(_request(allowed_tool_names=(), max_tool_calls=0))
-        )
+        await _collect(runtime.execute_turn(_request(allowed_tool_names=(), max_tool_calls=0)))
 
     assert exc_info.value.kind is RuntimeErrorKind.PERMANENT
     assert exc_info.value.code == "runtime_tool_not_allowed"
     assert project_context.search_calls == []
-    assert all(
-        "search_project_chunks" not in names for names in model.visible_tool_names
-    )
+    assert all("search_project_chunks" not in names for names in model.visible_tool_names)
 
 
 async def test_policy_allows_only_the_selected_filesystem_tool() -> None:
@@ -1532,9 +2094,7 @@ async def test_policy_allows_only_the_selected_filesystem_tool() -> None:
     runtime = DeepAgentsResearchAgentRuntime(model=model, checkpointer=MemorySaver())
 
     result = await _collect(
-        runtime.execute_turn(
-            _request(turn_run_id="turn-2", allowed_tool_names=("read_file",))
-        )
+        runtime.execute_turn(_request(turn_run_id="turn-2", allowed_tool_names=("read_file",)))
     )
 
     assert result[-1].kind is RuntimeEventKind.COMPLETED
@@ -1576,9 +2136,7 @@ async def test_execute_remains_forbidden_even_if_registered_and_policy_named() -
 
     with pytest.raises(ResearchAgentRuntimeError) as exc_info:
         await _collect(
-            runtime.execute_turn(
-                _request(allowed_tool_names=("execute",), max_tool_calls=1)
-            )
+            runtime.execute_turn(_request(allowed_tool_names=("execute",), max_tool_calls=1))
         )
 
     assert exc_info.value.code == "runtime_tool_not_allowed"

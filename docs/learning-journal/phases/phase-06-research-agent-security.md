@@ -8,6 +8,7 @@ Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目
 `docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28；Slice 1 精简产品契约与威胁模型
 完成日期：2026-08-28；Slice 2 Agent 输出 Artifact 完成日期：2026-08-28；Slice 3 Browser 画面与跨 Turn
 人工控制完成日期：2026-08-28；Slice 4 Agent 输入附件完成日期：2026-08-28。
+Slice 5 固定能力、Project Context 与硬预算实现完成日期：2026-08-28。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -17,7 +18,7 @@ Slice 1 已完成文档契约审计，形成
 `STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
 Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件。Slice 3 已实现独立
 `BrowserControlLease`、Session/Turn/Sandbox generation/fence 互斥、短时 opaque ticket、平台 VNC
-WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI；下一开发切片为 Slice 5。
+WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API；下一开发切片为 Slice 6。
 
 Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
 PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
@@ -41,6 +42,16 @@ Application/Repository/Alembic PostgreSQL 定向为 19 passed，Agent Session/At
 12 passed，主智能体定向组合复核为 33 passed（30.67s）；Domain/Materializer/Runtime/Workspace 新增边界定向为 41 passed。Pyright 零错误，Web
 全量 Vitest 为 156 passed，TypeScript/Vite build 通过。未运行真实 Provider/OpenSandbox 附件
 Smoke；不声称已完成 Storage GC、恶意文件扫描或生产级 Sandbox 隔离。
+
+Slice 5 普通自动测试保持离线；定向验证为 Domain/Application/schema/model 47 passed，
+API Tool 摘要 2 passed/10 deselected，Runtime 新策略 12 passed/39 deselected，Artifact schema
+1 passed/8 deselected，Worker 14 passed；PostgreSQL 查询闭包 4 passed/5 deselected、并发
+1 passed、migration 2 passed/7 deselected、repository 7 passed、two-turn 1 passed。Ruff、
+Pyright（0 errors）、compileall 和 diff check 均通过。这些是 Slice 5 风险定向证据，不是完整
+全量回归。当前 Python 3.13.14 + pinned Deep Agents 0.7.8 下，既有带 Tool 的
+Fake Model 图测试会停在 Filesystem→Summarization model middleware，动态加载未修改 HEAD Runtime 也在
+进入 Fake Model 前同样复现。新增 reservation/replay 测试使用直接 middleware 契约且有界完成；在夹具/
+上游兼容问题解决前，不把本切片描述为新增了完整 Deep Agents Project Tool 图回路证据。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
@@ -569,9 +580,11 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
    该证据仅适用于未配置 API key/secure runtime 的 trusted-local 环境，公网继续关闭；
 4. **Agent 输入附件（已完成）**：Session 上传、并发幂等收敛、Message/删除行锁互斥、有界有序引用、ContextSnapshot 不可变元数据冻结、事务外 `/workspace/inbox` 物化、WorkspaceSnapshot 排除与
    可重试上传意图 Chat UI 均已落地；不开放任意 Browser 文件上传，Storage GC 延期；
-5. **固定能力、Project Context 与硬预算**：复用 Phase 5 Catalog/Profile，补齐固定 Tool/MCP/Skill 的
-   Schema/hash 漂移拒绝、调用前 owner/Project/Context/权限/预算校验、ToolExecution 脱敏摘要、超时/
-   输出限制和确定性循环保护；不建设完整 Registry 或 Approval；
+5. **固定能力、Project Context 与硬预算（已完成）**：复用 Phase 5 Catalog/Profile，全部允许 Tool 的
+   version/schema hash 与 8 次模型、12 次 Tool、300 秒墙钟、30/60 秒单调用、64 KiB 安全输出、同签名
+   最多 2 次、约 60,000 输入 Token/2,048 输出 Token 均由不可变 PolicySnapshot 冻结；PostgreSQL Usage
+   与稳定 reservation 承担并发/重放事实，公开 API 只投影脱敏摘要。Project/MCP/Artifact 仅通过既有
+   effect cache 对账，文件/`execute` 未知 effect fail closed；不建设完整 Registry、Approval 或精确计费；
 6. **Workspace/Sandbox 与统一 egress 强化**：验证 Session Lease/generation 隔离、WorkspaceSnapshot
    重建、`execute`、非 root/Secret/宿主隔离、CPU/内存/PID/磁盘/时间/输出限制、TTL 幂等清理、最小
    补偿和覆盖 Sandbox 全部进程的 default-deny egress；公网仍保持关闭；
@@ -632,7 +645,10 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
    真实 Smoke 确定 derived image 发布 digest、Server 部署、孤儿清理和这些限制的实际强制效果；
 2. arXiv 初始精确 allowlist 已由 ADR-0011 固定为 `arxiv.org`、`export.arxiv.org`；真实 Smoke 仍需核对
    官方 Redirect 是否需要新增精确主机，以及统一 egress 的具体代理/网络实现；
-3. 硬 Budget 默认值、Provider Token/费用数据不可得时的记账方式和告警阈值；
+3. 硬 Budget 已固定为 Slice 5 精简 Profile；Provider `usage_metadata` 可得时 best-effort 渐进记账，
+   不可得时保持 NULL，不用近似值冒充精确计费。模型 reservation 只限制逻辑步骤；若 Provider 已接收
+   请求后响应/Worker 丢失，重试仍可能重复付费且缺少 usage，checkpoint/reconcile 不能提供物理调用
+   Exactly Once。费用与告警平台延期；
 4. Workspace TTL、清理补偿、Agent Artifact 总量上限和 staging GC 策略；单文件上限已固定为 10 MiB，
    扩展名、声明 MIME、magic/UTF-8/JSON/CSV/SVG 主动内容校验已在 Slice 2 实现；
 5. 当前 pinned Chrome 镜像可复用的 VNC 能力，以及 noVNC/websockify 或等价画面组件的精确版本、认证

@@ -32,6 +32,9 @@ from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
     FakeResearchAgentRuntime,
 )
 from literature_agent.infrastructure.persistence.agent_repository import SqlalchemyAgentRepository
+from literature_agent.infrastructure.persistence.agent_usage_repository import (
+    SqlalchemyAgentUsageRepository,
+)
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
 )
@@ -188,6 +191,7 @@ async def test_two_turns_reuse_runtime_session_and_persist_staged_candidates(db_
         claim_set_repo_factory=SqlalchemyClaimSetRepository,
         evidence_repo_factory=SqlalchemyEvidenceRepository,
         browser_control_repo_factory=SqlalchemyBrowserControlRepository,
+        agent_usage_repo_factory=SqlalchemyAgentUsageRepository,
     )
     runtime = _TransactionAssertingRuntime(tracked_factory)
     agent_executor = AgentTurnExecutor(
@@ -248,12 +252,16 @@ async def test_two_turns_reuse_runtime_session_and_persist_staged_candidates(db_
         queued = await SqlalchemyRunRepository(session).get_by_id(first.run_id)
         initial_events = await SqlalchemyEventRepository(session).list_by_run(first.run_id)
         outbox = await SqlalchemyOutboxRepository(session).get_by_run_id(first.run_id)
+        usage = await SqlalchemyAgentUsageRepository(session).get_usage(first.run_id)
         assert queued is not None and queued.status.value == "queued"
         assert [event.event_type for event in initial_events] == [
             "run_created",
             "agent_message_accepted",
         ]
         assert outbox is not None
+        assert usage is not None
+        assert (usage.max_model_calls, usage.max_tool_calls) == (8, 12)
+        assert usage.deadline_at is None
     first_outcome = await runner.execute(first.run_id, "worker-1")
     if first_outcome is not ExecutionOutcome.COMPLETED:
         async with factory() as debugging_session:
@@ -310,6 +318,7 @@ async def test_two_turns_reuse_runtime_session_and_persist_staged_candidates(db_
             assert attempts[0].status.value == "succeeded"
             assert [event.sequence for event in events] == list(range(1, len(events) + 1))
             assert all("分析第一轮" not in str(event.payload) for event in events)
+            assert await SqlalchemyAgentUsageRepository(session).get_usage(run_id) is not None
         assert await session.get(ArtifactORM, first_view.candidates[0].candidate_id) is None
 
     async with factory() as session:

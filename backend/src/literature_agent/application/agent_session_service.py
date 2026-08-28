@@ -12,6 +12,7 @@ from literature_agent.application.ports.agent_attachment_repository import (
     AgentAttachmentRepository,
 )
 from literature_agent.application.ports.agent_repository import AgentRepository
+from literature_agent.application.ports.agent_usage_repository import AgentUsageRepository
 from literature_agent.application.ports.browser_control_repository import BrowserControlRepository
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
 from literature_agent.application.ports.claim_set_repository import ClaimSetRepository
@@ -32,6 +33,11 @@ from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
 from literature_agent.application.ports.skill_repository import SkillRepository
 from literature_agent.domain.actor import ActorContext
+from literature_agent.domain.agent_usage import (
+    AgentToolCall,
+    AgentTurnUsage,
+    create_agent_turn_usage,
+)
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import (
     AgentAttachmentNotFoundError,
@@ -118,6 +124,12 @@ class AgentMessageView:
     claims: tuple[AgentClaimView, ...] | None
 
 
+@dataclass(frozen=True, slots=True)
+class AgentToolExecutionsView:
+    usage: AgentTurnUsage
+    items: tuple[AgentToolCall, ...]
+
+
 class AgentSessionService[TSession: Session]:
     """负责平台授权、快照固化和原子 Turn 提交。"""
 
@@ -144,6 +156,7 @@ class AgentSessionService[TSession: Session]:
         event_notifier: EventNotifier | None = None,
         browser_control_repo_factory: Callable[[TSession], BrowserControlRepository],
         attachment_repo_factory: Callable[[TSession], AgentAttachmentRepository] | None = None,
+        agent_usage_repo_factory: Callable[[TSession], AgentUsageRepository],
     ) -> None:
         self._session_factory = session_factory
         self._project_repo_factory = project_repo_factory
@@ -165,6 +178,7 @@ class AgentSessionService[TSession: Session]:
         self._event_notifier = event_notifier or NoopEventNotifier()
         self._browser_control_repo_factory = browser_control_repo_factory
         self._attachment_repo_factory = attachment_repo_factory
+        self._agent_usage_repo_factory = agent_usage_repo_factory
 
     async def create_session(
         self, actor: ActorContext, project_id: str, *, title: str | None
@@ -510,6 +524,25 @@ class AgentSessionService[TSession: Session]:
             await session.flush()
             await agent_repo.add_turn(turn)
             await session.flush()
+            await self._agent_usage_repo_factory(session).add_usage(
+                create_agent_turn_usage(
+                    turn_run_id=run.run_id,
+                    owner_id=actor.owner_id,
+                    project_id=project.project_id,
+                    session_id=session_id,
+                    policy_snapshot_id=policy.snapshot_id,
+                    max_model_calls=policy.max_model_calls,
+                    max_tool_calls=policy.max_tool_calls,
+                    wall_clock_limit_seconds=policy.wall_clock_limit_seconds,
+                    tool_timeout_seconds=policy.tool_timeout_seconds,
+                    execute_timeout_seconds=policy.execute_timeout_seconds,
+                    max_tool_output_bytes=policy.max_tool_output_bytes,
+                    max_repeated_tool_calls=policy.max_repeated_tool_calls,
+                    max_input_tokens_per_model_call=policy.max_input_tokens_per_model_call,
+                    max_output_tokens_per_model_call=policy.max_output_tokens_per_model_call,
+                )
+            )
+            await session.flush()
             if not await agent_repo.try_claim_active_turn(session_id, run.run_id):
                 raise AgentSessionBusyError(session_id)
             event_repo = self._event_repo_factory(session)
@@ -563,3 +596,61 @@ class AgentSessionService[TSession: Session]:
             assert context is not None and policy is not None
             candidates = await repo.list_candidates_scoped(run_id, actor.owner_id)
             return AgentTurnView(run, turn, context, policy, tuple(candidates))
+
+    async def list_tool_executions(
+        self, actor: ActorContext, run_id: str
+    ) -> AgentToolExecutionsView:
+        """返回脱敏 Tool 摘要和持久化预算，不读取内部 result_payload。"""
+        async with self._session_factory() as session:
+            agent_repo = self._agent_repo_factory(session)
+            turn = await agent_repo.get_turn_scoped(run_id, actor.owner_id)
+            run = await self._run_repo_factory(session).get_by_id(run_id)
+            if turn is None or run is None or run.owner_id != actor.owner_id:
+                raise AgentTurnNotFoundError(run_id)
+            agent_session = await agent_repo.get_session_scoped(
+                turn.session_id, actor.owner_id
+            )
+            context = await agent_repo.get_context_snapshot(turn.context_snapshot_id)
+            policy = await agent_repo.get_policy_snapshot(turn.policy_snapshot_id)
+            usage_repo = self._agent_usage_repo_factory(session)
+            usage = await usage_repo.get_usage(run_id)
+            if (
+                usage is None
+                or agent_session is None
+                or context is None
+                or policy is None
+                or run.run_type != RunType.AGENT_TURN.value
+                or run.project_id != usage.project_id
+                or turn.turn_run_id != run_id
+                or turn.session_id != usage.session_id
+                or turn.policy_snapshot_id != usage.policy_snapshot_id
+                or agent_session.project_id != run.project_id
+                or usage.owner_id != actor.owner_id
+                or context.owner_id != actor.owner_id
+                or context.project_id != run.project_id
+                or context.session_id != turn.session_id
+                or context.turn_run_id != run_id
+                or policy.owner_id != actor.owner_id
+                or policy.project_id != run.project_id
+                or policy.session_id != turn.session_id
+                or policy.turn_run_id != run_id
+                or policy.max_model_calls != usage.max_model_calls
+                or policy.max_tool_calls != usage.max_tool_calls
+                or policy.wall_clock_limit_seconds != usage.wall_clock_limit_seconds
+                or policy.tool_timeout_seconds != usage.tool_timeout_seconds
+                or policy.execute_timeout_seconds != usage.execute_timeout_seconds
+                or policy.max_tool_output_bytes != usage.max_tool_output_bytes
+                or policy.max_repeated_tool_calls != usage.max_repeated_tool_calls
+                or policy.max_input_tokens_per_model_call
+                != usage.max_input_tokens_per_model_call
+                or policy.max_output_tokens_per_model_call
+                != usage.max_output_tokens_per_model_call
+            ):
+                raise AgentTurnNotFoundError(run_id)
+            items = tuple(await usage_repo.list_tool_calls(run_id))
+            if any(item.turn_run_id != run_id for item in items):
+                raise AgentTurnNotFoundError(run_id)
+            return AgentToolExecutionsView(
+                usage=usage,
+                items=items,
+            )

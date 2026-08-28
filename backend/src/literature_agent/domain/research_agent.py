@@ -8,6 +8,15 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from literature_agent.domain.agent_usage import (
+    AGENT_EXECUTE_TIMEOUT_SECONDS,
+    AGENT_MAX_INPUT_TOKENS_PER_MODEL_CALL,
+    AGENT_MAX_OUTPUT_TOKENS_PER_MODEL_CALL,
+    AGENT_MAX_REPEATED_TOOL_CALLS,
+    AGENT_MAX_TOOL_OUTPUT_BYTES,
+    AGENT_TOOL_TIMEOUT_SECONDS,
+    AGENT_TURN_WALL_CLOCK_SECONDS,
+)
 from literature_agent.domain.mcp_configuration import McpPolicyRef
 from literature_agent.domain.skill_configuration import SkillPolicyRef
 
@@ -22,12 +31,8 @@ _AGENT_CANDIDATE_MAX_SIZE_BYTES = 10 * 1024 * 1024
 AGENT_MESSAGE_MAX_ATTACHMENTS = 5
 
 PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v2"
-PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = (
-    "agent-policy.project-research-workspace-mcp.v2"
-)
-PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = (
-    "agent-policy.project-research-capabilities.v2"
-)
+PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = "agent-policy.project-research-workspace-mcp.v2"
+PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = "agent-policy.project-research-capabilities.v2"
 PROJECT_RESEARCH_WORKSPACE_TOOLS = (
     "search_project_chunks",
     "read_review_evidence_matrix",
@@ -378,6 +383,7 @@ class PolicySnapshot:
     session_id: str
     turn_run_id: str
     allowed_tool_names: tuple[str, ...]
+    tool_refs: tuple["ToolPolicyRef", ...]
     allowed_skill_names: tuple[str, ...]
     skill_refs: tuple[SkillPolicyRef, ...]
     mcp_refs: tuple[McpPolicyRef, ...]
@@ -386,8 +392,82 @@ class PolicySnapshot:
     approval_required: bool
     max_model_calls: int
     max_tool_calls: int
+    wall_clock_limit_seconds: int
+    tool_timeout_seconds: int
+    execute_timeout_seconds: int
+    max_tool_output_bytes: int
+    max_repeated_tool_calls: int
+    max_input_tokens_per_model_call: int
+    max_output_tokens_per_model_call: int
     snapshot_hash: str
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ToolPolicyRef:
+    """逐 Turn 冻结的所有 Tool 版本与输入 Schema 哈希。"""
+
+    name: str
+    version: str
+    input_schema_hash: str
+
+    def __post_init__(self) -> None:
+        if not self.name.strip() or not self.version.strip():
+            raise ValueError("Tool Policy 名称和版本不能为空")
+        if not _SHA256_PATTERN.fullmatch(self.input_schema_hash):
+            raise ValueError("Tool Policy Schema hash 非法")
+
+
+_FIXED_TOOL_POLICY_REFS = (
+    ToolPolicyRef(
+        "search_project_chunks",
+        "project-context.v1",
+        "358caa89aacf43a81c194aee572cec42ddf470adb61b2ef56242eb5ca162a077",
+    ),
+    ToolPolicyRef(
+        "read_review_evidence_matrix",
+        "project-context.v1",
+        "74f1cbed3188e58dd8544d2b4753d27b0d526dab835409eacd8a61c59f2704cb",
+    ),
+    ToolPolicyRef(
+        "ls", "deepagents-0.7.8", "490908b4f68d9e6f9c02654589892b1590b21276d5b1252e6eb3a903b41f4cea"
+    ),
+    ToolPolicyRef(
+        "read_file",
+        "deepagents-0.7.8",
+        "94cbcce3b300d717fd32d66445f4529c1e6665411f393e9c01294a2f2a2e7e67",
+    ),
+    ToolPolicyRef(
+        "write_file",
+        "deepagents-0.7.8",
+        "63507ab22d2f47a8a6c2f093a18bcda9b40189786229a2c7dd3266c011bfe0cd",
+    ),
+    ToolPolicyRef(
+        "edit_file",
+        "deepagents-0.7.8",
+        "6f5883ed592ef45ace1d7a2a2980628c2d09277ed1fbe9e5b3bb1caa07645e00",
+    ),
+    ToolPolicyRef(
+        "glob",
+        "deepagents-0.7.8",
+        "47cdddd9d3512887ffdd82b6b467748f5d8fbd27e8e7d73428d6563f348b57f4",
+    ),
+    ToolPolicyRef(
+        "grep",
+        "deepagents-0.7.8",
+        "a09f9ce4048528b8d6b058b25b38afcfb29614a6ddc0e7ddc5db685c4b0bbfb7",
+    ),
+    ToolPolicyRef(
+        "execute",
+        "deepagents-0.7.8",
+        "4fc883606a9b4a5da17ec069c8b70122a43d6ec602d13b5b676f473b0c190813",
+    ),
+    ToolPolicyRef(
+        "submit_artifact",
+        "artifact-tool.v1",
+        "84704a7c9d480e171045a1000a3a7d23a9fde7ead01766804123d7f2f2bd660f",
+    ),
+)
 
 
 def create_agent_session(*, owner_id: str, project_id: str, title: str | None) -> AgentSession:
@@ -652,8 +732,16 @@ def create_policy_snapshot(
     turn_run_id: str,
     max_model_calls: int,
     max_tool_calls: int,
+    wall_clock_limit_seconds: int = AGENT_TURN_WALL_CLOCK_SECONDS,
+    tool_timeout_seconds: int = AGENT_TOOL_TIMEOUT_SECONDS,
+    execute_timeout_seconds: int = AGENT_EXECUTE_TIMEOUT_SECONDS,
+    max_tool_output_bytes: int = AGENT_MAX_TOOL_OUTPUT_BYTES,
+    max_repeated_tool_calls: int = AGENT_MAX_REPEATED_TOOL_CALLS,
+    max_input_tokens_per_model_call: int = AGENT_MAX_INPUT_TOKENS_PER_MODEL_CALL,
+    max_output_tokens_per_model_call: int = AGENT_MAX_OUTPUT_TOKENS_PER_MODEL_CALL,
     policy_version: str = "agent-policy.v1",
     allowed_tool_names: tuple[str, ...] = (),
+    tool_refs: tuple[ToolPolicyRef, ...] = (),
     allowed_skill_names: tuple[str, ...] = (),
     skill_refs: tuple[SkillPolicyRef, ...] = (),
     mcp_refs: tuple[McpPolicyRef, ...] = (),
@@ -671,7 +759,23 @@ def create_policy_snapshot(
     )
     if max_model_calls < 0 or max_tool_calls < 0:
         raise ValueError("调用预算不能小于 0")
+    if (
+        min(
+            wall_clock_limit_seconds,
+            tool_timeout_seconds,
+            execute_timeout_seconds,
+            max_tool_output_bytes,
+            max_repeated_tool_calls,
+            max_input_tokens_per_model_call,
+            max_output_tokens_per_model_call,
+        )
+        <= 0
+    ):
+        raise ValueError("Agent 硬预算上限必须为正数")
     _reject_duplicate_names(allowed_tool_names, "Tool")
+    _reject_duplicate_names(tuple(ref.name for ref in tool_refs), "Tool Policy")
+    if tool_refs and {ref.name for ref in tool_refs} != set(allowed_tool_names):
+        raise ValueError("Tool Policy 引用必须与 Tool allowlist 一致")
     _reject_duplicate_names(allowed_skill_names, "Skill")
     skill_names = tuple(ref.name for ref in skill_refs)
     _reject_duplicate_names(skill_names, "Skill Policy")
@@ -693,6 +797,14 @@ def create_policy_snapshot(
         "session_id": session_id,
         "turn_run_id": turn_run_id,
         "allowed_tool_names": list(allowed_tool_names),
+        "tool_refs": [
+            {
+                "name": ref.name,
+                "version": ref.version,
+                "input_schema_hash": ref.input_schema_hash,
+            }
+            for ref in tool_refs
+        ],
         "allowed_skill_names": list(allowed_skill_names),
         "skill_refs": [
             {
@@ -726,6 +838,13 @@ def create_policy_snapshot(
         "approval_required": approval_required,
         "max_model_calls": max_model_calls,
         "max_tool_calls": max_tool_calls,
+        "wall_clock_limit_seconds": wall_clock_limit_seconds,
+        "tool_timeout_seconds": tool_timeout_seconds,
+        "execute_timeout_seconds": execute_timeout_seconds,
+        "max_tool_output_bytes": max_tool_output_bytes,
+        "max_repeated_tool_calls": max_repeated_tool_calls,
+        "max_input_tokens_per_model_call": max_input_tokens_per_model_call,
+        "max_output_tokens_per_model_call": max_output_tokens_per_model_call,
     }
     return PolicySnapshot(
         snapshot_id=str(uuid4()),
@@ -735,6 +854,7 @@ def create_policy_snapshot(
         session_id=session_id,
         turn_run_id=turn_run_id,
         allowed_tool_names=tuple(allowed_tool_names),
+        tool_refs=tuple(tool_refs),
         allowed_skill_names=tuple(allowed_skill_names),
         skill_refs=tuple(skill_refs),
         mcp_refs=tuple(mcp_refs),
@@ -743,6 +863,13 @@ def create_policy_snapshot(
         approval_required=approval_required,
         max_model_calls=max_model_calls,
         max_tool_calls=max_tool_calls,
+        wall_clock_limit_seconds=wall_clock_limit_seconds,
+        tool_timeout_seconds=tool_timeout_seconds,
+        execute_timeout_seconds=execute_timeout_seconds,
+        max_tool_output_bytes=max_tool_output_bytes,
+        max_repeated_tool_calls=max_repeated_tool_calls,
+        max_input_tokens_per_model_call=max_input_tokens_per_model_call,
+        max_output_tokens_per_model_call=max_output_tokens_per_model_call,
         snapshot_hash=_canonical_hash(hash_payload),
         created_at=datetime.now(UTC),
     )
@@ -758,6 +885,11 @@ def create_project_research_workspace_policy_snapshot(
     skill_refs: tuple[SkillPolicyRef, ...] = (),
 ) -> PolicySnapshot:
     """由服务端选择 Slice 7.1 唯一固定的可执行研究能力档案。"""
+    mcp_tool_refs = tuple(
+        ToolPolicyRef(tool.name, ref.version, tool.input_schema_hash)
+        for ref in mcp_refs
+        for tool in ref.tools
+    )
     return create_policy_snapshot(
         owner_id=owner_id,
         project_id=project_id,
@@ -772,6 +904,7 @@ def create_project_research_workspace_policy_snapshot(
         ),
         allowed_tool_names=PROJECT_RESEARCH_WORKSPACE_TOOLS
         + tuple(tool.name for ref in mcp_refs for tool in ref.tools),
+        tool_refs=_FIXED_TOOL_POLICY_REFS + mcp_tool_refs,
         allowed_skill_names=tuple(ref.name for ref in skill_refs),
         skill_refs=skill_refs,
         mcp_refs=mcp_refs,

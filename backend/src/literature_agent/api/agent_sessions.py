@@ -49,6 +49,9 @@ from literature_agent.infrastructure.persistence.agent_attachment_repository imp
     SqlalchemyAgentAttachmentRepository,
 )
 from literature_agent.infrastructure.persistence.agent_repository import SqlalchemyAgentRepository
+from literature_agent.infrastructure.persistence.agent_usage_repository import (
+    SqlalchemyAgentUsageRepository,
+)
 from literature_agent.infrastructure.persistence.browser_control_repository import (
     SqlalchemyBrowserControlRepository,
 )
@@ -193,6 +196,46 @@ class TurnResponse(BaseModel):
     candidates: list[CandidateResponse]
 
 
+class AgentTurnUsageResponse(BaseModel):
+    max_model_calls: int
+    max_tool_calls: int
+    model_calls_reserved: int
+    tool_calls_reserved: int
+    wall_clock_limit_seconds: int
+    tool_timeout_seconds: int
+    execute_timeout_seconds: int
+    max_tool_output_bytes: int
+    max_repeated_tool_calls: int
+    max_input_tokens_per_model_call: int
+    max_output_tokens_per_model_call: int
+    input_tokens: int | None
+    output_tokens: int | None
+    started_at: datetime | None
+    deadline_at: datetime | None
+
+
+class AgentToolExecutionResponse(BaseModel):
+    invocation_id: str
+    tool_name: str
+    tool_version: str
+    input_schema_hash: str
+    args_hash: str
+    status: str
+    input_size_bytes: int
+    output_size_bytes: int | None
+    result_hash: str | None
+    error_code: str | None
+    safe_message: str | None
+    duration_ms: int | None
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+class AgentToolExecutionsResponse(BaseModel):
+    usage: AgentTurnUsageResponse
+    items: list[AgentToolExecutionResponse]
+
+
 class McpProfileSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     catalog_id: str = Field(min_length=1, max_length=63)
@@ -291,6 +334,7 @@ async def get_agent_session_service(request: Request) -> AgentSessionService:
         event_notifier=state.event_notifier,
         browser_control_repo_factory=SqlalchemyBrowserControlRepository,
         attachment_repo_factory=SqlalchemyAgentAttachmentRepository,
+        agent_usage_repo_factory=SqlalchemyAgentUsageRepository,
     )
 
 
@@ -781,6 +825,44 @@ async def get_turn(run_id: str, actor: ActorDep, service: ServiceDep) -> TurnRes
         )
     except Exception as exc:
         raise _translate(exc) from exc
+
+
+@router.get(
+    "/agent-turn-runs/{run_id}/tool-executions",
+    response_model=AgentToolExecutionsResponse,
+)
+async def list_tool_executions(
+    run_id: str, actor: ActorDep, service: ServiceDep
+) -> AgentToolExecutionsResponse:
+    try:
+        view = await service.list_tool_executions(actor, run_id)
+    except Exception as exc:
+        raise _translate(exc) from exc
+    usage = view.usage
+    return AgentToolExecutionsResponse(
+        usage=AgentTurnUsageResponse(
+            **{name: getattr(usage, name) for name in AgentTurnUsageResponse.model_fields}
+        ),
+        items=[
+            AgentToolExecutionResponse(
+                invocation_id=item.invocation_id,
+                tool_name=item.tool_name,
+                tool_version=item.tool_version,
+                input_schema_hash=item.input_schema_hash,
+                args_hash=item.args_hash,
+                status=item.status.value,
+                input_size_bytes=item.input_size_bytes,
+                output_size_bytes=item.output_size_bytes,
+                result_hash=item.result_hash,
+                error_code=item.error_code,
+                safe_message=item.safe_message,
+                duration_ms=item.duration_ms,
+                started_at=item.started_at,
+                completed_at=item.completed_at,
+            )
+            for item in view.items
+        ],
+    )
 
 
 @router.get(

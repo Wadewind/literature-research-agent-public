@@ -26,6 +26,9 @@ from literature_agent.infrastructure.agent.artifact_tools import (
     AgentArtifactToolFactory,
     SandboxAgentArtifactSource,
 )
+from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
+    _tool_schema_hash,
+)
 from literature_agent.infrastructure.agent.sandbox_workspace import (
     SandboxLeaseRecord,
     SandboxLeaseStatus,
@@ -113,6 +116,19 @@ def _runtime(*, tool_call_id="call-1", turn_run_id="turn-1"):
         tool_call_id=tool_call_id,
         store=None,
     )
+
+
+def test_submit_artifact_schema_matches_frozen_tool_policy_ref() -> None:
+    request = _request()
+    lease = _lease()
+    value = AgentArtifactToolFactory(
+        _Service(), _WorkspaceRepository(lease.record)
+    ).create(request, lease)[0]
+    expected = next(
+        ref for ref in request.policy_snapshot.tool_refs if ref.name == "submit_artifact"
+    )
+
+    assert _tool_schema_hash(value) == expected.input_schema_hash
 
 
 class _WorkspaceRepository:

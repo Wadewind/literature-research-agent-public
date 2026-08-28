@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -13,6 +14,7 @@ from literature_agent.api.agent_sessions import (
     get_agent_session_service,
     get_mcp_configuration_service,
     get_skill_configuration_service,
+    list_tool_executions,
     router,
 )
 from literature_agent.api.dependencies import get_actor
@@ -21,12 +23,17 @@ from literature_agent.application.agent_session_service import (
     AgentCitationView,
     AgentClaimView,
     AgentMessageView,
+    AgentToolExecutionsView,
     PostAgentMessageResult,
 )
 from literature_agent.application.mcp_configuration_service import McpProfileView
 from literature_agent.application.skill_configuration_service import SkillProfileView
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.agent_artifact import AgentArtifact
+from literature_agent.domain.agent_usage import (
+    create_agent_tool_call,
+    create_agent_turn_usage,
+)
 from literature_agent.domain.exceptions import AgentArtifactNotFoundError, AgentTurnNotFoundError
 from literature_agent.domain.mcp_configuration import create_mcp_profile
 from literature_agent.domain.research_agent import (
@@ -128,6 +135,28 @@ class _Service:
         type(self).post_calls += 1
         return PostAgentMessageResult("message-1", "run-1", "queued")
 
+    async def list_tool_executions(self, actor, run_id):
+        assert (actor.owner_id, run_id) == ("owner-1", "run-1")
+        usage = create_agent_turn_usage(
+            turn_run_id=run_id,
+            owner_id=actor.owner_id,
+            project_id="project-1",
+            session_id="session-1",
+            policy_snapshot_id="policy-1",
+            max_model_calls=8,
+            max_tool_calls=12,
+        )
+        call = create_agent_tool_call(
+            turn_run_id=run_id,
+            invocation_id="call-1",
+            tool_name="search_project_chunks",
+            tool_version="project-context.v1",
+            input_schema_hash="a" * 64,
+            args_hash="b" * 64,
+            input_size_bytes=24,
+        )
+        return AgentToolExecutionsView(usage, (call,))
+
 
 class _McpService:
     async def get_profile(self, actor, session_id):
@@ -224,6 +253,32 @@ def test_agent_artifact_api_hides_storage_and_serves_safe_verified_content() -> 
     assert content.headers["x-content-type-options"] == "nosniff"
     assert content.headers["content-disposition"].startswith("inline;")
     assert missing.status_code == 404
+
+
+async def test_tool_execution_api_returns_only_safe_usage_and_hash_summary() -> None:
+    response = await list_tool_executions("run-1", ActorContext(owner_id="owner-1"), _Service())
+
+    payload = response.model_dump(mode="json")
+    assert payload["usage"]["max_tool_output_bytes"] == 64 * 1024
+    assert payload["items"][0]["args_hash"] == "b" * 64
+    serialized = response.model_dump_json()
+    for forbidden in ("result_payload", "raw_args", "endpoint", "prompt", "secret"):
+        assert forbidden not in serialized.lower()
+
+
+async def test_tool_execution_api_translates_cross_owner_scope_to_404() -> None:
+    class _CrossOwnerService:
+        async def list_tool_executions(self, actor, run_id):
+            assert actor.owner_id == "other-owner"
+            raise AgentTurnNotFoundError(run_id)
+
+    with pytest.raises(HTTPException) as missing:
+        await list_tool_executions(
+            "run-1",
+            ActorContext(owner_id="other-owner"),
+            _CrossOwnerService(),
+        )
+    assert missing.value.status_code == 404
 
 
 def test_agent_artifact_api_forces_pdf_to_attachment() -> None:
