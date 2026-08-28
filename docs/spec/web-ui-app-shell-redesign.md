@@ -1,6 +1,6 @@
 # Web UI 应用壳与视觉重设计
 
-> 状态：实施中。应用壳骨架与轻页头替换已完成；工作区空间回收、视觉 token 刷新仍待后续切片。
+> 状态：实施中。应用壳骨架、轻页头替换与工作区空间回收/Agent 产品整合已完成；视觉 token 刷新仍待后续切片。
 > `docs/spec/project-workspace-ui-contract.md` 第 3 节已同步改为当前 `AppSidebar + PageBar` 契约。
 
 ## 1. 背景与要解决的痛点
@@ -76,16 +76,17 @@
   引导卡（保留朱红边条与简短说明），选中会话后让位给对话流。
 - **个人文献库（PersonalLibraryPage）**：`.page-heading` 替换为 `PageBar`。
 
-## 5. 借鉴经典 Agent 界面的三个零件（切片 3 及以后逐项评估）
+## 5. 借鉴经典 Agent 界面的三个零件（切片 3 已落地）
 
 参考 Manus 类界面，以下三个模式与本项目兼容，浅色化后采用；其余（深色皮肤、任务混排 sidebar）明确不采用：
 
-1. **Turn 步骤时间线**：研究助手对话流中以"思考 / 使用技能 xxx / 执行了 N 个步骤 ▸ + 耗时"条目呈现
-   AgentTurnRun 内部步骤（数据来自 Phase 5 已有的 Turn/Step）。
-2. **右侧面板 tab 化**：Evidence Margin / PDF 预览 / Artifact 在同一右栏内 tab 切换，替代一次只显示
-   一种内容。
-3. **Composer 集成能力配置**：Evidence Matrix 选择器、能力开关收进底部 composer 区域（"输入 / 选择"式），
-   替代独立配置面板。
+1. **Turn 研究活动**：研究助手对话流以可折叠区呈现已筛选 Event、脱敏 ToolExecution 以及 Usage/Budget
+   摘要；不展示 raw args、完整 Prompt、网页正文、Secret 或大型 Tool 输出。
+2. **右侧检查器 tab 化**：固定为“证据 / 浏览器 / 成果”三个可访问 tab。证据区显示 Context ledger 与
+   Claim/Citation；浏览器复用既有 noVNC；成果区显示正式 Artifact、内部 Candidate 与正式 Manifest
+   来源摘要。三个面板按当前选中 Turn 查询，tab 仅是本地 UI 状态。
+3. **Composer 集成能力配置**：Evidence Matrix、附件和能力配置收进底部 composer；首轮 Skill 锁定、
+   dirty 时禁止发送以及显式保存行为保持不变。
 
 ## 6. 视觉 token 刷新清单（均在 `web/src/styles.css`）
 
@@ -133,10 +134,23 @@
 
 **切片 3：工作区空间回收**
 
-- 问答/研究助手全高化收尾；`.agent-welcome` 浅色化；问答创建页空态去空白。
-- 可选子项（当轮再定）：Evidence Margin 折叠按钮（持久化到现有 `workspaceLayout` localStorage）、
-  右栏 tab 化、composer 集成（第 5 节零件 2、3）。
-- 验证：`npm test` + 问答/研究助手两页截图对比。
+- **已实现（2026-08-28）**：`.agent-welcome` 改为浅色紧凑引导卡，问答创建页去除把操作区推到底部的
+  大面积空白；现有三栏继续占满 `PageBar` 下方高度，document 不承担工作区滚动。
+- Agent 右栏替换为“证据 / 浏览器 / 成果”检查器；inactive panel 以原生 `hidden` 退出布局，同时保持
+  浏览器组件挂载，避免切 tab 重置 ticket/noVNC 状态。当前 Turn 才查询 ToolExecution 与 Manifest；成果
+  分区复用正式 Artifact，并补充内部 Candidate 和 Manifest 的公开来源元数据。
+- 中栏“研究活动”整合筛选 Event、脱敏 ToolExecution 与 Usage/Budget；公开类型不包含 raw args，Manifest
+  只显示名称、媒体类型、hash、大小、来源状态和服务端实际返回的来源链接。
+- 能力配置已移入 composer 的“研究设置/能力”区域，与 Evidence Matrix、附件共同构成紧凑设置区；无
+  Session 时附件查询保持 disabled，选中 Session 后的真实错误仍正常暴露。
+- TDD 先得到 4 个缺失模块失败，完成后定向为 4 files / 5 passed。完整 `npm test`、`npm run build` 与
+  `git diff --check` 的最终结果记录在 Phase 6 Spec；Phase 5 E2E 在两次适配新 tab 语义的红灯后保持原
+  业务断言并最终为 1 passed（37.1s）。
+- 1440×1000 走查确认 Chat/Agent 的 document `scrollHeight` 等于 viewport；Agent timeline 与检查器独立
+  `overflow: auto`，composer 始终在 viewport 内。键盘从“证据”按 ArrowRight 可聚焦“浏览器”；展开能力
+  配置后 document 仍不滚动，timeline 缩小为内部滚动。Browser noVNC 继续是独立 lazy chunk。
+- 已知限制：走查所选的一个历史 Turn 早于 Usage 事实落地，`tool-executions` 返回 404；UI 显示安全错误，
+  新创建 Turn 的 Phase 5 E2E 返回 200。该兼容问题不在纯前端切片中通过伪造数据掩盖。
 
 **切片 4：视觉 token 刷新**
 
@@ -165,4 +179,4 @@
 - 后端/API/数据库任何改动；
 - 深色主题、移动端专门设计；
 - 会话自动命名（若做需后端写 title，另行讨论）；
-- Turn 步骤时间线等第 5 节零件的最终落地（切片 3 时逐项确认再实施）。
+- 全站视觉 token、字体下限、动效降级与 Review workbench 的统一刷新（切片 4）。

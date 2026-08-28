@@ -1,4 +1,4 @@
-# Phase 1–5 Web UI
+# Phase 1–6 Web UI
 
 ## 解决的问题
 
@@ -20,9 +20,8 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   └─ SSE：GET /runs/{id}/events/stream（原生 EventSource）
 ```
 
-- Project 是统一工作空间，文献库是三种研究模式共享的资源底座。Library、Chat、Reviews 与 Agent 复用
-  紧凑 Project Header/Mode Nav；文献库突出“文献问答 / 综述 / 研究助手”三个平级入口，但不把自己
-  冒充为第四种研究模式。
+- Project 是统一工作空间，文献库是三种研究模式共享的资源底座。全站复用固定 `AppSidebar` 与 56px
+  `PageBar`；项目四入口只出现在 Sidebar 的当前 Project 分区，不再由页面复制 Header、Mode Nav 或 Hero。
 - Project 工作区现在用“文献库 / 文献问答 / 综述 / 研究助手”区分三种产品模式。Research Agent 使用
   独立 `AgentSession/AgentTurnRun`，不会把 RAG Conversation 冒充为持续 Agent Thread，也不复制官方
   Deep Agents UI 的数据层。
@@ -46,12 +45,15 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   Query 持有服务端状态，本地只保存输入意图、能力配置草稿和当前选中的 Evidence。每条消息使用稳定
   `Idempotency-Key`，活动 Turn 时禁发；SSE 只显示允许列表中的业务活动，终态后失效 Session、Message
   和 Turn Query，正文、Claim、Citation 和 candidate 始终从 REST 读取。
-- 桌面端是 Session rail / Conversation / Evidence Margin 三栏，页面 chrome 固定在 viewport 内，三栏
-  独立滚动；中栏只有消息区滚动，composer 固定在底部。左右分隔条支持指针拖动、方向键与双击复位，
-  宽度按 v1 schema 保存到 `localStorage`。能力配置作为中栏浮层，不再挤压消息和 composer。
-- Evidence Margin 无 Turn 时显示当前 Project 的 ready ChunkSet 文献数，有 Turn 时明确显示不可变的
-  本轮索引快照；同时展示 Matrix、持久 Claim/Citation/Evidence 和 staged candidate 元数据。前端不解析
-  回答正文中的引用标记，也不读取 candidate 内容。
+- 桌面端是 Session rail / Conversation / Turn Inspector 三栏，页面 chrome 固定在 viewport 内，三栏
+  独立滚动；中栏消息与研究活动内部滚动，composer 固定在底部。左右分隔条支持指针拖动、方向键与双击
+  复位，宽度按 v1 schema 保存到 `localStorage`。能力配置、Evidence Matrix 与附件位于 composer 内；
+  details 展开只压缩 timeline，不遮挡 composer。
+- Turn Inspector 固定为“证据 / 浏览器 / 成果”三个可访问 tab。证据区显示不可变索引快照、Matrix 与
+  Claim/Citation/Evidence；浏览器区复用 noVNC；成果区组合正式 Artifact、内部 Candidate 与 Manifest。
+  inactive panel 退出布局但保持 Browser 组件挂载。前端不解析回答正文制造引用，也不读取 candidate 内容。
+- 当前 Turn 的研究活动只展示筛选 Event、脱敏 ToolExecution 与 Usage/Budget；Manifest 只展示公开来源
+  状态、hash、大小和服务端实际返回的 URL。无 Session 时附件查询保持 disabled，不再请求空 session。
 
 - 前端不持有任何业务事实：列表与状态全部来自 PostgreSQL 支撑的 REST API；SSE 事件流由后端从 PostgreSQL 重放/推送（见 `run-event.md`）。
 - `/library` 展示 owner 范围的个人文献资产及其 Project 收录范围；Project 页面并行读取当前收录与个人库，可直接收录已有 PaperVersion。移出 Project 只删除 `ProjectPaper`，不会删除 PDF 或解析结果。
@@ -101,7 +103,7 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   aggregate `evidence-matrix` output，不取决于父 Review 最终状态；因此后续 Section 失败但已产出合法
   Matrix 的 Review 仍可选择，失败且无 Matrix 的 Review 会被排除。提交 Turn 继续发送并由服务端校验
   `output_id`；正常后续轮可沿用上一轮冻结值，不让浏览器猜测“最新 Matrix”。
-- **Project chrome 统一但业务模型不合并**：共享 Header/Nav 与三栏 resize 只解决入口位置、viewport 和
+- **Project chrome 统一但业务模型不合并**：共享 AppSidebar/PageBar 与三栏 resize 只解决入口位置、viewport 和
   可访问交互；RAG `Conversation`、Review Run 与 AgentSession/Turn 仍使用各自 API 和恢复语义。
 - **栏宽偏好隔离**：RAG 与 Agent 使用同一个纯 resize helper 和可聚焦 separator，各自保存
   `literature-agent:chat-workspace` / `agent-workspace` v1 最小记录；非法/旧版本回退默认值，Conversation、
@@ -195,6 +197,14 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   通过。Phase 2 离线 E2E `1 passed (16.3s)`，覆盖 canonical Chat、Project/单篇 scope、刷新恢复、
   Evidence/PDF 与归档只读；Phase 5 Agent 回归 `1 passed (36.2s)`。普通测试未访问真实模型、网络、MCP
   或 Sandbox。
+- Phase 6 Slice 8.3：Inspector/Tool/Manifest/空 Session 查询的 TDD 先得到 4 个缺失模块失败，完成后
+  定向为 4 files / 5 passed；完整 Vitest 为 29 files / 169 passed，production build 通过。Phase 5
+  离线旅程在适配“成果/证据”tab 的可访问操作后保持原业务断言，最终 `1 passed (37.2s)`；新 Turn 的
+  ToolExecution/Manifest 查询均返回 200。
+- 1440×1000 有头走查确认 Chat/Agent 的 document `scrollHeight` 等于 1000px viewport，timeline 与
+  Inspector 独立滚动且 composer 可见；Inspector 从“证据”按 ArrowRight 聚焦“浏览器”，能力 details
+  展开后 document 仍不滚动。noVNC 继续输出为独立 `rfb` lazy chunk。历史数据走查中一个早于 Usage
+  事实落地的 Turn 对 ToolExecution 查询返回 404，UI 只显示安全错误，未在纯前端伪造兼容数据。
 
 ## 代码入口
 
@@ -202,9 +212,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - Review 页面：`web/src/pages/ReviewsPage.tsx`、`ReviewDetailPage.tsx`、
   `web/src/components/ReviewResults.tsx`
 - Agent 页面：`web/src/pages/AgentPage.tsx`、`web/src/components/AgentSessionRail.tsx`、
-  `AgentCapabilityPanel.tsx`、`AgentEvidenceMargin.tsx`；纯交互规则位于 `web/src/agent/`。
-- Project 工作区：`web/src/components/ProjectWorkspaceHeader.tsx`、`ProjectNav.tsx`、
-  `ChatWorkspaceFrame.tsx`、`ConversationRail.tsx`、`WorkspaceResizeSeparator.tsx`；canonical 路由、
+  `AgentCapabilityPanel.tsx`、`AgentInspector.tsx`、`AgentEvidenceMargin.tsx`、`AgentResearchActivity.tsx`、
+  `AgentTurnOutputs.tsx`、`AgentManifestList.tsx`；纯交互规则位于 `web/src/agent/`。
+- Project 工作区：`web/src/components/AppSidebar.tsx`、`PageBar.tsx`、`ChatWorkspaceFrame.tsx`、
+  `ConversationRail.tsx`、`WorkspaceResizeSeparator.tsx`；canonical 路由、
   Project-scoped 预选与 versioned layout 纯规则位于 `web/src/workspace/`。
 - Review 纯展示/意图：`web/src/reviews/reviewPresentation.ts`、`reviewIntent.ts`、
   `reviewHumanInput.ts`、`reviewResults.ts`、`reviewListRefresh.ts`
@@ -233,8 +244,8 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   容器部署。
 - E2E 使用全套 Fake Adapter 保持确定性；真实 Docling、arXiv 和 Provider 由独立 opt-in Smoke/报告
   覆盖，不把 Fake 浏览器旅程包装成真实生成质量。
-- Agent UI 当前不提供 Browser/noVNC、Workspace 文件管理、fork/rewind、candidate 内容查看/正式
-  Artifact 提交或移动端 Drawer；窄屏只避免阻断性溢出。Fake Runtime 固定回答没有 Citation 且完成
+- Agent UI 已提供 Browser/noVNC、输入附件、正式 Artifact 与 Manifest 展示，但仍不提供通用 Workspace
+  文件管理、fork/rewind、candidate 内容查看或移动端 Drawer；窄屏只避免阻断性溢出。Fake Runtime 固定回答没有 Citation 且完成
   很快，因此 E2E 不把非空 Agent Citation 或运行中取消作为稳定断言；相应业务边界由后端和通用 Run
   分层测试覆盖。
 - Chat/Agent 的 viewport 三栏以桌面为验收主体；窄屏顺序展开且不建设 Drawer。栏宽偏好只在各自模式

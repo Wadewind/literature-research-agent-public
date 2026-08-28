@@ -336,6 +336,63 @@ export interface AgentArtifact {
   created_at: string;
 }
 
+export interface AgentTurnUsage {
+  max_model_calls: number;
+  max_tool_calls: number;
+  model_calls_reserved: number;
+  tool_calls_reserved: number;
+  wall_clock_limit_seconds: number;
+  tool_timeout_seconds: number;
+  execute_timeout_seconds: number;
+  max_tool_output_bytes: number;
+  max_repeated_tool_calls: number;
+  max_input_tokens_per_model_call: number;
+  max_output_tokens_per_model_call: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  started_at: string | null;
+  deadline_at: string | null;
+}
+
+export interface AgentToolExecution {
+  invocation_id: string;
+  tool_name: string;
+  tool_version: string;
+  input_schema_hash: string;
+  args_hash: string;
+  status: string;
+  input_size_bytes: number;
+  output_size_bytes: number | null;
+  result_hash: string | null;
+  error_code: string | null;
+  safe_message: string | null;
+  duration_ms: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AgentToolExecutionsResponse {
+  usage: AgentTurnUsage;
+  items: AgentToolExecution[];
+}
+
+export interface AgentArtifactManifestItem {
+  artifact_id: string;
+  name: string;
+  media_type: string;
+  content_hash: string;
+  size_bytes: number;
+  source_url: string | null;
+  source_url_hash: string | null;
+  source_status: "not_provided" | "declared_public_target_checked";
+  created_at: string;
+}
+
+export interface AgentArtifactManifest {
+  run_id: string;
+  items: AgentArtifactManifestItem[];
+}
+
 export interface BrowserControl {
   control_id: string;
   session_id: string;

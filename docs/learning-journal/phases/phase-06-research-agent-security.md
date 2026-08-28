@@ -35,7 +35,18 @@ Hero 与重复模式入口已经删除。TDD 首先得到 PageBar 模块缺失�
 未修改业务断言。1440×1000 截图走查覆盖首页、综述和研究助手；研究助手实测 PageBar 56px、document
 `scrollHeight` 等于 1000px viewport、三栏未横向裁剪。浏览器仅另外记录 favicon 404 和无选中 Session
 首页既有的空 `session_id` 附件请求 404；两者不属于 8.2 行为，未在本切片顺便修复。深色 Agent welcome、
-Review workbench 与视觉 token 仍按顺序保留到 8.3/8.4，不能据此宣称最终视觉重设计完成。
+Review workbench 与视觉 token 当时仍按顺序保留到 8.3/8.4，不能据此宣称最终视觉重设计完成。
+
+Slice 8 的工作区空间回收与 Agent 产品整合子切片 8.3 完成日期：2026-08-28；研究助手右栏已拆为“证据 /
+浏览器 / 成果”三个可访问 tab，中心研究活动整合筛选 Event、脱敏 ToolExecution 与 Usage/Budget，成果区
+组合正式 Artifact、内部 Candidate 和公开 Manifest 来源摘要；能力配置、Evidence Matrix 与附件收进固定
+Composer。`.agent-welcome` 已改为浅色紧凑引导卡，Chat 创建页不再保留整屏空白；无 Session 的附件查询
+被条件禁用。新增 TDD 定向测试从 4 个缺失模块失败转为 4 files / 5 passed；最终 `npm test` 为
+29 files / 169 passed，`npm run build` 与 `git diff --check` 通过，Phase 5 E2E 为 1 passed（37.2s）。
+1440×1000 走查确认 Chat/Agent document 均不滚动、三栏内部滚动、Composer 可见、Inspector ArrowRight
+键盘切换有效，能力 details 展开后只压缩 timeline；noVNC 仍单独 lazy load。一个历史 Turn 因早于 Usage
+事实落地而对 ToolExecution 查询返回 404，UI 仅显示安全错误；新 Turn 的 E2E 请求为 200，纯前端不伪造
+历史数据。视觉 token 刷新仍留给 8.4，不能据此宣称 Slice 8 或最终视觉重设计全部完成。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -45,7 +56,7 @@ Slice 1 已完成文档契约审计，形成
 `STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
 Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件。Slice 3 已实现独立
 `BrowserControlLease`、Session/Turn/Sandbox generation/fence 互斥、短时 opaque ticket、平台 VNC
-WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API。Slice 6 已增加 fenced `RETIRED` Lease、持久化 Sandbox cleanup 补偿、Worker cleaner、固定本地 OpenSandbox Server 配置和统一 default-deny egress 的真实行为验证。Slice 7 已完成 public-egress Profile、Policy/Lease 冻结与漂移轮换、声明来源目标检查、Artifact 每 Turn 配额、Manifest 离线闭环与显式真实 OpenSandbox Smoke；下一步进入 Slice 8 UI/产品整合。
+WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API。Slice 6 已增加 fenced `RETIRED` Lease、持久化 Sandbox cleanup 补偿、Worker cleaner、固定本地 OpenSandbox Server 配置和统一 default-deny egress 的真实行为验证。Slice 7 已完成 public-egress Profile、Policy/Lease 冻结与漂移轮换、声明来源目标检查、Artifact 每 Turn 配额、Manifest 离线闭环与显式真实 OpenSandbox Smoke；Slice 8.1–8.3 已完成应用壳、轻页头与工作区/Agent 产品整合，下一步进入 8.4 视觉 token 刷新。
 
 Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
 PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
@@ -695,10 +706,11 @@ ADR-0007/0008 本身当作测试结果：
    `browser_navigate` 与 arXiv Search MCP `search_papers` 成功；metadata `169.254.169.254`、Docker
    gateway `:8080` 和 `10.0.0.1` 均被拒绝。主智能体独立离线复核合计 137 passed，其中 PostgreSQL/
    Alembic 26 passed。该证据不扩张为完整 PDF、全部公网、协议级只读或生产隔离声明；
-8. **产品整合、验证与复盘（进行中：应用壳子切片 8.1、轻页头子切片 8.2 已实现）**：严格遵循
+8. **产品整合、验证与复盘（进行中：应用壳 8.1、轻页头 8.2、工作区/Agent 产品整合 8.3 已实现）**：严格遵循
    `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
-   4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新，再整合 Turn Detail、
-   Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；随后按 ADR-0009 完成本地 noVNC 真实人工
+   4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新。前三项已完成，且
+   Turn Detail、Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI 已随 8.3 整合；下一步只进行 8.4
+   视觉 token 刷新，随后按 ADR-0009 完成本地 noVNC 真实人工
    输入 UI E2E（人工操作结束后，下一 Turn 由同 generation Playwright MCP 观察页面状态），并完成关键
    故障/取消/重复/越权测试、小型 Agent 评测、Deep Agents 升级契约、本地演示运行文档、模块学习笔记和 Research Agent Extension 完成
    报告。Core 数据库/Storage 的生产备份恢复不转入本阶段。

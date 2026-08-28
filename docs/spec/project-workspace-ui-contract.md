@@ -85,27 +85,54 @@ Conversation rail | 消息时间线 + 固定 Composer | Evidence Margin
 三栏 resize 规则与 Research Agent 共用小型 UI helper/component；两种业务仍使用独立 storage key，避免
 一个模式的宽度偏好意外覆盖另一个模式。
 
-## 6. 状态、可访问性与窄屏
+## 6. Research Agent 工作区与 Turn 检查器
 
-- TanStack Query 持有 Project、Paper、Conversation、Message 与 Evidence 服务端状态；独立查询并行启动；
-- React 本地状态只保存 scope 草稿、输入、稳定幂等意图、当前 Evidence 和栏宽；
+`/agent/:sessionId` 使用桌面 viewport 三栏：
+
+```text
+AgentSession rail | 消息时间线 + 研究活动 + 固定 Composer | Turn 检查器
+```
+
+- 检查器固定为“证据 / 浏览器 / 成果”三个 `role="tab"`；支持方向键、Home/End 和 roving tabIndex，
+  当前 tab 只属于本地 UI 状态，不写入 Session、Turn 或其他业务事实；
+- 证据区只显示当前 Turn 的 ContextSnapshot 索引水位、Evidence Matrix 与 Claim/Citation；浏览器区复用
+  当前 Session/generation 的 noVNC 组件；成果区组合正式 AgentArtifact、内部 Candidate 和当前 Turn 的
+  Artifact Manifest；inactive panel 使用 `hidden` 退出布局，但保持浏览器组件挂载以避免切换时丢失连接；
+- ToolExecution 与 Manifest 只在存在当前 `candidateTurnRunId` 时查询。研究活动仅展示 Tool 名称/版本、
+  状态、安全摘要、耗时、输入/输出字节数和 Usage/Budget；不得显示 raw args、完整 Prompt、网页正文、
+  Secret 或大型输出；
+- Manifest 只显示公开元数据、`source_status`、hash、大小和服务端返回的 `source_url`；未返回 URL 时前端
+  不构造链接，不把 Candidate 或 Sandbox 路径冒充正式来源；
+- Composer 内统一放置 Evidence Matrix、研究能力与附件；保持首轮 Skill 锁定、配置 dirty 时禁止发送和
+  显式保存行为。无 `sessionId` 或不可交互时不得发出附件查询，但选中 Session 后的真实请求错误不能隐藏；
+- 左、中、右栏独立滚动，document 不承担历史、Tool 列表或检查器内容滚动；能力 details 展开时只压缩
+  timeline 的可用高度，不能遮挡或推出固定 Composer。
+
+## 7. 状态、可访问性与窄屏
+
+- TanStack Query 持有 Project、Paper、Conversation、AgentSession/Turn、Message、Evidence、ToolExecution、
+  Manifest 与 Artifact 服务端状态；独立查询按业务 ID 与 enabled 条件启动；
+- React 本地状态只保存 scope 草稿、输入、稳定幂等意图、当前 Evidence/Inspector tab 和栏宽；
 - 页面 identity 变化重建交互状态，旧幂等 Key、问题草稿和 Evidence 选择不得进入新 Conversation；
 - separator 使用 `role="separator"`、垂直方向、当前/最小/最大值与键盘操作；表单保持可见 label 或
   视觉隐藏但可访问的 label；
 - 桌面是验收主体；窄屏隐藏 separator 并改为可顺序访问的布局，不建设 Drawer。
 
-## 7. 非范围
+## 8. 非范围
 
 - 不修改 RAG 检索、Claim/Citation/Evidence、Conversation 或 Run 后端契约；
 - 不把 RAG Conversation 改造成持续模型上下文；
 - 不接入官方 Deep Agents UI，不合并 AgentSession 与 Conversation；
 - 不新增 UI 框架、依赖、移动 Drawer 或全局 Dashboard。
 
-## 8. 测试与完成条件
+## 9. 测试与完成条件
 
 - Vitest 覆盖 canonical 路由、Project-scoped URL 预选过滤、scope 请求和版本化栏宽存储；
 - production build 通过 TypeScript strict；
 - Phase 2 E2E 经 canonical `/chat` 完成 Project/单篇范围、刷新恢复与 Evidence 回跳；
 - Phase 5 E2E 证明共享 AppSidebar + PageBar 没有破坏 Agent 两轮旅程；
+- Vitest 覆盖 Agent Inspector tab/键盘语义、Tool/Usage/Manifest 的安全投影和空 Session 附件查询条件；
+- Phase 5 E2E 在成果 tab 定位 Candidate/Artifact，并切回证据 tab 验证下一 Turn 的 ContextSnapshot；
 - 1440×1000 桌面验收应确认 document 不滚动、三栏独立滚动、Composer 位于中栏底部，separator 的 pointer/
-  keyboard/reset 与宽度持久化可用。
+  keyboard/reset 与宽度持久化可用；Agent 还需确认 Inspector tab 键盘切换、能力 details 展开不遮挡
+  timeline/composer，Browser/noVNC 保持 lazy chunk。

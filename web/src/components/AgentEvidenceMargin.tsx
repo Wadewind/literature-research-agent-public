@@ -1,7 +1,5 @@
-import type { AgentArtifact, AgentMessage, AgentTurn, CitationSummary, ReviewOutput } from "../api/types";
-import { formatCandidateSize, projectIndexLabel } from "../agent/presentation";
-import AgentArtifactList from "./AgentArtifactList";
-import AgentBrowserPanel from "./AgentBrowserPanel";
+import type { AgentMessage, AgentTurn, CitationSummary, ReviewOutput } from "../api/types";
+import { projectIndexLabel } from "../agent/presentation";
 
 interface AgentEvidenceMarginProps {
   projectId: string;
@@ -13,11 +11,6 @@ interface AgentEvidenceMarginProps {
   selectedEvidence: CitationSummary | null;
   onSelectEvidence: (value: CitationSummary) => void;
   onClearEvidence: () => void;
-  artifacts: AgentArtifact[] | undefined;
-  artifactsLoading: boolean;
-  artifactsError: boolean;
-  sessionId: string;
-  activeTurnRunId: string | null;
 }
 
 function pageLabel(citation: CitationSummary): string {
@@ -38,11 +31,6 @@ export default function AgentEvidenceMargin({
   selectedEvidence,
   onSelectEvidence,
   onClearEvidence,
-  artifacts,
-  artifactsLoading,
-  artifactsError,
-  sessionId,
-  activeTurnRunId,
 }: AgentEvidenceMarginProps) {
   const claims = assistantMessages.flatMap((message) => message.claims ?? []);
   const activeMatrixId = matrix?.output_id ?? turn?.review_output_id;
@@ -50,12 +38,12 @@ export default function AgentEvidenceMargin({
   const indexCount = turn ? turn.project_index_refs.length : projectReadyIndexCount;
 
   return (
-    <aside className="agent-evidence-margin" aria-label="Evidence Margin">
-      <header>
-        <div><p className="eyebrow">EVIDENCE MARGIN</p><h2>证据批注</h2></div>
-        {selectedEvidence && <button className="button-plain" type="button" onClick={onClearEvidence}>关闭</button>}
-      </header>
-      <AgentBrowserPanel sessionId={sessionId} activeTurnRunId={activeTurnRunId} />
+    <section className="agent-evidence-panel" aria-label="证据批注">
+      {selectedEvidence && (
+        <button className="button-plain agent-evidence-close" type="button" onClick={onClearEvidence}>
+          返回引用列表
+        </button>
+      )}
       <dl className="agent-context-ledger">
         <div><dt>Evidence Matrix</dt><dd className="mono">{activeMatrixId?.slice(0, 8) ?? "未选择"}</dd></div>
         <div>
@@ -66,7 +54,6 @@ export default function AgentEvidenceMargin({
               : projectIndexLabel(indexCount, indexScope)}
           </dd>
         </div>
-        <div><dt>正式成果</dt><dd>{artifacts?.length ?? 0} 项 committed</dd></div>
       </dl>
 
       {selectedEvidence ? (
@@ -106,19 +93,6 @@ export default function AgentEvidenceMargin({
         </section>
       )}
 
-      <AgentArtifactList artifacts={artifacts} loading={artifactsLoading} error={artifactsError} />
-
-      <details className="agent-candidate-list">
-        <summary>内部候选 · {turn?.candidates.length ?? 0}</summary>
-        {turn?.candidates.length === 0 && <p className="muted">本轮没有暂存候选成果。</p>}
-        {turn?.candidates.map((candidate) => (
-          <article key={candidate.candidate_id}>
-            <strong>{candidate.name}</strong>
-            <small>{candidate.media_type} · {formatCandidateSize(candidate.size_bytes)}</small>
-            <span className="badge badge-pending">{candidate.status}</span>
-          </article>
-        ))}
-      </details>
-    </aside>
+    </section>
   );
 }

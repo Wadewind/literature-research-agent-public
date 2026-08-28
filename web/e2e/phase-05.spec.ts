@@ -58,12 +58,14 @@ test("离线 Research Agent 完成配置、两轮恢复与候选成果展示", a
   await page.getByLabel("研究消息").fill("请综合这些证据并指出主要研究缺口。");
   await page.getByRole("button", { name: "开始本轮研究" }).click();
   await expect(page.getByText("当前授权上下文证据不足。")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("tab", { name: /成果/ }).click();
   await page.getByText("内部候选 · 1", { exact: true }).click();
   const candidateArtifact = page.getByText("research-note.md");
   await candidateArtifact.scrollIntoViewIfNeeded();
   await expect(candidateArtifact).toBeVisible();
   await expect(candidateArtifact).toBeInViewport();
   await expect(page.getByText("staged", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: /证据/ }).click();
   await expect(page.getByText(/本轮索引快照 · \d+ 篇文献/)).toBeVisible();
 
   await page.reload();
@@ -77,6 +79,7 @@ test("离线 Research Agent 完成配置、两轮恢复与候选成果展示", a
   await page.getByRole("button", { name: "开始本轮研究" }).click();
   await expect(page.getByText("继续比较不同方法，并给出下一步研究建议。")).toBeVisible();
   await expect(page.locator(".message-assistant")).toHaveCount(2, { timeout: 30_000 });
+  await page.getByRole("tab", { name: /成果/ }).click();
   await page.getByText("内部候选 · 1", { exact: true }).click();
   await expect(page.getByText("research-note.md")).toBeVisible();
 
