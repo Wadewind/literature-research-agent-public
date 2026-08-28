@@ -5,18 +5,17 @@
 Outline 并导出引用 Artifact 的固定 Review Workflow。Phase 4 已将其收束为本地可复现、可评测的
 Demo-ready Core v1；该里程碑不代表公网生产、登录认证、备份恢复、永久删除/GC 或 SLA 已完成。
 
-Phase 5 Research Agent Extension 正在按独立切片验证：业务 Session/Turn/Run 包装、Deep Agents 原生多轮
-Checkpoint/压缩、Project Context、跨进程恢复、OpenSandbox Workspace、固定 MCP Catalog 已完成受限
-验证；Native Skills 已支持平台固定 Skill 和 owner-scoped 声明式版本。Skill Profile 只在 Session 首个
-Turn 前配置，`/skills/` 为 Sandbox `execute` 不可见的只读虚拟 Backend，Skill 不能扩大 Tool/MCP/网络
-权限。生产默认仍使用 Fake Runtime；真实 OpenSandbox proxy 的本地功能 Smoke 已通过，但真实 Provider、
-公共网络与 Phase 6 生产安全治理尚未完成。
+Phase 5–6 Research Agent Extension 已完成本地单人精简交付：业务 Session/Turn/Run 包装、Deep Agents
+原生多轮 Checkpoint/压缩、Project Context、跨进程恢复、OpenSandbox Workspace、固定 MCP/Skill、输入
+附件、正式 Artifact、硬预算、正常公网 egress/private-network 拒绝、跨 Turn Browser 人工控制与统一
+Agent UI 均已形成离线或显式真实验证。生产默认仍使用 Fake Runtime；真实 Provider 只有显式配置才启用。
+这不代表公网多租户、通用认证、secure runtime、精确计费或真实模型质量已完成。
 
 Phase 6 Slice 2 已完成受限 Agent 文件交付：真实 Sandbox Turn 可显式提交
 `/workspace/outputs/` 中的 PNG/JPEG/SVG/PDF/CSV/Markdown/text/JSON，平台在数据库事务外校验普通文件、
 10 MiB 上限、声明 MIME、magic/结构与 hash，并在 Turn 业务成功事务中发布独立 AgentArtifact。Research
 Agent 成果区只预览 PNG/JPEG，其余类型安全下载；Fake Runtime 的候选描述符与未提交 Candidate 都不是
-可下载资源。该实现不代表生产级恶意文件扫描，孤儿 staging GC 与总量配额仍待后续切片。
+可下载资源。该实现不代表生产级恶意文件扫描；孤儿 staging GC 与总量配额是完成后的已知限制。
 
 Phase 6 Slice 3 已完成 Browser 人工控制的离线垂直闭环：用户可在两个 Agent Turn 之间申请当前 Session/
 Sandbox generation 的短时控制权，右侧 noVNC 面板通过平台 WebSocket 操作同一 Chromium；人工控制与
@@ -26,8 +25,13 @@ TigerVNC 1.15.0，但也发现 OpenSandbox 暴露的旧 `5901` endpoint 实际�
 raw TCP VNC 使用。当前镜像 recipe 已固定加入 websockify 0.13.0，以 Sandbox 内 `6080` WebSocket 转发
 loopback `5901`。修正镜像已重建，Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
 Smoke 已通过。此前 raw endpoint、宿主代理、服务 readiness/Fixture 转义三类失败均已形成回归测试。
-noVNC 人工键鼠 UI E2E、公网浏览与跨
-generation 登录恢复尚未验证。
+Phase 6 Slice 8.5 已进一步修正固定镜像的 VNC 内部认证：TigerVNC 只监听 Sandbox namespace loopback，
+平台 ticket gateway 负责外层鉴权；生产 noVNC 输入已经由同 generation Playwright MCP 回读。该
+trusted-local Smoke 不覆盖真实账号、通用认证、secure runtime 或跨 generation 登录恢复。
+
+Phase 6 的 7 场景固定 Agent 评测、Deep Agents 升级门禁、固定安全回归与完成报告分别见
+[`agent-evaluation.md`](docs/learning-journal/modules/agent-evaluation.md) 和
+[`phase-06-research-agent-extension-completion.md`](docs/learning-journal/reports/phase-06-research-agent-extension-completion.md)。
 
 ## 仓库布局
 
@@ -223,13 +227,22 @@ cd backend
 cd ../web
 npm test
 npm run build
-npm run test:e2e  # 隔离临时 PostgreSQL/Valkey/Storage，运行 Phase 1–4 Chromium 核心旅程
+npm run test:e2e  # 隔离临时 PostgreSQL/Valkey/Storage，运行 Phase 1–5 Chromium 核心旅程
+
+cd ..
+./scripts/test-phase6-regression.sh
+./scripts/test-deep-agents-upgrade.sh
+cd backend
+.venv/bin/python -m tests.evaluation.run_phase6_agent_eval
 ```
 
 Playwright harness 显式选择 Fake Parser、Embedding、Chat 与 arXiv，清除继承的 Provider Key，不读取
 `.env`。浏览器只允许访问本机 API/Web；测试覆盖导入与复用、RAG 引用与归档、Review 部分来源失败、
 两轮 Outline HITL、引用定位、六类 Artifact、取消和刷新恢复。它证明本地工程旅程，不代表真实模型
 质量、公网安全或生产部署能力。
+
+Phase 6 的真实 noVNC 与 public-egress Smoke 需要固定 OpenSandbox Server/image 并显式启用，命令与
+临时 API key 边界见 [本地 OpenSandbox Runbook](docs/runbooks/local-opensandbox-server.md)。
 
 真实组件测试必须显式启用：
 

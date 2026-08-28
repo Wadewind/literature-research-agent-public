@@ -74,7 +74,10 @@ Sandbox recipe 只允许固定 websockify `6080` 转发 loopback TigerVNC `5901`
 OpenSandbox 暴露的旧 `5901` endpoint 映射到 HTTP egress sidecar，不能当作 raw TCP。修正后的固定镜像
 将 websockify 0.13.0 与其 `requests`、`jwcrypto`、`redis` 等传递依赖统一锁入 Sandbox requirements，固定
 recipe 在 `6080` 提供 WebSocket 转发。noVNC 1.7.0 仍仅是 Web 的精确直接依赖且无传递运行依赖；Vite
-将其生成为独立懒加载 chunk。修正镜像的 Server Proxy/websockify/RFB 已由主审真实验证。
+将其生成为独立懒加载 chunk。Slice 8.5 进一步核实 base entrypoint 直接按 PATH 启动
+`Xtigervnc :1 -geometry 1280x1024`，默认只提供 TLSVnc/VncAuth 且监听 all，无法由不持有 VNC 密码的
+产品 BrowserViewer 完成连接。固定镜像因此加入 PATH wrapper，强制 `-SecurityTypes None -localhost`：
+5901 只在 Sandbox namespace loopback 提供 RFB，外部仍必须通过平台 ticket gateway 和有界 bridge。
 
 ## 失败、重复、取消与恢复
 
@@ -107,12 +110,20 @@ recipe 在 `6080` 提供 WebSocket 转发。noVNC 1.7.0 仍仅是 Web 的精确�
   readiness/Fixture 转义，均已形成局部 client factory、固定轮询、安全日志与 compile 契约测试；第四次
   主审在重建镜像上完成整条 Smoke。
 
+2026-08-28 Slice 8.5 最终验收：
+
+- 固定 wrapper/overlay recipe 定向测试：6 passed；
+- 默认镜像 digest 下，生产 `AgentBrowserPanelView`/noVNC 经 Vite WebSocket proxy、生产 ticket 解析与
+  `bridge_vnc_websocket` 向同一 Sandbox Chromium 输入 marker；保持打开的同 generation Playwright MCP
+  session 随后在 snapshot 中读到 marker：1 passed in 15.96s；
+- 首次真实失败准确发现 RFB 只提供 security type 19/2（VeNCrypt/VNC auth），没有用静态断言或直接 RFB
+  client 冒充 UI 输入；修正后协议探针在 UI 前明确要求 type 1 None。
+
 普通测试没有访问真实模型、公网或付费 Sandbox。仓库新增显式设置
 `AGENT_RUN_OPENSANDBOX_BROWSER_TESTS=1` 才运行的本地 Smoke：它创建一个固定 Sandbox，经 Server
-Proxy/websockify 核验 RFB 握手，并让 Playwright MCP 在同一 Sandbox 操作合成页面。RFB 前半程已真实
-通过，同一 Sandbox Playwright 合成页后半程也已完成。该环境未配置 OpenSandbox API key/secure runtime，
-所以只构成 trusted-local 功能证据；不证明 noVNC 人工键鼠 UI E2E、通用认证、浏览器登录跨 generation
-延续或生产网络代理可用。
+Proxy/websockify 核验 RFB，并由生产 noVNC 实际输入、同 Sandbox Playwright MCP 回读合成页面。该环境
+未配置 secure runtime，所以只构成 trusted-local 功能证据；不证明通用认证、真实账号登录、浏览器登录
+跨 generation 延续或生产网络代理可用。
 
 ## 代码入口
 
@@ -135,6 +146,9 @@ Proxy/websockify 核验 RFB 握手，并让 Playwright MCP 在同一 Sandbox 操
   内部 loopback 是 websockify→VNC 与 CDP 所必需，不等于宿主 loopback 或正式 URL/source 获得授权。该
   后续决定不改写本模块已运行 Smoke 的历史范围，也不提供 HTTP/Browser 业务语义级只读保证。
 - 当前本地 OpenSandbox 未配置 API key/secure runtime，真实 Smoke 仅是 trusted-local 功能证据。
+- TigerVNC 在 Sandbox namespace loopback 使用 `SecurityTypes=None`；同一 Sandbox 内进程理论上可以连接
+  该端口，但 Agent 已拥有同一 Chromium 的固定 Playwright MCP/CDP 与 `execute`，5901 不映射到宿主或
+  其他 Session，外部浏览器仍必须通过平台 ticket gateway；
 - OpenSandbox Server 0.1.15 在客户端正常以 WebSocket code 1000 关闭后仍可能记录
   `Unexpected websocket proxy failure`/`ClientDisconnected`；这是当前 trusted-local 上游 noisy shutdown
   log，不能单凭该日志判定画面链路失败，后续依赖升级契约需复核。

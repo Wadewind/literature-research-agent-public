@@ -1,6 +1,6 @@
 # 文献综述 Agent 系统：学习与开发实施指南
 
-> 状态：Proposed v19
+> 状态：Current v23
 >
 > 日期：2026-08-28
 >
@@ -83,8 +83,9 @@
 > websockify `6080`，再转发到 loopback TigerVNC `5901`，raw endpoint/headers 只短暂存在于 Adapter
 > 内存。断线可在控制权 TTL 内重连，不保存凭据或跨 generation Chrome Profile。旧 raw TCP endpoint 的
 > 诊断失败已修正，修正镜像已重建；Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
-> Smoke 已通过。该证据仅为未配置 API key/secure runtime 的 trusted-local 功能验证，不代表 noVNC 人工
-> 键鼠 UI E2E、通用认证、公网安全或跨 generation 登录恢复。
+> Smoke 已通过。该切片当时尚未覆盖 noVNC 人工键鼠 UI E2E；该缺口已由 Phase 6 Slice 8.5 的生产
+> BrowserViewer 输入与同 generation Playwright MCP 回读补齐。两者仍不代表通用认证、secure runtime、
+> 公网多租户安全或跨 generation 登录恢复。
 >
 > v18 变更：Phase 6 Slice 4 完成 Agent 输入附件。用户文件作为 owner/Project/Session
 > scoped 不可变 `AgentAttachment` 进入业务 Storage；消息幂等 hash 覆盖有序附件 ID，
@@ -112,6 +113,13 @@
 > `wget` arXiv 首页、固定 `1706.03762` 最多 64 KiB PDF 前缀、Python/Node/Chromium `example.com`、
 > Playwright MCP 与 arXiv Search MCP，并拒绝 metadata、Docker gateway 和 `10.0.0.1`。前两轮分别暴露
 > 固定镜像无 `curl` 与完整 2.2 MiB PDF 超时；最终证据不扩张为完整 PDF、全部公网、协议级只读或生产隔离。
+>
+> v23 变更：Phase 6 Slice 8.1–8.5 完成统一 App Shell、轻 PageBar、全高研究工作区、Evidence/Browser/
+> Artifact Inspector 与浅色视觉刷新。固定 Sandbox 镜像用 PATH wrapper 强制 TigerVNC 只监听 namespace
+> loopback 并使用 `SecurityTypes=None`，外层继续由平台 ticket gateway 鉴权；生产 BrowserViewer/noVNC
+> 输入已由同 generation Playwright MCP 回读。新增 7 场景零费用 Agent 契约评测、Deep Agents 装配/
+> Checkpoint/跨进程恢复升级门禁、固定 Phase 6 安全回归与完成报告。Phase 6 因此在本地单人精简交付范围
+> 完成，但不扩张为公网多租户、secure runtime、通用认证、精确计费或真实模型质量声明。
 
 ## 1. 文档用途
 

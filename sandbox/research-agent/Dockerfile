@@ -31,6 +31,9 @@ COPY --from=playwright-mcp \
     /opt/research-agent-mcp-node/node_modules
 COPY --chmod=0755 start-mcp-service /opt/research-agent/start-mcp-service
 COPY --chmod=0755 start-browser-proxy /opt/research-agent/start-browser-proxy
+# Base entrypoint 直接按 PATH 启动 Xtigervnc，不读取 vncserver 用户配置。
+# 固定 wrapper 只在 Sandbox namespace loopback 提供免密码 RFB；外层仍由平台 ticket gateway 鉴权。
+COPY --chmod=0755 start-vnc-server /opt/research-agent-venv/bin/Xtigervnc
 
 ENV PATH="/opt/research-agent-venv/bin:${PATH}" \
     HOME="/home/chrome" \

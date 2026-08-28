@@ -1,7 +1,6 @@
 # Research Agent 精简安全契约
 
-> 状态：Phase 6 Slice 1–7 已确认；Slice 7 显式真实 OpenSandbox Smoke 已通过；Slice 8
-> 为实施契约。
+> 状态：Phase 6 Slice 1–8 已实现并完成精简交付验证；真实证据与非声明以完成报告为准。
 >
 > 基线：`b0ec3f4`（2026-08-28）。本文把已经由 Phase 5 代码/测试证明的事实与 Phase 6 目标事实分开；
 > “目标”“必须”“验收”不表示对应能力已经实现或经过真实环境验证。
@@ -40,7 +39,7 @@
 | Workspace | `WorkspaceSnapshot` 有 `STAGED/STABLE`，只允许 STABLE 恢复；上限为 128 个文件、单文件 10 MiB、总计 50 MiB；内容在 Storage，元数据在 PostgreSQL |
 | MCP/Skill | 固定 MCP Catalog/Profile、Tool 名称与 Schema hash、owner/Session 选择、调用拦截与 `ToolExecution` 已存在；平台 Skill 与 owner-scoped 声明式 Skill 使用不可变版本/hash 和只读 `/skills/` Backend |
 | Browser Spike | 固定 Playwright MCP 能连接同一 Sandbox Chromium，在禁网环境操作合成页面并下载到同一 Workspace；未提供面向用户的画面或控制权 |
-| Browser 人工控制 | 独立 BrowserControlLease、Turn 边界互斥、短时票据、固定 Server Proxy/websockify 平台代理和 noVNC 右栏组件已完成离线闭环；修正镜像的 RFB 与同一 Sandbox Playwright 合成页完整 trusted-local Smoke 已通过 |
+| Browser 人工控制 | 独立 BrowserControlLease、Turn 边界互斥、短时票据、固定 Server Proxy/websockify 平台代理和 noVNC 右栏组件已完成；固定镜像只在 Sandbox loopback 提供免二次密码 RFB，生产 BrowserViewer 输入可由同 generation Playwright MCP 回读 |
 | Agent Artifact | `AgentArtifactCandidate` 已实现 `STAGED → VALIDATED → COMMITTED` 与 `STAGED → REJECTED`；独立不可变 `AgentArtifact` 只由 Turn 成功事务发布。真实 Sandbox Turn 固定装配 `submit_artifact`，Fake Runtime 描述符仍只停留在 `STAGED`；单文件上限为 10 MiB |
 | Agent Attachment | owner/Project/Session scoped 不可变 `AgentAttachment(version=1)` 已实现上传、列表、受限删除、消息有界有序引用、`agent-context.v2` 冻结和事务外 fenced `/workspace/inbox` 物化；已引用附件不可删除 |
 | API/Event | 已有 Session/Message/Turn、MCP/Skill 配置和通用 Run cancel/Event API；Event 只保存筛选后的 Agent/Tool 生命周期摘要 |
@@ -48,20 +47,20 @@
 这些事实与 Slice 7 固定目标 Smoke 不证明 OpenSandbox 是生产级隔离、完整 PDF 下载、全部公网可达或
 公网多租户安全。Slice 2 的正式 Agent Artifact 与 Slice 4 的 AgentAttachment 都是本地受限文件能力，不代表已完成
 生产级恶意文件扫描、隔离检疫、无 TOCTOU 竞争或 Storage GC；
-Slice 3 的真实 Smoke 只证明未配置 API key/secure runtime 的 trusted-local OpenSandbox 功能链路，不是
-noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
+Slice 8.5 的真实 noVNC Smoke 证明 trusted-local UI 输入链路，但不是通用认证、secure runtime 或公网
+多租户安全代理结论。
 
 ### 2.2 Phase 6 目标与责任切片
 
 | 能力或尚缺目标 | 责任切片 |
 |---|---|
 | 独立 `AgentArtifact`、Candidate 完整生命周期、`submit_artifact`、预览和下载 | Slice 2（已完成） |
-| `BrowserControlLease`、鉴权画面代理和跨 Turn 人工控制 | Slice 3（已完成；trusted-local RFB/同 Sandbox Playwright 合成页 Smoke 已通过；noVNC 人工输入 UI E2E 留到 Slice 8） |
+| `BrowserControlLease`、鉴权画面代理和跨 Turn 人工控制 | Slice 3 + Slice 8.5（已完成真实 noVNC 输入与同 generation Playwright MCP 回读） |
 | `AgentAttachment`、上传/删除、消息引用、ContextSnapshot 冻结与 `/workspace/inbox` 物化 | Slice 4（已完成） |
-| 固定能力 Schema/hash 漂移拒绝、完整调用前 scope 检查、脱敏 Tool 摘要和硬预算 | Slice 5 |
+| 固定能力 Schema/hash 漂移拒绝、完整调用前 scope 检查、脱敏 Tool 摘要和硬预算 | Slice 5（已完成） |
 | 实测资源限制、TTL/清理补偿、Workspace 重建与覆盖全部 Sandbox 进程的 default-deny egress | Slice 6（已完成；Docker overlay 物理磁盘硬配额除外） |
 | 版本化 Sandbox public-egress、private/metadata/宿主/LAN 拒绝、正式资源校验/来源和 Prompt Injection 验证 | Slice 7（已完成固定目标真实 Smoke；不代表生产隔离） |
-| App Shell、完整 UI/E2E、故障测试、评测、运行文档和完成复盘 | Slice 8 |
+| App Shell、完整 UI/E2E、故障测试、评测、运行文档和完成复盘 | Slice 8（已完成） |
 
 未完成切片不得为了方便把目标改写成已有能力，也不得用 Mock/配置字段存在代替真实强制效果。
 
@@ -371,13 +370,18 @@ Artifact 或业务成功。
 - Web 使用精确版本 noVNC `1.7.0` 的动态 import，ticket 只进入 React 内存和 WebSocket subprotocol，不写
   URL、localStorage/sessionStorage 或日志。右栏显示 Agent/Manual、连接、断线、过期和旧 generation，
   组件不依赖待替换的全局壳层；
+- 固定镜像以 PATH wrapper 强制 `Xtigervnc -SecurityTypes None -localhost`，只在 Sandbox namespace
+  loopback 免二次 VNC 密码；raw 5901 不映射到 Web/宿主，外层仍由平台 ticket gateway 校验 owner、
+  Session、generation、revision 与 TTL；
 - 离线 Fake 通道、PostgreSQL 约束/并发和 Web 状态测试已通过。旧镜像诊断确认 Sandbox 内 TigerVNC
   1.15.0/RFB 可用，同时证明旧 `5901` OpenSandbox endpoint 指向 HTTP egress sidecar，不能直连 raw TCP；
   因此固定镜像 recipe 新增 websockify 0.13.0。仓库包含默认跳过、由
   `AGENT_RUN_OPENSANDBOX_BROWSER_TESTS=1` 显式启用的本地 OpenSandbox 合成页 Smoke，用于经 Server
   Proxy/websockify 的 RFB 握手与同一 Sandbox Playwright MCP 关联验证。修正镜像已重建，完整 Smoke
-  `5 passed in 13.06s`；前三次失败形成 endpoint、代理和 readiness/Fixture 回归测试。该 trusted-local
-  证据不覆盖 noVNC 人工键鼠 E2E、通用认证、API key/secure runtime、公网或跨 generation 登录恢复。
+  `5 passed in 13.06s`；前三次失败形成 endpoint、代理和 readiness/Fixture 回归测试。Slice 8.5 又用
+  生产 BrowserViewer/noVNC 经 ticket relay 输入 marker，并由同 generation Playwright MCP 回读，结果
+  `1 passed in 15.96s`。该 trusted-local 证据不覆盖通用认证、secure runtime、真实账号或跨 generation
+  登录恢复。
 
 ### Slice 4：Agent 输入附件（已完成）
 
@@ -488,14 +492,16 @@ Smoke 为 1 passed（39.67s），实际覆盖同一 Sandbox 内部 loopback、`w
 `curl`、完整 2,215,244-byte PDF 超过 30 秒 Sandbox/45 秒 Adapter 限制而未到达全部断言；两者是 Smoke
 设计修正证据，不是网络拒绝。通过结果不声称完整 PDF、所有公网、协议级只读或生产隔离。
 
-### Slice 8：产品整合
+### Slice 8：产品整合（已完成）
 
 - 故障、取消、响应丢失、重复、跨 owner/Project/Session/generation、Prompt Injection 和预算 E2E 必须覆盖；
 - UI 只消费平台业务 API，不直连 LangGraph Deployment/Thread State 或 Provider endpoint；
 - 真实 Provider、OpenSandbox、arXiv Smoke 显式启用并记录精确版本、预算、耗时、结果与限制；
-- 按 ADR-0009 完成本地 noVNC 真实人工输入 UI E2E：人在画面中操作后结束 MANUAL，下一 Turn 由同一
-  generation 的 Playwright MCP 观察该页面状态；该验收不能由 Slice 3 的协议/RFB/合成页工具 Smoke 替代；
-- 完成报告逐条区分离线证据、真实功能证据和未验证安全声明。
+- 本地 noVNC 真实人工输入验收已由生产 `AgentBrowserPanelView`、ticket 解析/bridge 和同 generation
+  Playwright MCP 回读完成；Turn 互斥与下一 Turn 复用由 Application/Integration 测试补充；
+- 7 场景固定 Agent 评测、Deep Agents 公开装配面/Checkpoint/跨进程恢复升级门禁和 283 passed、
+  1 skipped 的固定安全回归已完成；skip 是需显式 OpenSandbox 开关的真实 noVNC 用例；
+- 完成报告已逐条区分离线证据、真实功能证据和未验证安全声明。
 
 ## 11. UI 强制契约
 

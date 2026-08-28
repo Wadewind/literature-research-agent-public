@@ -122,7 +122,7 @@ Sandbox 部署配置：
 - `AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080`；
 - `AGENT_RESEARCH_SANDBOX_PROTOCOL=http|https`；
 - `AGENT_RESEARCH_SANDBOX_API_KEY`；
-- `AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:58beb51efafe5bb8c767404979b3bea2fe92067177664437f306b11ea725591a`。
+- `AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1`。
 
 OpenSandbox Server 独立于 `scripts/dev.sh` 启动。项目版本化配置是
 `config/opensandbox-server.phase6.toml`，入口是 `scripts/opensandbox-server.sh`；不会读取或修改用户 home
@@ -130,6 +130,11 @@ OpenSandbox Server 独立于 `scripts/dev.sh` 启动。项目版本化配置是
 [`本地 OpenSandbox Server`](runbooks/local-opensandbox-server.md)。当前配置固定 Server 0.2.2、loopback
 控制面、Docker bridge、无 host volume、drop ALL、no-new-privileges、PID 256 和固定 execd/egress digest。
 它提供本地 default-deny 行为证据，但未配置 secure runtime，不是公网多用户隔离方案。
+
+固定镜像中的 TigerVNC 通过 PATH wrapper 强制 `-SecurityTypes None -localhost`。这只取消同一 Sandbox
+namespace 内部 RFB 的二次密码，便于平台 noVNC gateway 连接；Web 仍必须使用 owner/Session/generation/
+revision 绑定的短时 ticket，raw endpoint 与 5901 不返回给浏览器。真实画面回路只由开发者显式设置
+`AGENT_RUN_OPENSANDBOX_BROWSER_TESTS=1` 启用，该变量不属于应用配置，也不得写入 `.env`。
 
 Phase 6 Slice 7 的目标网络配置由 ADR-0012 固定为 `research-public-egress.v1`，不是 `.env` 或用户设置：
 Sandbox 内允许任意正常公网 HTTP(S)，保留 CDP/MCP/VNC 所需的 Sandbox namespace 内部 loopback，并统一

@@ -1,0 +1,7 @@
+# 当前本地审核 pin 的最小迁移 recipe：在上一版已审核镜像上只增加 VNC wrapper。
+FROM agent-service/research-agent-sandbox@sha256:58beb51efafe5bb8c767404979b3bea2fe92067177664437f306b11ea725591a
+
+USER root
+COPY --chmod=0755 start-vnc-server /opt/research-agent-venv/bin/Xtigervnc
+USER chrome
+WORKDIR /workspace

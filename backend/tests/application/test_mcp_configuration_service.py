@@ -20,6 +20,9 @@ from literature_agent.domain.mcp_configuration import (
     McpProfileSelection,
     McpToolContract,
 )
+from literature_agent.domain.research_agent import (
+    PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION,
+)
 from literature_agent.domain.run import RunStatus
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
@@ -188,7 +191,7 @@ async def test_turn_freezes_profile_version_config_hash_and_tool_schema(db_engin
     )
     turn = await agent_service.get_turn(scenario.actor, posted.run_id)
 
-    assert turn.policy_snapshot.policy_version.endswith("-mcp.v2")
+    assert turn.policy_snapshot.policy_version == PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION
     profile_id = turn.policy_snapshot.mcp_refs[0].profile_id
     assert profile_id
     assert turn.policy_snapshot.mcp_refs[0].profile_revision == 1

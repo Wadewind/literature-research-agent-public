@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25；按 ADR-0007
+已完成。Spec 初版日期：2026-08-20；按 ADR-0005 对齐日期：2026-08-25；按 ADR-0007
 调整日期：2026-08-26；按 ADR-0008 调整日期：2026-08-27；按 ADR-0009/0010 对齐 Browser 人工控制与
 Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目精简交付日期：2026-08-28；对齐
 `docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28；Slice 1 精简产品契约与威胁模型
@@ -57,7 +57,18 @@ Slice 8 的全站视觉 token 与可访问性刷新子切片 8.4 完成日期：
 文献库、Chat、Reviews 和 Agent；Chat/Agent document 均不承担工作区滚动，三栏无横向溢出且 Composer
 可见，skip link 可由键盘进入主内容。控制台仍有既有 favicon 404，以及一个历史 Turn 早于 Usage 事实
 落地导致的 ToolExecution 404；本纯前端切片未伪造兼容数据，也不把桌面走查宣称为全量 WCAG、跨浏览器
-或移动端认证。Slice 8 最终产品整合与复盘仍留给后续子切片。
+或移动端认证。上述限制已带入 Slice 8.5 的最终复盘，不阻塞本地单人演示范围完成。
+
+Slice 8.5 最终产品整合、验证与复盘完成日期：2026-08-28。固定镜像新增 PATH 内 `Xtigervnc` wrapper，
+强制 `-SecurityTypes None -localhost`：RFB 只在 Sandbox namespace loopback 免二次密码，外层继续由
+owner/Session/generation/revision 和短时 ticket gateway 鉴权，raw 5901 不暴露给 Web。主智能体用默认
+新镜像 digest 完成生产 `AgentBrowserPanelView`/noVNC → ticket 解析与有界 bridge → 同 Sandbox Chromium
+输入 marker → 保持打开的同 generation Playwright MCP 回读，真实 Smoke 为 1 passed（15.96s）。新增
+7 场景版本化离线 Agent 评测、Deep Agents 0.7.8 装配/Checkpoint/跨进程恢复升级门禁和固定 Phase 6
+安全回归；最终结果分别为 7/7、130 passed（71.22s）和 283 passed、1 skipped（94.78s）。完整后端默认套件为
+1291 passed、10 skipped（661.86s）；Web 为 30 files / 170 passed，production build 通过，Phase 5
+Agent UI E2E 为 1 passed（36.6s）。完成报告见
+[`phase-06-research-agent-extension-completion.md`](../reports/phase-06-research-agent-extension-completion.md)。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -67,7 +78,7 @@ Slice 1 已完成文档契约审计，形成
 `STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
 Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件。Slice 3 已实现独立
 `BrowserControlLease`、Session/Turn/Sandbox generation/fence 互斥、短时 opaque ticket、平台 VNC
-WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API。Slice 6 已增加 fenced `RETIRED` Lease、持久化 Sandbox cleanup 补偿、Worker cleaner、固定本地 OpenSandbox Server 配置和统一 default-deny egress 的真实行为验证。Slice 7 已完成 public-egress Profile、Policy/Lease 冻结与漂移轮换、声明来源目标检查、Artifact 每 Turn 配额、Manifest 离线闭环与显式真实 OpenSandbox Smoke；Slice 8.1–8.4 已完成应用壳、轻页头、工作区/Agent 产品整合与视觉 token/可访问性刷新，最终产品整合与复盘留给后续子切片。
+WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API。Slice 6 已增加 fenced `RETIRED` Lease、持久化 Sandbox cleanup 补偿、Worker cleaner、固定本地 OpenSandbox Server 配置和统一 default-deny egress 的真实行为验证。Slice 7 已完成 public-egress Profile、Policy/Lease 冻结与漂移轮换、声明来源目标检查、Artifact 每 Turn 配额、Manifest 离线闭环与显式真实 OpenSandbox Smoke；Slice 8.1–8.5 已完成应用壳、轻页头、工作区/Agent 产品整合、视觉 token/可访问性刷新、真实 noVNC 验收、固定评测、升级门禁与完成复盘。
 
 Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
 PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
@@ -717,14 +728,15 @@ ADR-0007/0008 本身当作测试结果：
    `browser_navigate` 与 arXiv Search MCP `search_papers` 成功；metadata `169.254.169.254`、Docker
    gateway `:8080` 和 `10.0.0.1` 均被拒绝。主智能体独立离线复核合计 137 passed，其中 PostgreSQL/
    Alembic 26 passed。该证据不扩张为完整 PDF、全部公网、协议级只读或生产隔离声明；
-8. **产品整合、验证与复盘（进行中：应用壳 8.1、轻页头 8.2、工作区/Agent 产品整合 8.3 已实现）**：严格遵循
+8. **产品整合、验证与复盘（已完成）**：严格遵循
    `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
    4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新。四项均已完成，且
    Turn Detail、Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI 已随 8.3 整合；8.4 已完成浅色
-   研究档案视觉与最低可访问性刷新。后续只进行最终产品整合与复盘，并按 ADR-0009 完成本地 noVNC 真实人工
-   输入 UI E2E（人工操作结束后，下一 Turn 由同 generation Playwright MCP 观察页面状态），并完成关键
-   故障/取消/重复/越权测试、小型 Agent 评测、Deep Agents 升级契约、本地演示运行文档、模块学习笔记和 Research Agent Extension 完成
-   报告。Core 数据库/Storage 的生产备份恢复不转入本阶段。
+   研究档案视觉与最低可访问性刷新。8.5 已完成本地 noVNC 真实人工输入 UI Smoke（人工输入后，同
+   generation Playwright MCP 观察页面状态；Turn 互斥和下一 Turn 复用由 Application/Integration 测试
+   补充）、关键故障/取消/重复/越权固定回归、7 场景 Agent 评测、Deep Agents 升级契约、本地演示运行
+   文档、模块学习笔记和 Research Agent Extension 完成报告。Core 数据库/Storage 的生产备份恢复不转入
+   本阶段。
 
 ## 测试方式
 
@@ -733,11 +745,10 @@ ADR-0007/0008 本身当作测试结果：
 - **Runtime Contract**：Deep Agents 版本升级前后运行同一契约套件；
 - **MCP**：Schema 漂移、恶意 Tool 描述/输出、超时、断连、认证失败、会话泄漏和拦截器；
 - **Browser/HTTP**：Slice 3 已覆盖控制权状态、owner/Session/generation/fence、重复开始/结束、过期、
-  单控制者、旧 ticket、Turn 互斥、endpoint 隐藏与有界二进制双向代理；显式设置
-  `AGENT_RUN_OPENSANDBOX_BROWSER_TESTS=1` 才运行本地合成页 Smoke，核验经 OpenSandbox Server Proxy、
-  Sandbox 内 websockify 到固定 VNC 的 RFB 握手，并关联同一 Sandbox 的 Playwright MCP 页面操作，但不将
-  其视为 noVNC 人工输入 E2E；该 ADR-0009 最终验收保留到 Slice 8，Slice 7 再覆盖 IPv4/IPv6 私网、
-  private/metadata/宿主目标、超时、大响应、错误 MIME 和 Prompt Injection Fixture；
+  单控制者、旧 ticket、Turn 互斥、endpoint 隐藏与有界二进制双向代理；Slice 8.5 的显式本地 Smoke 使用
+  生产 `AgentBrowserPanelView`/noVNC、ticket 解析和 bridge 向同一 Sandbox Chromium 输入 marker，再由
+  保持打开的同 generation Playwright MCP session 回读。Slice 7 另覆盖 private/metadata/宿主目标、
+  有界公网 PDF 前缀、Chromium、Playwright/Search MCP；两者均只构成 trusted-local 功能证据；
 - **Sandbox**：Session 内跨 Turn 复用与跨 owner/Session 隔离、WorkspaceSnapshot 取回/重建、模型可见
   `execute` 只能到当前 OpenSandbox、Secret/宿主路径不可见、统一网络拒绝、CPU/内存/PID/时间/输出与
   业务文件上限、取消后不启动新命令、销毁和清理补偿；本地 Docker overlay 物理磁盘上限明确不在已验证
@@ -773,6 +784,10 @@ ADR-0007/0008 本身当作测试结果：
 - Core 与 Agent 两组用户旅程、评测、运维文档、模块笔记、已知限制和真实运行证据齐全；
 - 开发者能解释 Prompt、模型、Tool Policy、MCP、Sandbox 和业务权限各自能解决什么、不能解决什么。
 
+上述阶段条件已按本地个人项目精简范围通过。逐项证据、命令、限制与非声明见
+[`Phase 6 Research Agent Extension 完成报告`](../reports/phase-06-research-agent-extension-completion.md)；
+Fake Runtime 评测、真实 Sandbox 功能 Smoke 与生产安全声明必须继续分开理解。
+
 ## 实现前仍需确定
 
 1. ADR-0007 已选 OpenSandbox；Slice 6 已固定并验证本地 SDK/Server/image digest、TTL、CPU/内存/PID、
@@ -788,9 +803,13 @@ ADR-0007/0008 本身当作测试结果：
 4. Workspace TTL 与清理补偿已在 Slice 6 实现；Slice 7 已固定每 Turn 最多 8 项、正式候选总量最多
    50 MiB，并在锁定 Run 的事务内串行复核。仍未实现 Storage staging orphan GC；单文件上限固定为
    10 MiB，扩展名、声明 MIME、magic/UTF-8/JSON/CSV/SVG 主动内容校验已在 Slice 2 实现；
-5. 当前 pinned Chrome 镜像可复用的 VNC 能力，以及 noVNC/websockify 或等价画面组件的精确版本、认证
-   代理拓扑和镜像/前端锁文件影响；
-6. 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的评测、禁用和内容安全方式。
+5. Browser 方案已固定：TigerVNC `1.15.0+dfsg-2` 只监听 Sandbox namespace loopback，websockify
+   `0.13.0` 转发到固定 `6080`，Web 使用 noVNC `1.7.0`；平台 ticket gateway 承担外层身份与
+   generation/fence 校验。新本地审核镜像 digest 已进入默认配置并通过真实 UI 输入 Smoke；通用认证、
+   secure runtime 和镜像 Registry 发布仍是阶段外限制；
+6. 首批平台 Skill 与 owner-scoped 声明式 Skill 已在 Phase 5 固定版本、只读内容、required Tool 不扩权、
+   首 Turn 前锁定和禁用边界，并纳入 Phase 6 固定回归/Deep Agents 升级门禁。真实模型研究质量和恶意
+   Markdown 的语义级检测仍不由该工程门禁保证。
 
 Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何把代码执行扩大到宿主、允许
 private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/网络 Profile、正式外部写产品能力或
@@ -806,6 +825,9 @@ private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/�
 - 首版只支持同一 generation、两个 Turn 之间的人工浏览器操作；画面断线只释放连接占用，不自动结束
   最长 5 分钟的业务控制权。API 进程重启会轮换票据并使旧票据失效；复杂同 Turn 登录流程、Cookie/Profile
   持久化、跨 generation 恢复和凭据委托不属于首版目标；
+- TigerVNC 在 Sandbox namespace loopback 使用 `SecurityTypes=None`，外部访问依赖平台 ticket gateway；
+  同一 Sandbox 内的模型进程理论上也能连接该 loopback 端口，但它已经拥有相同 Chromium 的固定
+  Playwright MCP/CDP 与 `execute`，不因此获得宿主或其他 Session 访问能力；
 - 多 Agent、长期 Memory、宿主执行、动态安装、private-network 和用户自定义网络策略保持关闭；Sandbox
   公网只属于 trusted-local 演示，OpenSandbox `execute` 不改变 Research Agent 的领域定位，也不代表
   通用 Coding Agent 或生产级安全浏览器；
@@ -828,7 +850,8 @@ private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/�
 - `agent-sandbox.md`：Workspace 生命周期、资源限制、文件传输和清理；
 - `agent-artifact-delivery.md`：Candidate 状态机、Sandbox/Storage 边界、成功事务发布与安全下载；
 - `agent-skills.md`：平台安装与 owner-scoped 声明式 Skills 的版本、隔离、权限依赖、评测和升级；
-- `agent-evaluation.md`：多轮研究、项目上下文、资源发现、来源、策略遵守和安全评测。
+- [`agent-evaluation.md`](../modules/agent-evaluation.md)：多轮研究、项目上下文、来源、策略遵守、安全评测
+  和 Deep Agents 升级门禁。
 
 ## 参考资料
 

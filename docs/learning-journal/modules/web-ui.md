@@ -212,6 +212,11 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   Review/RAG/Agent 强调区统一为朱红状态线；Chat/Agent document 高度等于 viewport、三栏无横向溢出、
   composer 可见。Tab 可显示 skip link，Enter 后焦点进入 `main-content`。控制台仍记录既有 favicon 404，
   以及所选历史 Turn 早于 Usage 事实落地导致的 ToolExecution 404；均未在视觉切片中掩盖。
+- Phase 6 Slice 8.5：生产 Browser panel/noVNC、短时 ticket、Vite WebSocket proxy 与有界 VNC bridge
+  完成同 Sandbox 真实回路；向 Chromium 输入 marker 后，由保持打开的同 generation Playwright MCP
+  session 回读，显式 Smoke 为 1 passed（15.96s）。最终前端仍为 30 files / 170 passed，production
+  build 通过，Phase 5 Agent UI 离线旅程为 1 passed（36.6s）。该组合证据不冒充真实模型的完整下一
+  Turn E2E、跨浏览器认证或公网多用户 Browser 安全认证。
 
 ## 代码入口
 

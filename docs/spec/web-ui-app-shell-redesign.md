@@ -1,7 +1,8 @@
 # Web UI 应用壳与视觉重设计
 
-> 状态：实施中。应用壳骨架、轻页头、工作区空间回收/Agent 产品整合与视觉 token/可访问性刷新均已完成；
-> 最终产品整合与复盘仍留给后续切片。
+> 状态：已完成（2026-08-28）。应用壳骨架、轻页头、工作区空间回收、Agent 产品整合、视觉
+> token/可访问性刷新和真实 Browser/noVNC 产品验收均已完成；最终证据汇总见
+> `docs/learning-journal/reports/phase-06-research-agent-extension-completion.md`。
 > `docs/spec/project-workspace-ui-contract.md` 第 3 节已同步改为当前 `AppSidebar + PageBar` 契约。
 
 ## 1. 背景与要解决的痛点
@@ -169,6 +170,16 @@
   白色研究档案风；Chat/Agent document 高度等于 viewport，三栏无横向溢出，Agent composer 始终可见。
   Skip link 通过 Tab 可见、Enter 后焦点进入 `main-content`。已知控制台噪声仍包括既有 favicon 404，
   以及所选历史 Agent Turn 早于 Usage 事实落地导致的 ToolExecution 404；未在本纯前端切片伪造数据。
+
+**最终产品验收（Phase 6 Slice 8.5）**
+
+- 生产 `AgentBrowserPanelView` 和 noVNC 懒加载组件通过平台短时 ticket、Vite WebSocket proxy 与有界
+  VNC bridge 连接 Session 专属 Sandbox Chromium；raw endpoint、raw 5901 与 VNC 密码不进入前端。
+- 显式本地真实 Smoke 向同一 Chromium 输入 marker，并由保持打开的同 generation Playwright MCP
+  session 回读，结果为 1 passed（15.96s）。Turn 互斥和下一 Turn 复用由 Application/Integration 测试
+  补充，因此该证据不被扩张为完整真实模型多轮 E2E。
+- 最终前端基线仍为 30 files / 170 passed，production build 通过，Phase 5 Agent UI 离线旅程为
+  1 passed（36.6s）。
 
 ## 8. 与现有契约的关系
 

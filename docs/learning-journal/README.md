@@ -48,7 +48,7 @@ Playwright 又从浏览器验证同一核心旅程、取消、归档和刷新恢
 该阶段明确面向本地演示开发环境，
 不包含公网认证、备份恢复、永久删除/GC、OpenTelemetry 或 SLA。
 
-[Phase 5：Deep Agents 集成验证](phases/phase-05-deep-agents-integration.md)正在进行。契约与 Fake
+[Phase 5：Deep Agents 集成验证](phases/phase-05-deep-agents-integration.md)已于 2026-08-27 完成。契约与 Fake
 Runtime、两轮离线业务闭环、取消恢复对账、受限 Deep Agents Adapter 及
 [Project Research Context](modules/project-research-context.md) 已完成开发验证；Runtime 部署与崩溃恢复门槛
 也已闭合，详见 [Agent Runtime Execution 恢复控制](modules/agent-runtime-execution-recovery.md)和
@@ -65,8 +65,8 @@ OpenSandbox/Lease/WorkspaceSnapshot 推进；ADR-0008 又将剩余顺序固定�
 回路验证，详见 [Agent Playwright/Search MCP](modules/agent-mcp-browser-search.md)。7.4 已完成
 [Agent Native Skills](modules/agent-native-skills.md)：平台/owner 声明式 Skill 采用不可变版本、首 Turn 后
 Session manifest 锁定和 `/skills/` 只读虚拟 Backend，并直接复用 Deep Agents SkillsMiddleware。真实
-OpenSandbox proxy 的本地功能 Smoke 已于 2026-08-28 通过；真实 Provider、公共网络与生产安全验证仍待
-完成。Phase 6 的首批产品化方向已由
+OpenSandbox proxy 的本地功能 Smoke 已于 2026-08-28 通过；真实 Provider 不作为阶段完成门槛，公共网络
+与精简安全强化随后由 Phase 6 完成。Phase 6 的首批产品化方向已由
 [ADR-0009：跨 Turn 人工浏览器控制](decisions/0009-use-turn-boundary-browser-control.md)和
 [ADR-0010：显式 Agent 文件交换](decisions/0010-use-explicit-agent-file-exchange.md)固定：先完成可下载的
 Agent 绘图 Artifact 与同 generation 合成页面人工操作，再处理输入附件和公共网络安全；WorkspaceSnapshot
@@ -82,7 +82,8 @@ Slice 7 改为允许任意正常公网 HTTP(S)，统一拒绝 private/metadata/�
 default-deny 结果仍是当时的历史证据。该 Profile 只约束 L3/L4/FQDN 目标，不保证 raw Browser/Shell/MCP
 协议级只读；平台不注册外部写 Tool、不提供凭据，把意外写请求记录为当前精简交付的已知风险。
 
-[Phase 6：Research Agent 与安全强化](phases/phase-06-research-agent-security.md)已进入实施。Slice 1 已完成
+[Phase 6：Research Agent 与安全强化](phases/phase-06-research-agent-security.md)已于 2026-08-28 完成本地
+单人精简交付。Slice 1 已完成
 契约缺口审计并形成 [`Research Agent 精简安全契约`](../spec/research-agent-security-contract.md)：明确区分
 Phase 5 已验证事实与后续目标，冻结 owner/Project/Session/Turn/Sandbox generation/Workspace/Artifact
 所有权、信任与 Secret 边界、自动执行/直接拒绝矩阵、历史 Approval 字段兼容、事务外 I/O、取消/fence/
@@ -93,12 +94,16 @@ descriptor 仍不可下载，真实 OpenSandbox Artifact Smoke 与生产级扫�
 [Agent Browser 人工控制](modules/agent-browser-control.md)也已完成离线闭环：业务控制权、Turn 互斥、短时
 ticket、固定 Server Proxy/websockify Adapter、单连接有界代理和 noVNC 右栏组件均已通过离线/临时
 PostgreSQL 验证。修正镜像已重建，Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
-Smoke 已通过；前三次 endpoint、宿主代理、readiness/Fixture 失败均形成回归测试。该证据仅为未配置
-API key/secure runtime 的 trusted-local 功能验证，未验证 noVNC 人工键鼠 UI E2E、通用认证或公网安全。
+Smoke 已通过；前三次 endpoint、宿主代理、readiness/Fixture 失败均形成回归测试。Slice 8.5 又以固定
+loopback-only TigerVNC wrapper、生产 BrowserViewer/noVNC、ticket relay 和同 generation Playwright MCP
+完成真实输入回读。该证据仅为 trusted-local 功能验证，不代表通用认证、secure runtime 或公网多租户
+安全。
 已完成 [Agent 输入附件](modules/agent-input-attachments.md)：不可变业务附件、消息/快照引用、事务外 fenced inbox 物化、WorkspaceSnapshot 隔离与壳层无关 UI 已落地。Slice 5 的
 [Agent Tool 策略与硬预算](modules/agent-tool-policy.md)也已实现：全部允许 Tool 的冻结契约、持久化
 Usage/reservation、取消与 fence 复核、墙钟/单次调用/输出/循环上限及脱敏查询 API 均已形成离线和
 PostgreSQL 证据。Slice 6 已完成 Workspace/Sandbox Lease 退役、清理补偿、资源约束和 default-deny
-统一 egress 的真实验证；下一切片按 ADR-0012 实现版本化 public-egress/private-network 边界和正式资源
-校验。最终 UI 同时受
-[`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-redesign.md)约束，前置功能组件必须保持壳层无关。
+统一 egress 的真实验证；Slice 7 已完成版本化 public-egress/private-network 边界和正式资源校验；
+Slice 8 已按 [`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-redesign.md)完成统一壳、三栏研究工作区、
+Browser/Artifact/Manifest 整合与视觉刷新。最终固定评测、升级门禁和已知限制见
+[`Research Agent 固定评测与升级门禁`](modules/agent-evaluation.md)及
+[`Phase 6 完成报告`](reports/phase-06-research-agent-extension-completion.md)。

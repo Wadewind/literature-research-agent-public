@@ -134,18 +134,19 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 - OpenSandbox Python SDK 与自定义 Adapter 仍是 alpha 集成。本地 Docker runtime 不支持请求级 overlay
   物理磁盘硬配额；WorkspaceSnapshot/Artifact 上限只是业务提交边界。没有公开部署、镜像仓库或生产 SLA。
 - 7.3 已把固定 Playwright/arXiv MCP 接到当前 Lease，execute/resume 的 MCP session 包围 graph，并在
-  Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。本地 OpenSandbox 代理 Smoke 已
-  完成，noVNC/公共下载仍未完成；7.4 已把 Native Skills 放在 Sandbox `execute` 不可见的只读虚拟 Backend，
-  没有改变物理 Workspace。公共网络与统一 egress 后移到 Phase 6；ADR-0012 后的当前目标是允许正常
+  Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。Phase 6 Slice 7 已完成正常公网
+  与 private/metadata/宿主/LAN 拒绝的真实 Smoke，Slice 8.5 已完成 noVNC 输入与同 generation
+  Playwright MCP 回读；完整慢速 PDF 下载仍未宣称通过。7.4 已把 Native Skills 放在 Sandbox `execute`
+  不可见的只读虚拟 Backend，没有改变物理 Workspace。ADR-0012 后的当前边界是允许正常
   公网、保留同一 Sandbox namespace 的固定内部 loopback，并拒绝非-loopback
   private/metadata/宿主/LAN，不再是固定 arXiv Host allowlist；pinned egress v1.1.4 的 nft 规则确认会在
   CIDR deny 前接受 loopback interface，这与 CDP/MCP/VNC 本地通道一致。正式 URL/source 仍拒绝
   localhost/loopback；该目标是 L3/L4/FQDN 边界，不承诺 HTTP method 或 Browser/MCP 业务语义只读。
 - `max_model_calls` 仍不覆盖 SummarizationMiddleware 内部重试或已在途 Provider 不确定窗口。
-- WorkspaceSnapshot 仍只服务 Runtime 跨 Turn 恢复，不是用户文件列表。Real Deep Agents Runtime 尚未把
-  `/workspace` 文件转换为可下载 Candidate，当前 Agent UI 也没有附件上传或 Candidate 内容下载。ADR-0010
-  已决定由 Phase 6 增加 `/workspace/inbox` Attachment 物化、`/workspace/outputs` 显式
-  `submit_artifact`、独立 AgentArtifact 和业务成功条件提交；不会自动发布整个 Snapshot。
+- WorkspaceSnapshot 仍只服务 Runtime 跨 Turn 恢复，不是用户文件列表。Phase 6 已增加
+  `/workspace/inbox` Attachment 物化、`/workspace/outputs` 显式 `submit_artifact`、独立 AgentArtifact
+  和业务成功条件提交；不会自动发布整个 Snapshot。当前 UI 可上传输入附件并下载正式 Artifact，但不提供
+  通用 Workspace 文件管理或内部 Candidate 内容下载。
 
 ## 代码入口
 
