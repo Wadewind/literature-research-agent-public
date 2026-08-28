@@ -1,6 +1,7 @@
 # Web UI 应用壳与视觉重设计
 
-> 状态：实施中。应用壳骨架、轻页头替换与工作区空间回收/Agent 产品整合已完成；视觉 token 刷新仍待后续切片。
+> 状态：实施中。应用壳骨架、轻页头、工作区空间回收/Agent 产品整合与视觉 token/可访问性刷新均已完成；
+> 最终产品整合与复盘仍留给后续切片。
 > `docs/spec/project-workspace-ui-contract.md` 第 3 节已同步改为当前 `AppSidebar + PageBar` 契约。
 
 ## 1. 背景与要解决的痛点
@@ -154,7 +155,20 @@
 
 **切片 4：视觉 token 刷新**
 
-- 执行第 6 节清单，一次提交；验证：`npm run build` + 五页截图对比。
+- **已实现（2026-08-28）**：`--paper` 统一为纯白，网格降至 64px 极低对比度；卡片、消息、Panel 和
+  Notice 使用弱边框/弱阴影建立纸面层级。Review workbench、RAG ask strip 与 Agent welcome 均已改为
+  白色纸面 + 朱红左边条，全站仅 Project 创建引导区保留大面积深色。
+- 关键 9–10px 功能文本提升至 11–12px；日期、计数、大小、时间与 hash 等元数据统一采用
+  `tabular-nums`。列表补充克制的 hover/focus 反馈，保留直角、墨蓝/蓝色与朱红识别，不引入模板化圆角。
+- `AppFrame` 新增键盘可见的“跳到主内容”链接和稳定 `main-content` 目标；全局 `:focus-visible`、
+  `touch-action: manipulation` 与 `prefers-reduced-motion` 规则已落地。Artifact 图片补齐显式尺寸，未使用
+  `transition: all`。
+- TDD 先得到 AppFrame 缺失和图片尺寸缺失 2 个失败，完成后定向 2 files / 3 passed；完整 `npm test`
+  为 30 files / 170 passed，`npm run build` 与 `git diff --check` 通过。
+- 1440×1000 走查覆盖首页、Project 文献库、Chat、Reviews 与 Agent：首页/Reviews/Agent 的工作区均为
+  白色研究档案风；Chat/Agent document 高度等于 viewport，三栏无横向溢出，Agent composer 始终可见。
+  Skip link 通过 Tab 可见、Enter 后焦点进入 `main-content`。已知控制台噪声仍包括既有 favicon 404，
+  以及所选历史 Agent Turn 早于 Usage 事实落地导致的 ToolExecution 404；未在本纯前端切片伪造数据。
 
 ## 8. 与现有契约的关系
 
@@ -163,20 +177,22 @@
 - 该契约其余各节（路由、问答范围、三栏工作区、resize 规则）继续有效，本次改造不触碰。
 - `AGENTS.md` 的技术基线、测试要求不变；本改造不引入新依赖。
 
-## 9. 现状关键事实（实施前请重新核对，行号可能漂移）
+## 9. 当前实现锚点
 
-- `web/src/App.tsx:19-29`：现有全局 header。
-- `web/src/components/ProjectNav.tsx`、`ProjectWorkspaceHeader.tsx`：将被删除；使用方为
-  `LibraryPage.tsx`、`ChatPage.tsx`、`ConversationPage.tsx`、`ReviewsPage.tsx`、`AgentPage.tsx`。
-- `web/src/styles.css:28`：header 的宽度敏感 padding；`styles.css:329`：工作区全高规则（依赖 76px
-  顶栏高，必须同步重写）；`styles.css:428`：`.agent-welcome`。
-- `web/src/components/ChatWorkspaceFrame.tsx` 与 `.agent-workspace`：三栏与 resize 逻辑保留复用。
-- 测试：`web/` 下 `npm test`（vitest）、`npm run build`（tsc）、`npm run test:e2e`（Playwright，
-  需本地后端；环境不具备时如实报告未运行，不得声称通过）。
+- `web/src/App.tsx`：`AppFrame` 提供 skip link、稳定主内容目标与 `AppSidebar + main` 应用壳。
+- `web/src/components/AppSidebar.tsx`、`PageBar.tsx`：承担全局/Project 导航与统一轻页头；旧
+  `ProjectNav`、`ProjectWorkspaceHeader` 已删除。
+- `web/src/styles.css`：集中维护白色纸面 token、弱网格、全局 focus/reduced-motion、展示页和
+  viewport 工作区规则。
+- `web/src/components/ChatWorkspaceFrame.tsx` 与 `.agent-workspace`：继续负责三栏和独立 resize/滚动；
+  视觉刷新不复制或移动业务状态。
+- `web/src/components/AgentArtifactList.tsx`：正式 Artifact 缩略图具有显式宽高和 lazy loading。
+- 验证入口：`web/` 下 `npm test`、`npm run build`、`npm run test:e2e`（需本地后端）。
 
 ## 10. 非范围
 
 - 后端/API/数据库任何改动；
 - 深色主题、移动端专门设计；
 - 会话自动命名（若做需后端写 title，另行讨论）；
-- 全站视觉 token、字体下限、动效降级与 Review workbench 的统一刷新（切片 4）。
+- 独立设计系统或 UI 组件框架重写；
+- 将本轮桌面截图走查宣称为全量 WCAG、跨浏览器或移动端认证。

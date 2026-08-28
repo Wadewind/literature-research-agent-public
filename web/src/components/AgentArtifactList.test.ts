@@ -37,6 +37,8 @@ describe("AgentArtifactList", () => {
 
     expect(html.match(/<img/g)).toHaveLength(1);
     expect(html).toContain("chart.png 预览");
+    expect(html).toContain('width="72"');
+    expect(html).toContain('height="54"');
     expect(html).toContain("diagram.svg");
     expect(html.match(/>下载<\/a>/g)).toHaveLength(2);
   });

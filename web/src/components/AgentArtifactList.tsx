@@ -46,7 +46,13 @@ export default function AgentArtifactList({
           >
             {artifact.previewable && (
               <a className="agent-artifact-preview" href={contentUrl} target="_blank" rel="noreferrer">
-                <img src={contentUrl} alt={`${artifact.name} 预览`} loading="lazy" />
+                <img
+                  src={contentUrl}
+                  alt={`${artifact.name} 预览`}
+                  width={72}
+                  height={54}
+                  loading="lazy"
+                />
               </a>
             )}
             <div className="agent-artifact-meta">

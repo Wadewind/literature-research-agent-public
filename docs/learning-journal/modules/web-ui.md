@@ -90,9 +90,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - **HITL 交互意图不是业务状态**：浏览器可以为同一失败提交保留 Key，但 Request 是否开放、版本是否
   过期、edit 生成哪个批准 Outline，以及 Run/Outbox 是否恢复都由后端原子事务决定；409 后界面提示
   刷新，不在客户端自动改写版本。
-- **样式决策**：沿用 Literature Atlas 冷灰纸面、深蓝、朱红、Inter + IBM Plex Mono 和零圆角；唯一
-  新签名元素是横向“研究阶段脊柱”，编号与连接线只表达真实 Workflow 顺序。移动端允许 rail 横向
-  滚动，键盘 focus、语义 `nav/ol/aria-current` 与 reduced motion 沿用全局约束。
+- **样式决策**：沿用 Literature Atlas 的纯白纸面、墨蓝/蓝色、朱红、Inter + IBM Plex Mono 和零圆角；
+  冷灰画布网格降为 64px 极低对比度，主要卡片使用弱边框/弱阴影，仅 Project 创建引导区保留大面积深色。
+  Workflow 阶段脊柱继续只表达真实顺序；全局 skip link、focus-visible、touch-action 和 reduced motion
+  构成最低可访问性约束，不把桌面走查宣称为全量 WCAG 认证。
 - **Agent UI 不接 SDK 数据层**：产品 Session、Message、Run、Evidence 和 candidate 都来自平台 API；
   Deep Agents Thread/Checkpoint/内部文件不进入浏览器。这样保留原生 Agent 上下文管理，同时不绕过
   owner/Project 权限、业务恢复和审计事实。
@@ -205,9 +206,16 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   Inspector 独立滚动且 composer 可见；Inspector 从“证据”按 ArrowRight 聚焦“浏览器”，能力 details
   展开后 document 仍不滚动。noVNC 继续输出为独立 `rfb` lazy chunk。历史数据走查中一个早于 Usage
   事实落地的 Turn 对 ToolExecution 查询返回 404，UI 只显示安全错误，未在纯前端伪造兼容数据。
+- Phase 6 Slice 8.4：AppFrame 与 Artifact 图片尺寸的 TDD 先得到 2 个失败，完成后定向为 2 files /
+  3 passed；完整 Vitest 为 30 files / 170 passed，production build 与 `git diff --check` 通过。
+- 1440×1000 走查覆盖首页、Project 文献库、Chat、Reviews 和 Agent：主要工作区均为白色纸面，
+  Review/RAG/Agent 强调区统一为朱红状态线；Chat/Agent document 高度等于 viewport、三栏无横向溢出、
+  composer 可见。Tab 可显示 skip link，Enter 后焦点进入 `main-content`。控制台仍记录既有 favicon 404，
+  以及所选历史 Turn 早于 Usage 事实落地导致的 ToolExecution 404；均未在视觉切片中掩盖。
 
 ## 代码入口
 
+- 应用壳与可访问入口：`web/src/App.tsx`、`web/src/App.test.tsx`
 - 页面：`web/src/pages/`（ProjectsPage、PersonalLibraryPage、LibraryPage、ChatPage、ConversationPage、RunDetailPage、DocumentPage）
 - Review 页面：`web/src/pages/ReviewsPage.tsx`、`ReviewDetailPage.tsx`、
   `web/src/components/ReviewResults.tsx`
@@ -250,6 +258,8 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   分层测试覆盖。
 - Chat/Agent 的 viewport 三栏以桌面为验收主体；窄屏顺序展开且不建设 Drawer。栏宽偏好只在各自模式
   内复用，不跨设备同步。
+- 本轮只完成键盘入口、焦点、动效降级与桌面页面走查；未执行自动色彩对比审计、全量 WCAG、跨浏览器
+  或移动端认证。既有 favicon 404 与历史 Agent Turn ToolExecution 404 仍按其真实来源保留。
 
 ## 60 秒面试说明
 

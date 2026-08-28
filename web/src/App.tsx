@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 
 import AppSidebar from "./components/AppSidebar";
@@ -16,37 +16,54 @@ import ReviewDetailPage from "./pages/ReviewDetailPage";
 
 export default function App() {
   return (
-    <div className="app-shell">
+    <AppFrame navigation={<AppSidebar />}>
       <ScrollToTop />
-      <AppSidebar />
-      <main className="app-main">
-        <Routes>
-          <Route path="/" element={<ProjectsPage />} />
-          <Route path="/library" element={<PersonalLibraryPage />} />
-          <Route path="/projects/:projectId" element={<LibraryPage />} />
-          <Route path="/projects/:projectId/chat" element={<ChatPage />} />
-          <Route
-            path="/projects/:projectId/chat/:conversationId"
-            element={<ConversationPage />}
-          />
-          <Route path="/projects/:projectId/agent" element={<AgentPage />} />
-          <Route path="/projects/:projectId/agent/:sessionId" element={<AgentPage />} />
-          <Route path="/projects/:projectId/reviews" element={<ReviewsPage />} />
-          <Route
-            path="/projects/:projectId/reviews/:runId"
-            element={<ReviewDetailPage />}
-          />
-          <Route
-            path="/projects/:projectId/conversations/:conversationId"
-            element={<ConversationPage />}
-          />
-          <Route path="/runs/:runId" element={<RunDetailPage />} />
-          <Route
-            path="/projects/:projectId/versions/:versionId/document"
-            element={<DocumentPage />}
-          />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+      <Routes>
+        <Route path="/" element={<ProjectsPage />} />
+        <Route path="/library" element={<PersonalLibraryPage />} />
+        <Route path="/projects/:projectId" element={<LibraryPage />} />
+        <Route path="/projects/:projectId/chat" element={<ChatPage />} />
+        <Route
+          path="/projects/:projectId/chat/:conversationId"
+          element={<ConversationPage />}
+        />
+        <Route path="/projects/:projectId/agent" element={<AgentPage />} />
+        <Route path="/projects/:projectId/agent/:sessionId" element={<AgentPage />} />
+        <Route path="/projects/:projectId/reviews" element={<ReviewsPage />} />
+        <Route
+          path="/projects/:projectId/reviews/:runId"
+          element={<ReviewDetailPage />}
+        />
+        <Route
+          path="/projects/:projectId/conversations/:conversationId"
+          element={<ConversationPage />}
+        />
+        <Route path="/runs/:runId" element={<RunDetailPage />} />
+        <Route
+          path="/projects/:projectId/versions/:versionId/document"
+          element={<DocumentPage />}
+        />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </AppFrame>
+  );
+}
+
+export const MAIN_CONTENT_ID = "main-content";
+
+export function AppFrame({
+  navigation,
+  children,
+}: {
+  navigation: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="app-shell">
+      <a className="skip-link" href={`#${MAIN_CONTENT_ID}`}>跳到主内容</a>
+      {navigation}
+      <main id={MAIN_CONTENT_ID} className="app-main" tabIndex={-1}>
+        {children}
       </main>
     </div>
   );
