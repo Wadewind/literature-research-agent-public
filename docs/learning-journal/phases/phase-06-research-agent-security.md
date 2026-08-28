@@ -9,6 +9,7 @@ Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目
 完成日期：2026-08-28；Slice 2 Agent 输出 Artifact 完成日期：2026-08-28；Slice 3 Browser 画面与跨 Turn
 人工控制完成日期：2026-08-28；Slice 4 Agent 输入附件完成日期：2026-08-28。
 Slice 5 固定能力、Project Context 与硬预算实现完成日期：2026-08-28。
+Slice 6 Workspace/Sandbox 与统一 egress 强化完成日期：2026-08-28。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -18,7 +19,7 @@ Slice 1 已完成文档契约审计，形成
 `STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
 Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件。Slice 3 已实现独立
 `BrowserControlLease`、Session/Turn/Sandbox generation/fence 互斥、短时 opaque ticket、平台 VNC
-WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API；下一开发切片为 Slice 6。
+WebSocket 代理和 noVNC 右栏组件。Slice 4 已实现 owner/Project/Session scoped 不可变输入附件、有界消息引用、`agent-context.v2` 冻结、事务外 fenced `/workspace/inbox` 物化、WorkspaceSnapshot 隔离与壳层无关 Chat UI。Slice 5 已把全部允许 Tool 的 version/schema hash 与硬预算冻结进 `PolicySnapshot`，增加 PostgreSQL `AgentTurnUsage`/稳定 reservation/脱敏 Tool 摘要、调用前后 scope/取消/fence 校验、剩余墙钟 timeout、循环保护和安全查询 API。Slice 6 已增加 fenced `RETIRED` Lease、持久化 Sandbox cleanup 补偿、Worker cleaner、固定本地 OpenSandbox Server 配置和统一 default-deny egress 的真实行为验证；下一开发切片为 Slice 7。
 
 Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
 PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
@@ -52,6 +53,21 @@ Pyright（0 errors）、compileall 和 diff check 均通过。这些是 Slice 5 
 Fake Model 图测试会停在 Filesystem→Summarization model middleware，动态加载未修改 HEAD Runtime 也在
 进入 Fake Model 前同样复现。新增 reservation/replay 测试使用直接 middleware 契约且有界完成；在夹具/
 上游兼容问题解决前，不把本切片描述为新增了完整 Deep Agents Project Tool 图回路证据。
+
+Slice 6 的离线定向验证覆盖 Lease 轮换/候选回收、清理响应丢失、Provider 精确 404 幂等、Worker 循环和
+Server 配置契约；新增 expired/session_closed 覆盖后，主智能体复核 PostgreSQL Repository 与 Alembic
+`head → -1 → head` 为 13 passed（18.55s），修改范围 Pyright
+为 0 errors。显式本地 Smoke 使用 `opensandbox==0.1.15`、OpenSandbox Server `0.2.2`、固定 research/
+execd/egress image digest 和项目 TOML：统一 egress/资源测试最终复验 1 passed（33.08s），60 秒 TTL 自动回收测试
+1 passed（64.23s），命令超时后 Backend 仍可用测试 1 passed（7.22s）。OpenSandbox 0.1.15 的 execd
+timeout 实测只限制 RPC 等待、不会终止已启动命令，因此 Adapter 额外用固定镜像内的 coreutils `timeout`
+约束进程组，并给 Provider 等待增加 2 秒清理余量。Smoke 实际观察到非 root、1 CPU、2 GiB、PID 256、
+空平台 Secret、无宿主/Docker/数据库
+挂载、64 KiB 输出上限，并由 Bash、Python、Node、Chromium、Playwright 和固定 arXiv Search MCP 验证
+default-deny。该结论来自 Provider `NetworkPolicy`、Server 0.2.2 egress sidecar 与 Sandbox 共享 network
+namespace 的上游实现、以及进程行为的组合证据；`chromium --no-sandbox` 只用于验证容器级统一 egress，
+不构成浏览器进程隔离声明。当前 Docker runtime 不支持请求级 overlay 物理磁盘硬配额，且未配置 secure
+runtime，因此仍不是公网或生产隔离证明。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
@@ -366,7 +382,9 @@ ADR-0009 固定首版为“Agent Turn 结束 → 用户操作同一 Chromium →
   pandas、numpy、matplotlib 和必要字体，不允许动态安装包；
 - 默认禁网；只有版本化 allowlist 中的固定 arXiv 目标进入 egress，策略覆盖 Chromium、Playwright MCP、
   arXiv MCP、Python、Shell、`curl` 等全部 Sandbox 进程，并记录必要的域名、流量和拒绝原因；
-- 限制 CPU、内存、PID、磁盘、文件数、单文件大小、墙钟时间和输出大小；
+- 限制 CPU、内存、PID、文件数、单文件大小、墙钟时间和输出大小；当前本地 Docker runtime 的 overlay
+  物理磁盘硬配额没有请求级实现，依靠 WorkspaceSnapshot 128 文件/10 MiB 单文件/50 MiB 总量和 Artifact
+  提交上限约束业务带出量，不把它表述为物理磁盘隔离；
 - 不挂载宿主源码、用户主目录、Docker Socket、数据库 Socket、云元数据或 Secret；
 - 禁止特权模式、宿主网络、危险 Capability 和不受控嵌套容器；
 - 文件传入/取回走 Provider 原生传输或平台 Adapter，不由模型构造宿主路径；
@@ -585,9 +603,15 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
    最多 2 次、约 60,000 输入 Token/2,048 输出 Token 均由不可变 PolicySnapshot 冻结；PostgreSQL Usage
    与稳定 reservation 承担并发/重放事实，公开 API 只投影脱敏摘要。Project/MCP/Artifact 仅通过既有
    effect cache 对账，文件/`execute` 未知 effect fail closed；不建设完整 Registry、Approval 或精确计费；
-6. **Workspace/Sandbox 与统一 egress 强化**：验证 Session Lease/generation 隔离、WorkspaceSnapshot
-   重建、`execute`、非 root/Secret/宿主隔离、CPU/内存/PID/磁盘/时间/输出限制、TTL 幂等清理、最小
-   补偿和覆盖 Sandbox 全部进程的 default-deny egress；公网仍保持关闭；
+6. **Workspace/Sandbox 与统一 egress 强化（已完成）**：Session Lease 增加内部 `RETIRED` 状态；过期、
+   DIRTY 或 Session closed 的旧 generation 先在短事务内以 session/generation/fence/due guard CAS 退役并
+   写入资源哈希标识的 cleanup fact，Worker 再在事务外 destroy。认领使用 worker/attempt fence，失败只保存
+   固定错误码和安全摘要，精确 404 视为幂等成功；旧 Cleaner/续租不能复活或销毁新 generation。项目固定
+   Server 0.2.2 的 loopback/bridge、空 host volume、drop ALL、no-new-privileges、PID 256、固定 execd/egress
+   digest 与 API key 启动契约。显式 Smoke 已验证非 root、Secret/宿主隔离、CPU/内存/PID、命令进程组
+   超时后 Backend 仍可用、输出、60 秒 TTL/重复销毁，以及 Bash/Python/Node/Chromium/Playwright/Search
+   MCP 的统一 default-deny；公网仍
+   关闭。Docker overlay 物理磁盘硬配额未实现并作为明确限制保留；
 7. **固定 arXiv 公网与下载安全**：只开放版本化精确主机 allowlist，补齐 URL/IP/DNS/Redirect/SSRF、
    HTTPS、Prompt Injection、下载大小/MIME/magic/hash、隔离临时区和来源记录；离线 Fixture 通过后才
    显式运行真实 arXiv 搜索/页面/PDF Smoke，并同时验证非 allowlist 目标被拒绝；
@@ -611,8 +635,9 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
   其视为 noVNC 人工输入 E2E；该 ADR-0009 最终验收保留到 Slice 8，Slice 7 再覆盖 IPv4/IPv6 私网、
   DNS rebinding、Redirect 链、超时、大响应、错误 MIME 和 Prompt Injection Fixture；
 - **Sandbox**：Session 内跨 Turn 复用与跨 owner/Session 隔离、WorkspaceSnapshot 取回/重建、模型可见
-  `execute` 只能到当前 OpenSandbox、Secret/宿主路径不可见、统一网络拒绝、CPU/内存/PID/磁盘/时间/
-  输出限制、取消后不启动新命令、销毁和清理补偿；
+  `execute` 只能到当前 OpenSandbox、Secret/宿主路径不可见、统一网络拒绝、CPU/内存/PID/时间/输出与
+  业务文件上限、取消后不启动新命令、销毁和清理补偿；本地 Docker overlay 物理磁盘上限明确不在已验证
+  结论中；
 - **PostgreSQL**：唯一约束、条件更新、ToolExecution 去重、Usage 和跨用户隔离；
 - **故障注入**：Worker/Runtime/MCP/Sandbox 退出、响应丢失、重复 Job、取消竞争、Artifact 提交前后崩溃；
 - **E2E**：打开 Agent Session → 项目内分析 → Agent 生成并提交 PNG → 刷新后下载；Agent 导航合成登录页
@@ -641,16 +666,18 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
 
 ## 实现前仍需确定
 
-1. ADR-0007 已选 OpenSandbox，7.1 已固定 SDK、base image digest、TTL 和 CPU/内存/命令/输出参数；仍需
-   真实 Smoke 确定 derived image 发布 digest、Server 部署、孤儿清理和这些限制的实际强制效果；
+1. ADR-0007 已选 OpenSandbox；Slice 6 已固定并验证本地 SDK/Server/image digest、TTL、CPU/内存/PID、
+   命令/输出、统一禁网与孤儿清理补偿。尚未解决的是 Docker overlay 物理磁盘硬配额、secure runtime、
+   公网多租户部署和镜像发布仓库；
 2. arXiv 初始精确 allowlist 已由 ADR-0011 固定为 `arxiv.org`、`export.arxiv.org`；真实 Smoke 仍需核对
    官方 Redirect 是否需要新增精确主机，以及统一 egress 的具体代理/网络实现；
 3. 硬 Budget 已固定为 Slice 5 精简 Profile；Provider `usage_metadata` 可得时 best-effort 渐进记账，
    不可得时保持 NULL，不用近似值冒充精确计费。模型 reservation 只限制逻辑步骤；若 Provider 已接收
    请求后响应/Worker 丢失，重试仍可能重复付费且缺少 usage，checkpoint/reconcile 不能提供物理调用
    Exactly Once。费用与告警平台延期；
-4. Workspace TTL、清理补偿、Agent Artifact 总量上限和 staging GC 策略；单文件上限已固定为 10 MiB，
-   扩展名、声明 MIME、magic/UTF-8/JSON/CSV/SVG 主动内容校验已在 Slice 2 实现；
+4. Workspace TTL 与清理补偿已在 Slice 6 实现；仍需决定 Agent Artifact 总量上限和 staging GC 策略。
+   单文件上限已固定为 10 MiB，扩展名、声明 MIME、magic/UTF-8/JSON/CSV/SVG 主动内容校验已在 Slice 2
+   实现；
 5. 当前 pinned Chrome 镜像可复用的 VNC 能力，以及 noVNC/websockify 或等价画面组件的精确版本、认证
    代理拓扑和镜像/前端锁文件影响；
 6. 首批平台 Research Skills 与 owner-scoped 声明式 Skill 的评测、禁用和内容安全方式。

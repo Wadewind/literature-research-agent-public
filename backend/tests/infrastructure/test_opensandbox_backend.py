@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 import pytest
+from opensandbox.exceptions import SandboxApiException
 from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import WriteEntry
 
@@ -94,9 +95,11 @@ def test_execute_is_workspace_scoped_timed_and_output_bounded() -> None:
     assert result.exit_code == 0
     assert result.truncated is True
     assert len(result.output.encode()) <= 64 * 1024
-    _, options = sandbox.commands.calls[0]
+    executed, options = sandbox.commands.calls[0]
+    assert executed.startswith("timeout --kill-after=1s 60s sh -lc ")
+    assert "python3 -c" in executed
     assert options.working_directory == "/workspace"
-    assert options.timeout == timedelta(seconds=60)
+    assert options.timeout == timedelta(seconds=62)
     assert "sandbox-private-id" not in result.output
 
 
@@ -325,3 +328,43 @@ async def test_provider_creation_is_fixed_resource_default_deny_and_secret_free(
     assert calls[0]["env"] == {}
     assert calls[0]["entrypoint"] == ["/entrypoint"]
     assert "provider-secret" not in repr(provider)
+
+
+async def test_provider_destroy_treats_missing_resource_as_idempotent(monkeypatch) -> None:
+    async def immediate_to_thread(call, *args, **kwargs):
+        return call(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+
+    class _MissingSandboxFactory:
+        @classmethod
+        def connect(cls, *_args, **_kwargs):
+            raise SandboxApiException("missing-private-id", status_code=404)
+
+    provider = OpenSandboxProvider(
+        domain="sandbox.internal:8080",
+        sandbox_cls=_MissingSandboxFactory,
+    )
+
+    await provider.destroy("missing-private-id")
+
+
+async def test_provider_destroy_preserves_non_not_found_failures(monkeypatch) -> None:
+    async def immediate_to_thread(call, *args, **kwargs):
+        return call(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+
+    class _UnavailableSandboxFactory:
+        @classmethod
+        def connect(cls, *_args, **_kwargs):
+            raise SandboxApiException("unavailable-private-id", status_code=503)
+
+    provider = OpenSandboxProvider(
+        domain="sandbox.internal:8080",
+        sandbox_cls=_UnavailableSandboxFactory,
+    )
+
+    with pytest.raises(SandboxApiException) as exc_info:
+        await provider.destroy("unavailable-private-id")
+    assert exc_info.value.status_code == 503

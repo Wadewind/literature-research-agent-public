@@ -17,6 +17,7 @@ from literature_agent.domain.tokenization import OFFLINE_TOKENIZER
 from literature_agent.infrastructure.agent.fake_research_agent_runtime import (
     FakeResearchAgentRuntime,
 )
+from literature_agent.infrastructure.agent.sandbox_cleanup import SandboxCleanupResult
 from literature_agent.infrastructure.agent.sandbox_mcp import (
     PLATFORM_SANDBOX_MCP_RESOLVER,
 )
@@ -29,6 +30,7 @@ from literature_agent.worker import (
     _build_research_agent_runtime,
     _dependency_reconcile_loop,
     _open_research_agent_runtime,
+    _sandbox_cleanup_loop,
     _shutdown,
     execute_run,
     make_worker_settings,
@@ -68,6 +70,23 @@ async def test_dependency_reconcile_loop_is_independent(monkeypatch) -> None:
         await _dependency_reconcile_loop(ctx)
 
     service.reconcile_waiting.assert_awaited_once_with()
+
+
+async def test_sandbox_cleanup_loop_is_independent_and_cancel_safe(monkeypatch) -> None:
+    """Sandbox 清理不阻塞其他循环，并让取消直接传播。"""
+    service = AsyncMock()
+    service.run_once.return_value = SandboxCleanupResult(1, 1, 1, 0)
+    sleep = AsyncMock(side_effect=asyncio.CancelledError)
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    ctx = {
+        "sandbox_cleanup_service": service,
+        "settings": Settings(worker_reconcile_interval_seconds=0.01),
+    }
+
+    with pytest.raises(asyncio.CancelledError):
+        await _sandbox_cleanup_loop(ctx)
+
+    service.run_once.assert_awaited_once_with()
 
 
 def test_fake_mode_builds_offline_arxiv_gateway() -> None:

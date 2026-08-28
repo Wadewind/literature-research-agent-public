@@ -461,7 +461,64 @@ class AgentSandboxLeaseORM(Base):
         CheckConstraint("generation >= 1", name="ck_agent_sandbox_lease_generation"),
         CheckConstraint("fencing_token >= 1", name="ck_agent_sandbox_lease_fence"),
         CheckConstraint(
-            "status IN ('active','dirty')", name="ck_agent_sandbox_lease_status"
+            "status IN ('active','dirty','retired')",
+            name="ck_agent_sandbox_lease_status",
+        ),
+    )
+
+
+class AgentSandboxCleanupORM(Base):
+    """精确物理 Sandbox 的内部幂等销毁补偿事实。"""
+
+    __tablename__ = "agent_sandbox_cleanups"
+    cleanup_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    sandbox_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    fencing_token: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    lease_owner_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        CheckConstraint("generation >= 1", name="ck_sandbox_cleanup_generation"),
+        CheckConstraint("fencing_token >= 1", name="ck_sandbox_cleanup_fence"),
+        CheckConstraint("attempt_count >= 0", name="ck_sandbox_cleanup_attempts"),
+        CheckConstraint(
+            "reason IN ('rotation','candidate_rejected','dirty','expired','session_closed')",
+            name="ck_sandbox_cleanup_reason",
+        ),
+        CheckConstraint(
+            "status IN ('pending','running','succeeded')",
+            name="ck_sandbox_cleanup_status",
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND lease_owner_id IS NULL "
+            "AND lease_expires_at IS NULL AND completed_at IS NULL) OR "
+            "(status = 'running' AND lease_owner_id IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL AND completed_at IS NULL) OR "
+            "(status = 'succeeded' AND lease_owner_id IS NULL "
+            "AND lease_expires_at IS NULL AND completed_at IS NOT NULL)",
+            name="ck_sandbox_cleanup_state_fields",
         ),
     )
 

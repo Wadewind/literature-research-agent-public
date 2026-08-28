@@ -15,6 +15,7 @@ from literature_agent.domain.workspace_snapshot import (
     create_workspace_snapshot,
 )
 from literature_agent.infrastructure.agent.sandbox_workspace import (
+    SandboxCleanupStatus,
     SandboxLeaseRecord,
     SandboxLeaseStatus,
     SandboxWorkspaceLease,
@@ -27,18 +28,37 @@ class _Repo:
     def __init__(self) -> None:
         self.lease: SandboxLeaseRecord | None = None
         self.snapshots = []
+        self.cleanups = []
 
     async def get_lease(self, session_id: str):
         return self.lease if self.lease and self.lease.session_id == session_id else None
 
-    async def replace_lease(self, value, *, expected_fencing_token):
+    async def replace_lease(
+        self, value, *, expected_fencing_token, cleanup_replaced=None
+    ):
         current = self.lease
         if current is not None and current.fencing_token != expected_fencing_token:
             return False
         if current is None and expected_fencing_token is not None:
             return False
         self.lease = value
+        if cleanup_replaced is not None:
+            self.cleanups.append(cleanup_replaced)
         return True
+
+    async def enqueue_cleanup(self, value):
+        if any(item.cleanup_id == value.cleanup_id for item in self.cleanups):
+            return False
+        self.cleanups.append(value)
+        return True
+
+    async def mark_cleanup_succeeded(self, cleanup_id, *, now):
+        del now
+        for index, item in enumerate(self.cleanups):
+            if item.cleanup_id == cleanup_id:
+                self.cleanups[index] = item.as_succeeded()
+                return True
+        return False
 
     async def mark_dirty(self, session_id: str, generation: int, fencing_token: int):
         if (
@@ -317,6 +337,10 @@ async def test_initial_lease_cas_loser_destroys_only_its_created_sandbox() -> No
     assert provider.destroyed == [
         item.id for item in provider.backends.values() if item.id != repo.lease.sandbox_id
     ]
+    [cleanup] = repo.cleanups
+    assert cleanup.reason == "candidate_rejected"
+    assert cleanup.sandbox_id == provider.destroyed[0]
+    assert cleanup.status is SandboxCleanupStatus.SUCCEEDED
 
 
 async def test_dirty_lease_rotates_generation_and_restores_last_stable_snapshot() -> None:
@@ -346,7 +370,9 @@ async def test_rotation_cas_loser_destroys_only_new_sandbox_not_renewed_current(
     await manager.mark_dirty(first)
     original_replace = repo.replace_lease
 
-    async def lose_after_concurrent_renewal(value, *, expected_fencing_token):
+    async def lose_after_concurrent_renewal(
+        value, *, expected_fencing_token, cleanup_replaced=None
+    ):
         assert repo.lease is not None
         repo.lease = replace(
             repo.lease,
@@ -365,6 +391,10 @@ async def test_rotation_cas_loser_destroys_only_new_sandbox_not_renewed_current(
     assert first.record.sandbox_id not in provider.destroyed
     assert repo.lease is not None
     assert repo.lease.sandbox_id == first.record.sandbox_id
+    [cleanup] = repo.cleanups
+    assert cleanup.reason == "candidate_rejected"
+    assert cleanup.sandbox_id == "sandbox-2"
+    assert cleanup.status is SandboxCleanupStatus.SUCCEEDED
 
 
 async def test_rotation_old_sandbox_destroy_failure_does_not_undo_new_lease() -> None:
@@ -386,6 +416,24 @@ async def test_rotation_old_sandbox_destroy_failure_does_not_undo_new_lease() ->
     assert second.record.generation == 2
     assert repo.lease == second.record
     assert second.record.sandbox_id != first.record.sandbox_id
+    [cleanup] = repo.cleanups
+    assert cleanup.sandbox_id == first.record.sandbox_id
+    assert cleanup.generation == first.record.generation
+    assert cleanup.status is SandboxCleanupStatus.PENDING
+
+
+async def test_rotation_persists_cleanup_before_destroy_and_marks_success() -> None:
+    repo, provider, storage = _Repo(), _Provider(), _Storage()
+    manager = _manager(repo, provider, storage, [datetime(2026, 8, 26, tzinfo=UTC)])
+    first = await manager.acquire(_sandbox_request(turn_run_id="turn-1"))
+    await manager.mark_dirty(first)
+
+    await manager.acquire(_sandbox_request(turn_run_id="turn-2"))
+
+    [cleanup] = repo.cleanups
+    assert cleanup.sandbox_id == first.record.sandbox_id
+    assert cleanup.status is SandboxCleanupStatus.SUCCEEDED
+    assert provider.destroyed == [first.record.sandbox_id]
 
 
 async def test_snapshot_rejects_symlink_and_does_not_advance_stable_version() -> None:

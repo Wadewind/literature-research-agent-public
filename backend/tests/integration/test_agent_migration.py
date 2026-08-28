@@ -19,6 +19,7 @@ from literature_agent.infrastructure.persistence.models import (
     AgentOwnerSkillVersionORM,
     AgentPolicySnapshotORM,
     AgentRuntimeExecutionORM,
+    AgentSandboxCleanupORM,
     AgentSandboxLeaseORM,
     AgentSkillProfileORM,
     AgentToolCallORM,
@@ -121,6 +122,30 @@ def test_sandbox_workspace_tables_reference_business_scope() -> None:
         "agent_turn_runs.turn_run_id",
         "projects.project_id",
     }
+    cleanup_targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentSandboxCleanupORM.__table__.foreign_keys
+    }
+    assert cleanup_targets == {
+        "agent_sessions.session_id",
+        "projects.project_id",
+    }
+    cleanup_columns = set(AgentSandboxCleanupORM.__table__.columns.keys())
+    assert {
+        "cleanup_id",
+        "generation",
+        "fencing_token",
+        "attempt_count",
+        "next_attempt_at",
+        "last_error_code",
+        "last_error_summary",
+    } <= cleanup_columns
+    assert {
+        "endpoint",
+        "command",
+        "output",
+        "secret",
+    }.isdisjoint(cleanup_columns)
 
 
 def test_browser_control_is_session_scoped_and_never_stores_raw_endpoint_or_ticket() -> None:
@@ -327,6 +352,7 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_turn_usages")
         assert has_table("agent_model_call_reservations")
         assert has_table("agent_tool_calls")
+        assert has_table("agent_sandbox_cleanups")
         assert {
             "ck_agent_attachment_version",
             "ck_agent_attachment_size",
@@ -338,13 +364,15 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_browser_control_leases")
         assert has_table("agent_attachments")
         assert has_table("agent_message_attachments")
-        assert not has_table("agent_turn_usages")
-        assert not has_table("agent_model_call_reservations")
-        assert not has_table("agent_tool_calls")
+        assert has_table("agent_turn_usages")
+        assert has_table("agent_model_call_reservations")
+        assert has_table("agent_tool_calls")
+        assert not has_table("agent_sandbox_cleanups")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("upgrade", "head")
         assert has_table("agent_browser_control_leases")
         assert has_table("agent_attachments")
         assert has_table("agent_turn_usages")
+        assert has_table("agent_sandbox_cleanups")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("check")

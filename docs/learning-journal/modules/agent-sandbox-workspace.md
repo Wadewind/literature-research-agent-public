@@ -22,6 +22,7 @@ AgentTurnRun
   → Runtime 成功前取回 /workspace 普通文件并登记 STAGED Snapshot
   → 业务成功短事务内将对应 STAGED 发布为 STABLE
   → 失败/取消标记 DIRTY；下一 Turn 轮换 generation
+  → 过期/DIRTY/Session closed Lease 以 fence 退役并由 Worker 事务外清理
 ```
 
 `/conversation_history/` 和 `/large_tool_results/` 路由到 `StateBackend`，随 SDK Thread checkpoint 保存，
@@ -45,8 +46,14 @@ AgentTurnRun
   `STABLE`；但上一 holder 无 Snapshot、只有 `STAGED` 或已不是 latest 时，新 Turn 必须轮换 generation，
   且只恢复 latest `STABLE`。因此业务取消、引用校验失败或成功事务回滚留下的物理文件不会泄漏到下一 Turn。
 - generation 轮换先创建并恢复候选 Sandbox，再以旧 fencing token CAS 替换 Lease；CAS loser 只销毁自己
-  新建的 Sandbox，绝不销毁观察到的旧实例。CAS winner 提交新 Lease 后才 best-effort 销毁旧实例；回收
-  失败不回滚新 Lease，也不销毁已生效的新 Sandbox，由 OpenSandbox TTL/Provider 回收作为兜底。
+  新建的 Sandbox，绝不销毁观察到的旧实例。CAS winner 在同一短事务提交新 Lease 和旧资源 cleanup fact，
+  再于事务外 best-effort 销毁；回收失败不回滚新 Lease，由 Worker cleaner 重试。
+- 过期、`DIRTY` 或已关闭 Session 的 Lease 必须先用 session/generation/fence/due guard CAS 为 `RETIRED`，
+  再在同一事务插入 cleanup fact。较早开始的续租不能把 `RETIRED` 同 generation 复活；generation+1 的
+  轮换可以替换它。cleanup ID 含物理资源 hash，Cleaner 永远不重新读取当前 Lease 的 Sandbox ID。
+- Cleaner 用 worker/attempt fence 短事务认领，事务外调用 Provider，再以同一 attempt 完成或退避重试。
+  精确 404 是幂等成功；其他异常只留下固定错误码和安全摘要。公开 API/Event 不投影 cleanup、sandbox ID、
+  endpoint、命令或输出。
 - Deep adapter 的内部 `before_succeed` finalizer 固定 Runtime 内部顺序为：捕获文件与内容寻址 blob →
   登记不可见 `STAGED` → `RuntimeExecution.succeed` → `COMPLETED`。Snapshot 临时失败释放
   RuntimeExecution permit 供同 Turn/checkpoint 重试，但保留当前 Lease；Manifest/安全校验永久失败形成
@@ -80,6 +87,15 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
   `BaseSandbox` Adapter。Checkpoint pool 直接依赖 `psycopg-pool==3.3.1`。
 - Sandbox 固定 1 CPU、2 GiB、命令 60 秒、inline 输出 64 KiB、网络 default-deny、空 env/volume；
   Worker 不持有 Docker Socket，OpenSandbox server 是显式外部前提，不加入普通 compose。
+- OpenSandbox 0.1.15 的 execd timeout 实测只限制 RPC 等待，不终止已启动命令；Adapter 因而用固定镜像
+  coreutils `timeout` 包裹整个命令进程组，Provider 等待上限增加 2 秒清理余量。超时返回非零 exit code，
+  后续命令仍可在同一 Backend 执行。
+- 项目本地 Server 固定为 0.2.2，使用 `config/opensandbox-server.phase6.toml` 与
+  `scripts/opensandbox-server.sh`：控制面仅监听 loopback，Docker bridge、空 host path allowlist、drop ALL、
+  no-new-privileges、PID 256、固定端口范围和固定 execd/egress digest，API key 必填。三个本地 image digest
+  已由 Docker inspect 精确匹配；这只是本地镜像锁定证据。
+- Server 0.2.2 在 `networkPolicy` 存在时用 egress sidecar 与 Sandbox 共享 network namespace；因此
+  default-deny 同时覆盖 Bash、Python、Node、Chromium、Playwright 与 Search MCP，而不只检查 Tool URL。
 - `OpenSandboxProvider.create` 固定传入 `entrypoint=['/entrypoint']`，避免 SDK 的空 entrypoint 默认值覆盖
   pinned Chrome 镜像负责启动 Chromium 与 execd 的 recipe；该值不是用户配置。
 - `sandbox/research-agent/Dockerfile` 固定上游 Chrome image index digest，并在构建时预装固定版本的
@@ -102,14 +118,21 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 - 跨 Turn `STABLE` 复用门槛及续租/轮换 CAS 回收顺序的最终定向回归：19 passed；最终完整非集成回归：
   1013 passed、4 skipped。
 - 本切片范围 Ruff 通过，修改文件 Pyright 0 errors。
+- Phase 6 Slice 6 新增 expired/session_closed 覆盖后，主智能体复核 PostgreSQL cleanup/CAS 与 Alembic
+  `head → -1 → head`：13 passed（18.55s）。离线 cleanup、Server
+  配置、Provider 404 和 Worker 定向均通过；项目 TOML 由本机 Server 0.2.2 `load_config` 实际解析成功。
+- 显式真实 Smoke 使用 `opensandbox==0.1.15`、Server 0.2.2、research image
+  `sha256:58beb…591a`、execd `sha256:1dc98…d6dd`、egress `sha256:97313…e8a`：统一 egress/资源
+  最终复验 1 passed（33.08s），60 秒 TTL 自动回收 1 passed（64.23s），命令超时后 Backend 仍可用 1 passed
+  （7.22s）。行为观察到非 root、1 CPU、2 GiB、PID
+  256、无宿主/Secret、64 KiB 输出，以及 Bash/Python/Node/Chromium/Playwright/Search MCP 禁网。
 
 ## 已知限制
 
-- 7.3 已实际构建派生镜像，并在 `--network none` Docker 容器及本地 OpenSandbox Server Proxy 完成
-  MCP/Chromium/下载回路；仍不能宣称 secure runtime、CPU/内存强制、宿主/Secret 不可见或远端销毁
-  补偿已在生产环境验证。
-- OpenSandbox Python SDK 与自定义 Adapter 仍是 alpha Spike；没有孤儿 Lease 定时清理器、磁盘/PID
-  运行时测量、公开部署或生产 SLA。
+- Phase 6 Slice 6 已在本地 OpenSandbox 实测 CPU/内存/PID、宿主/Secret、统一禁网、TTL 和远端销毁补偿；
+  Server 未配置 secure runtime，仍不能宣称公网多租户或生产隔离。
+- OpenSandbox Python SDK 与自定义 Adapter 仍是 alpha 集成。本地 Docker runtime 不支持请求级 overlay
+  物理磁盘硬配额；WorkspaceSnapshot/Artifact 上限只是业务提交边界。没有公开部署、镜像仓库或生产 SLA。
 - 7.3 已把固定 Playwright/arXiv MCP 接到当前 Lease，execute/resume 的 MCP session 包围 graph，并在
   Sandbox Backend 前关闭；离线 collect/reconcile/cancel 不连接 MCP。本地 OpenSandbox 代理 Smoke 已
   完成，noVNC/公共下载仍未完成；7.4 已把 Native Skills 放在 Sandbox `execute` 不可见的只读虚拟 Backend，
@@ -124,6 +147,7 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 
 - `domain/workspace_snapshot.py`
 - `infrastructure/agent/opensandbox_backend.py`
+- `infrastructure/agent/sandbox_cleanup.py`
 - `infrastructure/agent/sandbox_workspace.py`
 - `infrastructure/agent/sandboxed_research_agent_runtime.py`
 - `infrastructure/persistence/sandbox_workspace_repository.py`
@@ -135,4 +159,6 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 generation 和 fence 随时可轮换；成功 Turn 才把受限 `/workspace` 普通文件提交为内容寻址 Snapshot，失败
 或取消则丢弃未提交变化。Deep Agents 原生管理消息、压缩、文件和 execute，平台在外层管理 owner/
 Project 授权、统一预算、取消、Lease 和 Effectively Once。每次 Runtime operation 使用独立
-AsyncPostgresSaver/graph，完成后的结果对账完全不依赖活 Sandbox。
+AsyncPostgresSaver/graph，完成后的结果对账完全不依赖活 Sandbox。过期或脏环境先按 generation/fence
+退役并留下可重试 cleanup fact，Provider 销毁始终在事务外；本地 egress sidecar 与 Sandbox 共享网络
+namespace，所以 Shell、Python、Browser 和 MCP 共享同一个基础设施禁网边界。

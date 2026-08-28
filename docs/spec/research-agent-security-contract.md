@@ -1,6 +1,6 @@
 # Research Agent 精简安全契约
 
-> 状态：Phase 6 Slice 1–5 已确认；Slice 6–8 的实施契约。
+> 状态：Phase 6 Slice 1–6 已确认；Slice 7–8 的实施契约。
 >
 > 基线：`b0ec3f4`（2026-08-28）。本文把已经由 Phase 5 代码/测试证明的事实与 Phase 6 目标事实分开；
 > “目标”“必须”“验收”不表示对应能力已经实现或经过真实环境验证。
@@ -34,7 +34,7 @@
 | 产品上下文 | `ContextSnapshot` 固化 owner/Project/Session/Turn、消息水位、精确 ChunkSet 引用、明确选择的 `ReviewOutput.output_id`、既有 Artifact 引用和本轮明确授权的 Attachment 版本/hash；不保存正文或 SDK State |
 | 产品策略 | `PolicySnapshot` 固化 Tool/Skill/MCP 引用、网络/Sandbox 开关、`approval_required`、模型/工具次数；workspace Profile 为 `network_enabled=false`、`sandbox_enabled=true`、`approval_required=false` |
 | Project Tool | 两个固定只读 Project Context Tool 已按 Turn/Context/Policy 作用域读取精确 ChunkSet 与指定 Evidence Matrix，并使用 `ToolExecution` 记录参数 hash、状态与有界结果 |
-| Sandbox | 每个 Session 最多一个短 TTL OpenSandbox Lease；记录 owner/Project/Session、holder Turn、generation 和 fencing token；不跨 owner/Session 共享 |
+| Sandbox | 每个 Session 最多一个短 TTL OpenSandbox Lease；记录 owner/Project/Session、holder Turn、generation 和 fencing token；不跨 owner/Session 共享。过期/脏/关闭 Session 使用 fenced `RETIRED` 与 cleanup fact 做事务外幂等回收 |
 | Workspace | `WorkspaceSnapshot` 有 `STAGED/STABLE`，只允许 STABLE 恢复；上限为 128 个文件、单文件 10 MiB、总计 50 MiB；内容在 Storage，元数据在 PostgreSQL |
 | MCP/Skill | 固定 MCP Catalog/Profile、Tool 名称与 Schema hash、owner/Session 选择、调用拦截与 `ToolExecution` 已存在；平台 Skill 与 owner-scoped 声明式 Skill 使用不可变版本/hash 和只读 `/skills/` Backend |
 | Browser Spike | 固定 Playwright MCP 能连接同一 Sandbox Chromium，在禁网环境操作合成页面并下载到同一 Workspace；未提供面向用户的画面或控制权 |
@@ -43,7 +43,7 @@
 | Agent Attachment | owner/Project/Session scoped 不可变 `AgentAttachment(version=1)` 已实现上传、列表、受限删除、消息有界有序引用、`agent-context.v2` 冻结和事务外 fenced `/workspace/inbox` 物化；已引用附件不可删除 |
 | API/Event | 已有 Session/Message/Turn、MCP/Skill 配置和通用 Run cancel/Event API；Event 只保存筛选后的 Agent/Tool 生命周期摘要 |
 
-这些事实不证明 OpenSandbox 是生产级隔离，不证明统一 egress、真实 arXiv、公共下载或完整硬预算已经
+这些事实不证明 OpenSandbox 是生产级隔离，不证明固定 arXiv 公网、公共下载或公网多租户安全已经
 实现。Slice 2 的正式 Agent Artifact 与 Slice 4 的 AgentAttachment 都是本地受限文件能力，不代表已完成
 生产级恶意文件扫描、隔离检疫、无 TOCTOU 竞争或 Storage GC；
 Slice 3 的真实 Smoke 只证明未配置 API key/secure runtime 的 trusted-local OpenSandbox 功能链路，不是
@@ -57,7 +57,7 @@ noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
 | `BrowserControlLease`、鉴权画面代理和跨 Turn 人工控制 | Slice 3（已完成；trusted-local RFB/同 Sandbox Playwright 合成页 Smoke 已通过；noVNC 人工输入 UI E2E 留到 Slice 8） |
 | `AgentAttachment`、上传/删除、消息引用、ContextSnapshot 冻结与 `/workspace/inbox` 物化 | Slice 4（已完成） |
 | 固定能力 Schema/hash 漂移拒绝、完整调用前 scope 检查、脱敏 Tool 摘要和硬预算 | Slice 5 |
-| 实测资源限制、TTL/清理补偿、Workspace 重建与覆盖全部 Sandbox 进程的 default-deny egress | Slice 6 |
+| 实测资源限制、TTL/清理补偿、Workspace 重建与覆盖全部 Sandbox 进程的 default-deny egress | Slice 6（已完成；Docker overlay 物理磁盘硬配额除外） |
 | 固定 arXiv 公网、URL/DNS/IP/Redirect/SSRF、下载隔离/校验/来源和 Prompt Injection 验证 | Slice 7 |
 | App Shell、完整 UI/E2E、故障测试、评测、运行文档和完成复盘 | Slice 8 |
 
@@ -326,6 +326,9 @@ Artifact 或业务成功。
 | Artifact blob 已 staging、Candidate/业务失败 | blob 不可下载，稳定 key 可重用，后续 GC |
 | Artifact validated、Turn 成功 CAS 失败 | 不发布正式 Artifact；晚到处理不得覆盖 Run 终态 |
 | Sandbox create 成功、Lease CAS 失败 | loser 只回收自己的候选 Sandbox；不得销毁 winner 当前 Lease |
+| 过期/DIRTY/Session closed Lease 被扫描 | 同一短事务以 session/generation/fence/due guard CAS 为 `RETIRED` 并写 cleanup fact；CAS 失败不调用 Provider |
+| destroy 成功、响应或 DB 提交丢失 | cleanup 保持可重试；重复 destroy 的精确 404 视为成功，其他异常进入安全摘要重试 |
+| Cleaner 与续租/轮换竞争 | 同 generation 续租不能复活 `RETIRED`；只有 generation+1 可替换，旧 cleanup 固定到资源哈希，绝不重读新 Sandbox ID |
 | Browser view 断线 | 只释放 viewer connection；MANUAL Lease 保持 ACTIVE 并允许 TTL 内使用当前 ticket 重连，不改变 Browser 内容事实 |
 | Browser control 显式结束、TTL 到期或 generation/fence 失效 | 控制权收敛到非 MANUAL；旧 ticket 按对应 revision/TTL/generation/fence 边界失效，不改变 Browser 内容事实 |
 
@@ -398,12 +401,31 @@ Artifact 或业务成功。
 - 公开 Tool API 与 `agent_budget_updated` Event 只含安全摘要。Workspace 50 MiB、单文件/Artifact 10 MiB
   沿用既有契约；下载数量/总量必须在 Slice 7 实现，不能由本切片宣称完成。
 
-### Slice 6：Workspace/Sandbox 与统一 egress
+### Slice 6：Workspace/Sandbox 与统一 egress（已完成）
 
-- 隔离、非 root、无 Secret/宿主挂载、CPU/内存/PID/磁盘/时间/输出、TTL、清理和 generation 恢复必须有
-  实际配置与测试证据；仅存在配置字段不算通过；
-- default-deny egress 必须覆盖 Chromium、MCP、Python、Shell、`curl` 等全部 Sandbox 进程；
-- 普通 CI 使用 Fake/本地隔离 Fixture；显式 OpenSandbox Smoke 记录精确镜像、Server 和限制结果。
+- `agent_sandbox_leases` 的内部状态为 `ACTIVE/DIRTY/RETIRED`。调度器只在同一短事务内以
+  session/generation/fence 和 expired/DIRTY/session-closed 条件 CAS 退役旧 Lease，并插入
+  `agent_sandbox_cleanups`；Provider `destroy`、`connect`、`inspect` 不进入事务；
+- cleanup ID 包含 opaque resource hash，认领以 worker/attempt fence 条件完成或重试。失败只保存固定
+  `provider_destroy_failed` 与安全摘要，不进入公开 API/Event，不保存命令、输出、endpoint 或 Secret；
+- 轮换 Lease 与旧 cleanup 同事务提交，候选 CAS loser 先持久化自己的 cleanup 再销毁。OpenSandbox SDK
+  的精确 HTTP 404 被 Adapter 视为幂等成功，其他异常必须保留给补偿重试；
+- 项目固定 `opensandbox-server==0.2.2` 本地配置：仅 loopback 控制面、Docker bridge、无 host volume、
+  drop capability ALL、no-new-privileges、PID 256、固定端口范围、固定 execd/egress image digest、API key
+  必填；普通 compose 与用户 home 配置均不被修改；
+- `OpenSandboxProvider` 固定 1 CPU、2 GiB、空 env/volume、非 root research image、命令上限 60 秒、inline
+  输出 64 KiB，并提交 `NetworkPolicy(default deny, egress=[])`。OpenSandbox 0.1.15 的 execd timeout
+  实测不会终止已启动命令，因此 Adapter 以固定镜像的 coreutils `timeout` 约束整个进程组，Provider
+  timeout 只保留为多 2 秒的 RPC 等待上限。Server 0.2.2 在有 NetworkPolicy 时创建
+  egress sidecar，Sandbox 共享其 network namespace，因此策略覆盖 Shell、Python、Node、Chromium、
+  Playwright 和固定 Search MCP，而不依赖 Tool 参数过滤；
+- 显式 `AGENT_RUN_OPENSANDBOX_SECURITY_TESTS=1` Smoke 已实际验证以上资源/Secret/挂载/网络边界、同
+  Sandbox loopback 自有服务、命令超时后 Backend 仍可用、60 秒 TTL 自动回收和重复销毁。
+  `chromium --no-sandbox` 只证明容器级统一
+  egress，不证明 Chromium 进程级 Sandbox；
+- 当前 Server Docker resource 请求只解析 CPU/memory/GPU，不支持请求级 overlay 物理磁盘硬配额。
+  WorkspaceSnapshot 的 128 文件、单文件 10 MiB、总 50 MiB 与 Artifact 上限属于业务提交边界，不冒充
+  物理磁盘隔离；本地 Server 未配置 secure runtime，不能据此声称生产隔离。
 
 ### Slice 7：固定 arXiv 公网与下载
 

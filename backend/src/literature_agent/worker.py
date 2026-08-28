@@ -106,6 +106,7 @@ from literature_agent.infrastructure.agent.mcp_tools import (
     LangchainMcpToolLoader,
 )
 from literature_agent.infrastructure.agent.opensandbox_backend import OpenSandboxProvider
+from literature_agent.infrastructure.agent.sandbox_cleanup import SandboxCleanupService
 from literature_agent.infrastructure.agent.sandbox_mcp import (
     PLATFORM_SANDBOX_MCP_RESOLVER,
 )
@@ -684,6 +685,36 @@ async def _dependency_reconcile_loop(ctx: dict[str, Any]) -> None:
         await asyncio.sleep(settings.worker_reconcile_interval_seconds)
 
 
+async def _sandbox_cleanup_loop(ctx: dict[str, Any]) -> None:
+    """周期性退役并销毁过期/脏/已关闭 Session 的 Sandbox。"""
+    service: SandboxCleanupService = ctx["sandbox_cleanup_service"]
+    settings: Settings = ctx["settings"]
+    while True:
+        try:
+            result = await service.run_once()
+            if result.succeeded or result.retried:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "sandbox_cleanup_completed",
+                    scheduled=result.scheduled,
+                    claimed=result.claimed,
+                    succeeded=result.succeeded,
+                    retried=result.retried,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "sandbox_cleanup_loop_failed",
+                exc=exc,
+                error_code=type(exc).__name__,
+            )
+        await asyncio.sleep(settings.worker_reconcile_interval_seconds)
+
+
 async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
     """Worker 启动：建立数据库、队列依赖并启动派发与对账循环。"""
     configure_logging(service="worker")
@@ -966,6 +997,17 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         batch_size=settings.outbox_dispatch_batch_size,
         event_notifier=event_notifier,
     )
+    if settings.research_runtime_backend == "deep_agents":
+        ctx["sandbox_cleanup_service"] = SandboxCleanupService(
+            repository=SqlalchemySandboxWorkspaceRepository(session_factory),
+            provider=OpenSandboxProvider(
+                domain=settings.research_sandbox_domain,
+                protocol=settings.research_sandbox_protocol,
+                api_key=settings.research_sandbox_api_key,
+            ),
+            worker_id=f"sandbox-cleaner:{worker_id}",
+            batch_size=settings.outbox_dispatch_batch_size,
+        )
     # Metrics server 最后启动；端口占用只会禁用本进程 scrape，不影响 Worker。
     if "metrics_server" not in ctx:
         ctx["metrics_server"] = start_worker_metrics_server(settings.worker_metrics_port)
@@ -974,12 +1016,19 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
     ctx["dependency_reconcile_task"] = asyncio.create_task(
         _dependency_reconcile_loop(ctx)
     )
+    if "sandbox_cleanup_service" in ctx:
+        ctx["sandbox_cleanup_task"] = asyncio.create_task(_sandbox_cleanup_loop(ctx))
 
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
     """Worker 关闭：取消后台循环并释放连接资源。"""
     stop_worker_metrics_server(ctx.pop("metrics_server", None))
-    for key in ("dispatch_task", "reconcile_task", "dependency_reconcile_task"):
+    for key in (
+        "dispatch_task",
+        "reconcile_task",
+        "dependency_reconcile_task",
+        "sandbox_cleanup_task",
+    ):
         task: asyncio.Task | None = ctx.get(key)
         if task is not None:
             task.cancel()

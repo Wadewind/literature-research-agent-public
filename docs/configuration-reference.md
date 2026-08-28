@@ -122,11 +122,14 @@ Sandbox 部署配置：
 - `AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080`；
 - `AGENT_RESEARCH_SANDBOX_PROTOCOL=http|https`；
 - `AGENT_RESEARCH_SANDBOX_API_KEY`；
-- `AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox:phase5-7.3`。
+- `AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:58beb51efafe5bb8c767404979b3bea2fe92067177664437f306b11ea725591a`。
 
-OpenSandbox Server 独立于 `scripts/dev.sh` 启动。当前本地配置位于用户级
-`/home/xubin/.sandbox.toml`，不进入仓库，也不能由 API 请求覆盖。当前验证只是可信本机 Docker 功能
-Spike；尚未配置生产级 secure runtime、公共网络统一 egress 或公网多用户隔离。
+OpenSandbox Server 独立于 `scripts/dev.sh` 启动。项目版本化配置是
+`config/opensandbox-server.phase6.toml`，入口是 `scripts/opensandbox-server.sh`；不会读取或修改用户 home
+配置，也不能由 API 请求覆盖。运行前必须用环境变量提供 Server/Worker 共享的本地 API key。完整步骤见
+[`本地 OpenSandbox Server`](runbooks/local-opensandbox-server.md)。当前配置固定 Server 0.2.2、loopback
+控制面、Docker bridge、无 host volume、drop ALL、no-new-privileges、PID 256 和固定 execd/egress digest。
+它提供本地 default-deny 行为证据，但未配置 secure runtime，不是公网多用户隔离方案。
 
 ## 3. 版本化 Review Profile
 

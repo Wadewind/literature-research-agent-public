@@ -56,7 +56,8 @@ _DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS = 2048
 _DEFAULT_RESEARCH_SANDBOX_DOMAIN = "127.0.0.1:8080"
 _DEFAULT_RESEARCH_SANDBOX_PROTOCOL = "http"
 _DEFAULT_RESEARCH_SANDBOX_IMAGE = (
-    "agent-service/research-agent-sandbox:phase5-7.3"
+    "agent-service/research-agent-sandbox@sha256:"
+    "58beb51efafe5bb8c767404979b3bea2fe92067177664437f306b11ea725591a"
 )
 # arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。
 _DEFAULT_ARXIV_BACKEND = "fake"

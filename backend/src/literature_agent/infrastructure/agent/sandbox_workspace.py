@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -30,6 +31,128 @@ class SandboxLeaseStatus(StrEnum):
 
     ACTIVE = "active"
     DIRTY = "dirty"
+    RETIRED = "retired"
+
+
+class SandboxCleanupStatus(StrEnum):
+    """远端资源销毁补偿的内部状态；不得进入公开 API/Event。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxCleanupTask:
+    """一个精确物理 Sandbox 的可重试销毁事实。"""
+
+    cleanup_id: str
+    owner_id: str
+    project_id: str
+    session_id: str
+    sandbox_id: str
+    generation: int
+    fencing_token: int
+    reason: str
+    status: SandboxCleanupStatus
+    attempt_count: int
+    next_attempt_at: datetime
+    lease_owner_id: str | None
+    lease_expires_at: datetime | None
+    last_error_code: str | None
+    last_error_summary: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+    def as_running(self, *, worker_id: str, lease_seconds: int = 30) -> SandboxCleanupTask:
+        """供 Fake/测试构造一次短清理认领。"""
+        now = self.updated_at
+        return replace(
+            self,
+            status=SandboxCleanupStatus.RUNNING,
+            attempt_count=self.attempt_count + 1,
+            lease_owner_id=worker_id,
+            lease_expires_at=now + timedelta(seconds=lease_seconds),
+        )
+
+    def as_pending(
+        self,
+        *,
+        next_attempt_at: datetime,
+        error_code: str,
+        error_summary: str,
+    ) -> SandboxCleanupTask:
+        """供 Fake/测试表示一次有界失败后的重试。"""
+        return replace(
+            self,
+            status=SandboxCleanupStatus.PENDING,
+            next_attempt_at=next_attempt_at,
+            lease_owner_id=None,
+            lease_expires_at=None,
+            last_error_code=error_code,
+            last_error_summary=error_summary,
+            updated_at=next_attempt_at,
+        )
+
+    def as_succeeded(self) -> SandboxCleanupTask:
+        """供 Fake/测试表示幂等完成。"""
+        return replace(
+            self,
+            status=SandboxCleanupStatus.SUCCEEDED,
+            lease_owner_id=None,
+            lease_expires_at=None,
+            last_error_code=None,
+            last_error_summary=None,
+            completed_at=self.updated_at,
+        )
+
+
+def create_sandbox_cleanup_task(
+    *,
+    owner_id: str,
+    project_id: str,
+    session_id: str,
+    sandbox_id: str,
+    generation: int,
+    fencing_token: int,
+    reason: str,
+    now: datetime,
+) -> SandboxCleanupTask:
+    """以资源哈希生成稳定清理 ID，避免公开或记录 raw sandbox_id。"""
+    if not all(
+        value.strip()
+        for value in (owner_id, project_id, session_id, sandbox_id, reason)
+    ):
+        raise ValueError("Sandbox cleanup scope/reason 不能为空")
+    if generation < 1 or fencing_token < 1:
+        raise ValueError("Sandbox cleanup generation/fence 必须为正整数")
+    cleanup_id = hashlib.sha256(
+        (
+            "agent-sandbox-cleanup.v1\0"
+            f"{session_id}\0{generation}\0{sandbox_id}"
+        ).encode()
+    ).hexdigest()
+    return SandboxCleanupTask(
+        cleanup_id=cleanup_id,
+        owner_id=owner_id,
+        project_id=project_id,
+        session_id=session_id,
+        sandbox_id=sandbox_id,
+        generation=generation,
+        fencing_token=fencing_token,
+        reason=reason,
+        status=SandboxCleanupStatus.PENDING,
+        attempt_count=0,
+        next_attempt_at=now,
+        lease_owner_id=None,
+        lease_expires_at=None,
+        last_error_code=None,
+        last_error_summary=None,
+        created_at=now,
+        updated_at=now,
+        completed_at=None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +194,7 @@ class SandboxWorkspaceRepository(Protocol):
         value: SandboxLeaseRecord,
         *,
         expected_fencing_token: int | None,
+        cleanup_replaced: SandboxCleanupTask | None = None,
     ) -> bool: ...
     async def mark_dirty(
         self, session_id: str, generation: int, fencing_token: int
@@ -83,6 +207,10 @@ class SandboxWorkspaceRepository(Protocol):
         *,
         lease_generation: int,
         fencing_token: int,
+    ) -> bool: ...
+    async def enqueue_cleanup(self, value: SandboxCleanupTask) -> bool: ...
+    async def mark_cleanup_succeeded(
+        self, cleanup_id: str, *, now: datetime
     ) -> bool: ...
 
 
@@ -181,6 +309,7 @@ class SandboxWorkspaceManager:
             return SandboxWorkspaceLease(renewed, backend)
 
         generation = 1 if current is None else current.generation + 1
+        candidate_fence = 1 if current is None else current.fencing_token + 1
         backend = await self._provider.create(
             image_ref=self._image_ref,
             ttl_seconds=self._lease_ttl_seconds,
@@ -199,30 +328,79 @@ class SandboxWorkspaceManager:
                 sandbox_id=str(backend.id),
                 image_ref=self._image_ref,
                 generation=generation,
-                fencing_token=1 if current is None else current.fencing_token + 1,
+                fencing_token=candidate_fence,
                 status=SandboxLeaseStatus.ACTIVE,
                 generation_started_at=now,
                 expires_at=now + timedelta(seconds=self._lease_ttl_seconds),
                 updated_at=now,
             )
             expected = None if current is None else current.fencing_token
+            replaced_cleanup = (
+                None
+                if current is None
+                else self._cleanup_for_record(current, reason="rotation", now=now)
+            )
             if not await self._repository.replace_lease(
-                created, expected_fencing_token=expected
+                created,
+                expected_fencing_token=expected,
+                cleanup_replaced=replaced_cleanup,
             ):
                 raise RuntimeError("Sandbox Lease generation 提交冲突")
         except BaseException:
-            await self._provider.destroy(str(backend.id))
+            await self._enqueue_and_destroy(
+                create_sandbox_cleanup_task(
+                    owner_id=request.context_snapshot.owner_id,
+                    project_id=request.context_snapshot.project_id,
+                    session_id=request.session_id,
+                    sandbox_id=str(backend.id),
+                    generation=generation,
+                    fencing_token=candidate_fence,
+                    reason="candidate_rejected",
+                    now=now,
+                )
+            )
             raise
         if current is not None:
-            await self._best_effort_destroy(current.sandbox_id)
+            assert replaced_cleanup is not None
+            await self._destroy_recorded_cleanup(replaced_cleanup)
         return SandboxWorkspaceLease(created, backend)
 
-    async def _best_effort_destroy(self, sandbox_id: str) -> None:
-        """Lease CAS 已提交后只做回收；失败由 Provider TTL 兜底。"""
+    async def _enqueue_and_destroy(self, cleanup: SandboxCleanupTask) -> None:
+        """候选未生效时先尽力保存补偿事实，再事务外销毁。"""
+        with suppress(Exception):
+            await self._repository.enqueue_cleanup(cleanup)
+        # 创建请求自身的 Provider TTL 是数据库不可用时的最后兜底。
+        await self._destroy_recorded_cleanup(cleanup)
+
+    async def _destroy_recorded_cleanup(self, cleanup: SandboxCleanupTask) -> None:
+        """销毁只针对 cleanup 固定资源；绝不重新读取当前 generation。"""
         try:
-            await self._provider.destroy(sandbox_id)
+            await self._provider.destroy(cleanup.sandbox_id)
         except Exception:
             return
+        try:
+            await self._repository.mark_cleanup_succeeded(
+                cleanup.cleanup_id,
+                now=self._clock(),
+            )
+        except Exception:
+            # Provider 响应或 DB 提交丢失后由 cleaner 幂等重试。
+            return
+
+    @staticmethod
+    def _cleanup_for_record(
+        record: SandboxLeaseRecord, *, reason: str, now: datetime
+    ) -> SandboxCleanupTask:
+        return create_sandbox_cleanup_task(
+            owner_id=record.owner_id,
+            project_id=record.project_id,
+            session_id=record.session_id,
+            sandbox_id=record.sandbox_id,
+            generation=record.generation,
+            fencing_token=record.fencing_token,
+            reason=reason,
+            now=now,
+        )
 
     async def _previous_holder_is_stable(self, lease: SandboxLeaseRecord) -> bool:
         """跨 Turn 复用物理环境前，要求上一 holder 已形成当前业务稳定版本。"""

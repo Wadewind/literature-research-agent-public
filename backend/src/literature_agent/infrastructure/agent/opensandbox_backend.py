@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import posixpath
 import re
+import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -19,6 +20,7 @@ from deepagents.backends.protocol import (
 from deepagents.backends.sandbox import BaseSandbox
 from opensandbox import SandboxSync
 from opensandbox.config.connection_sync import ConnectionConfigSync
+from opensandbox.exceptions import SandboxApiException
 from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import DirectoryListEntry, WriteEntry
 from opensandbox.models.sandboxes import NetworkPolicy
@@ -73,11 +75,17 @@ class OpenSandboxBackend(BaseSandbox):
             timeout or self._command_timeout_seconds,
             self._command_timeout_seconds,
         )
+        # OpenSandbox 0.1.15 的 execd timeout 是 RPC 等待上限，实际验证不会终止
+        # 已启动的命令；因此固定镜像内再用 coreutils timeout 约束整个进程组。
+        bounded_command = (
+            "timeout --kill-after=1s "
+            f"{effective_timeout}s sh -lc {shlex.quote(command)}"
+        )
         execution = self._sandbox.commands.run(
-            command,
+            bounded_command,
             opts=RunCommandOpts(
                 working_directory="/workspace",
-                timeout=timedelta(seconds=effective_timeout),
+                timeout=timedelta(seconds=effective_timeout + 2),
             ),
         )
         output = str(execution)
@@ -357,13 +365,17 @@ class OpenSandboxProvider:
             await asyncio.to_thread(sandbox.close)
 
     async def destroy(self, sandbox_id: str) -> None:
-        sandbox = await asyncio.to_thread(
-            self.sandbox_cls.connect,
-            sandbox_id,
-            connection_config=self._connection(),
-            skip_health_check=True,
-        )
-        await asyncio.to_thread(sandbox.destroy)
+        try:
+            sandbox = await asyncio.to_thread(
+                self.sandbox_cls.connect,
+                sandbox_id,
+                connection_config=self._connection(),
+                skip_health_check=True,
+            )
+            await asyncio.to_thread(sandbox.destroy)
+        except SandboxApiException as exc:
+            if exc.status_code != 404:
+                raise
 
     async def get_browser_websocket_target(
         self,

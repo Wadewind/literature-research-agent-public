@@ -1,0 +1,43 @@
+# OpenSandbox Server 0.2.2：Phase 6 本地受限演示固定配置。
+# API Key 只通过 OPENSANDBOX_SERVER_API_KEY 注入，不写入本文件。
+
+[server]
+host = "127.0.0.1"
+port = 8080
+max_sandbox_timeout_seconds = 3600
+limit_concurrency = 64
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd@sha256:1dc98c7de10b9a73450ac75aa0f200ad7972f2c40f5225f6a8998e166b45d6dd"
+
+[storage]
+allowed_host_paths = []
+volume_default_size = "1Gi"
+
+[store]
+type = "sqlite"
+path = "backend/data/opensandbox-server.db"
+
+[docker]
+network_mode = "bridge"
+host_ip = "127.0.0.1"
+port_range_min = 45000
+port_range_max = 45100
+drop_capabilities = ["ALL"]
+no_new_privileges = true
+pids_limit = 256
+
+[ingress]
+mode = "direct"
+
+[egress]
+image = "opensandbox/egress@sha256:973130e01bf76e8e686e2853ebf47b21741bc8781919bb4a7cf60af09a3c6e8a"
+mode = "dns+nft"
+disable_ipv6 = true
+
+[renew_intent]
+enabled = false
