@@ -71,7 +71,7 @@ class _Sandbox:
         self.endpoint = "http://sandbox-proxy.invalid/private"
 
     def get_endpoint(self, port: int):
-        assert port == 8931
+        assert port in {6080, 8931}
         return type(
             "Endpoint",
             (),
@@ -80,6 +80,9 @@ class _Sandbox:
                 "headers": {"X-Sandbox-Route": "opaque"},
             },
         )()
+
+    def close(self) -> None:
+        return None
 
 
 def test_execute_is_workspace_scoped_timed_and_output_bounded() -> None:
@@ -157,6 +160,47 @@ def test_platform_mcp_service_and_endpoint_are_fixed() -> None:
     assert allowed_host == "sandbox-proxy.invalid"
 
 
+def test_browser_proxy_recipe_and_websocket_endpoint_are_fixed() -> None:
+    sandbox = _Sandbox()
+    sandbox.commands.run = lambda command, *, opts: (
+        sandbox.commands.calls.append((command, opts)) or _Execution("ready")
+    )
+    backend = OpenSandboxBackend(sandbox)
+
+    backend.prepare_browser_proxy()
+    endpoint = backend.get_browser_websocket_endpoint(6080)
+
+    assert sandbox.commands.calls[0][0] == "/opt/research-agent/start-browser-proxy"
+    assert sandbox.commands.calls[0][1].timeout == timedelta(seconds=30)
+    assert endpoint.url == "ws://sandbox-proxy.invalid/private"
+    assert endpoint.headers == {"X-Sandbox-Route": "opaque"}
+    assert "opaque" not in repr(endpoint)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "ftp://sandbox-proxy.invalid/private",
+        "http://user@sandbox-proxy.invalid/private",
+        "http://sandbox-proxy.invalid/private#fragment",
+    ],
+)
+def test_browser_websocket_endpoint_rejects_unsafe_urls(endpoint: str) -> None:
+    sandbox = _Sandbox()
+    sandbox.endpoint = endpoint
+    backend = OpenSandboxBackend(sandbox)
+
+    with pytest.raises(ValueError, match="Browser endpoint"):
+        backend.get_browser_websocket_endpoint(6080)
+
+
+def test_browser_websocket_endpoint_rejects_unregistered_port() -> None:
+    backend = OpenSandboxBackend(_Sandbox())
+
+    with pytest.raises(ValueError, match="Browser 端口"):
+        backend.get_browser_websocket_endpoint(5901)
+
+
 def test_mcp_endpoint_adds_provider_protocol_when_sdk_omits_scheme() -> None:
     sandbox = _Sandbox()
     sandbox.endpoint = "127.0.0.1:8080/v1/sandboxes/private/proxy/8931"
@@ -209,6 +253,37 @@ def test_platform_mcp_service_rejects_unregistered_recipe_and_port() -> None:
         backend.configure_mcp_service("playwright", allowed_host="bad;host")
     with pytest.raises(ValueError, match="MCP 端口"):
         backend.get_mcp_endpoint(9999)
+
+
+@pytest.mark.asyncio
+async def test_provider_exposes_only_fixed_browser_websocket_endpoint(
+    monkeypatch,
+) -> None:
+    async def immediate_to_thread(call, *args, **kwargs):
+        return call(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+    sandbox = _Sandbox()
+    sandbox.endpoint = "https://sandbox.internal/proxy/6080"
+
+    class _SandboxFactory:
+        @classmethod
+        def connect(cls, sandbox_id, **kwargs):
+            assert sandbox_id == "opaque"
+            assert kwargs["connection_config"].use_server_proxy is True
+            return sandbox
+
+    provider = OpenSandboxProvider(
+        domain="sandbox.internal",
+        sandbox_cls=_SandboxFactory,
+    )
+    target = await provider.get_browser_websocket_target("opaque", port=6080)
+
+    assert target.url == "wss://sandbox.internal/proxy/6080"
+    assert target.headers == {"X-Sandbox-Route": "opaque"}
+    assert sandbox.commands.calls[0][0] == "/opt/research-agent/start-browser-proxy"
+    with pytest.raises(ValueError, match="Browser 端口"):
+        await provider.get_browser_websocket_target("opaque", port=5901)
 
 
 async def test_provider_creation_is_fixed_resource_default_deny_and_secret_free(

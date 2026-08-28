@@ -568,6 +568,8 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
           artifacts={artifactsQuery.data}
           artifactsLoading={artifactsQuery.isPending && Boolean(candidateTurnRunId)}
           artifactsError={artifactsQuery.isError}
+          sessionId={sessionId}
+          activeTurnRunId={activeTurnRunId}
         />
       </div>
     </div>

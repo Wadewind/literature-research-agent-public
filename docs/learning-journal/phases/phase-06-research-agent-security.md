@@ -6,7 +6,8 @@
 调整日期：2026-08-26；按 ADR-0008 调整日期：2026-08-27；按 ADR-0009/0010 对齐 Browser 人工控制与
 Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目精简交付日期：2026-08-28；对齐
 `docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28；Slice 1 精简产品契约与威胁模型
-完成日期：2026-08-28；Slice 2 Agent 输出 Artifact 完成日期：2026-08-28。
+完成日期：2026-08-28；Slice 2 Agent 输出 Artifact 完成日期：2026-08-28；Slice 3 Browser 画面与跨 Turn
+人工控制完成日期：2026-08-28。
 
 Slice 1 已完成文档契约审计，形成
 [`Research Agent 精简安全契约`](../../spec/research-agent-security-contract.md)。该契约明确区分 Phase 5
@@ -14,13 +15,26 @@ Slice 1 已完成文档契约审计，形成
 `PolicySnapshot.approval_required` 兼容规则、API/Event 增量、事务外 I/O、Effectively Once/取消/fence
 以及后续切片门槛。Slice 2 已在该边界内实现独立 `AgentArtifact`、Candidate
 `STAGED → VALIDATED → COMMITTED`/`REJECTED`、真实 Sandbox 专用 `submit_artifact`、事务外文件校验与
-Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件；下一开发切片为
-Slice 3 Browser 画面与跨 Turn 人工控制。
+Storage staging、Turn 成功事务内发布、owner-scoped 查询/下载和壳层无关成果组件。Slice 3 已实现独立
+`BrowserControlLease`、Session/Turn/Sandbox generation/fence 互斥、短时 opaque ticket、平台 VNC
+WebSocket 代理和 noVNC 右栏组件；下一开发切片为 Slice 4 Agent 输入附件。
 
 Slice 2 的普通验证全部离线：完整后端非 integration 回归为 1005 passed、5 skipped；Artifact 相关
 PostgreSQL Executor/Alembic 往返为 24 passed，API 为 9 passed，Sandbox/Deep Agents Adapter 为 60 passed；
 Web 全量 Vitest 为 143 passed 且 TypeScript/Vite build 通过。未运行真实 Provider 或真实 OpenSandbox
 Artifact Smoke，不能据此宣称生产级恶意文件扫描或无 TOCTOU 竞争。
+
+Slice 3 的定向离线验证为 Browser Domain/Adapter/API/recipe 41 passed、真实 Smoke 1 skipped，PostgreSQL
+Application/Alembic/既有两轮流程 20 passed、Web 定向 4 passed/全量 147 passed；完整后端非 integration
+回归为 1044 passed、6 skipped（140.20s），Pyright 零错误且 TypeScript/Vite build 通过。旧固定镜像的诊断 Smoke
+确认 Sandbox 内 TigerVNC `1.15.0+dfsg-2` 在 `5901` 返回 RFB，但 OpenSandbox 暴露的 endpoint 实际映射到
+HTTP egress sidecar，raw TCP 连接超时。实现已改为在固定镜像中加入 websockify `0.13.0`：Sandbox 内
+`6080` WebSocket 转发 loopback `5901`，平台经 OpenSandbox Server Proxy 的 `ws/wss` endpoint 与必需
+headers 建立上游连接。修正镜像已重建；第四次主审真实 Smoke 完成 Server Proxy→websockify→RFB 握手，
+并由同一 Sandbox 的 Playwright MCP 操作合成页面，结果为 5 passed（13.06s）。前三次失败分别暴露 raw
+endpoint 语义、宿主代理继承以及合成服务 readiness/Fixture 转义问题，均已形成离线回归契约。当前本地
+OpenSandbox 未配置 API key/secure runtime，因此这只是 trusted-local 功能证据，不代表 noVNC 人工键鼠
+UI E2E、通用认证、多实例 API、公网网站或跨 generation 登录恢复已验证。
 
 ADR-0007 已把 OpenSandbox Provider、Session 级短 TTL Lease、固定依赖的 Sandbox `execute` 与
 WorkspaceSnapshot 提前到 Phase 5 Slice 7；ADR-0008 又把 MCP Catalog/Profile 基础、同 Sandbox
@@ -176,7 +190,7 @@ Run Step           用户可理解的计划/阶段投影，不复制内部思考
 Tool Execution     一次版本化 Tool/MCP 调用及副作用幂等记录
 Workspace          Session 逻辑命名空间与 Session/Thread 范围短 TTL Sandbox Lease
 WorkspaceSnapshot  跨 Turn 持久化的内部工作文件与 Manifest
-BrowserControlLease 用户在当前 Session/generation 操作 Chromium 的短时控制权
+BrowserControlLease 只记录用户在当前 Session/generation 操作 Chromium 的短时 MANUAL 控制权
 AgentAttachment     用户显式授权给 Session/Turn 的输入文件
 Usage/Budget       已消费与剩余额度的业务事实
 Resource Manifest  发现的外部资源及来源验证结果
@@ -191,7 +205,8 @@ Artifact           通过平台校验并持久化的 Review 或 Agent 文件
   复用同一 Thread 并只追加新消息，完整产品历史只在 Runtime 损坏或 generation 迁移时受控重建；
 - ContextSnapshot 的消息 sequence 只是审计、对账与重建水位，不进入日常 Prompt 重放；
 - Sandbox Provider 保存临时 Workspace；其文件只有被平台显式取回、校验和提交后才成为 Artifact；
-- BrowserControlLease 只是用户画面/输入的控制权，不替代 SandboxLease。首版只在没有活动 Turn 时进入
+- BrowserControlLease 只是用户画面/输入的控制权，不替代 SandboxLease。业务表只持久化 MANUAL；没有
+  ACTIVE BrowserControlLease 即表示 Agent/idle，而不是另建 AGENT Lease。首版只在没有活动 Turn 时进入
   MANUAL，结束或过期后才能创建下一 Turn；
 - AgentAttachment、AgentArtifactCandidate 和 AgentArtifact 是平台业务事实；Sandbox 路径和
   WorkspaceSnapshot 不能作为公开下载身份；
@@ -400,8 +415,9 @@ POST /api/v1/agent-turn-runs/{run_id}/cancel
 GET  /api/v1/agent-turn-runs/{run_id}/manifest
 GET  /api/v1/agent-turn-runs/{run_id}/tool-executions
 POST /api/v1/agent-sessions/{session_id}/browser-control
+GET  /api/v1/agent-sessions/{session_id}/browser-control
 DELETE /api/v1/agent-sessions/{session_id}/browser-control
-GET  /api/v1/agent-sessions/{session_id}/browser-view
+WS   /api/v1/agent-browser-controls/view
 POST /api/v1/agent-sessions/{session_id}/attachments
 DELETE /api/v1/agent-sessions/{session_id}/attachments/{attachment_id}
 GET  /api/v1/agent-turn-runs/{run_id}/artifacts
@@ -537,8 +553,14 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
    校验、Effectively Once 提交、PNG/JPEG 图片预览与其余受支持类型下载已形成离线垂直切片。Fake Runtime
    描述符继续停留在 `STAGED`，只有真实 Tool 完成文件校验的 `VALIDATED` Candidate 能随 Turn 成功事务
    原子发布；
-3. **Browser 画面与跨 Turn 人工控制**：BrowserControlLease、镜像/画面通道、鉴权代理和右侧 UI；只用
-   Sandbox 内合成登录页验证，不开放公网；
+3. **Browser 画面与跨 Turn 人工控制（已完成）**：`BrowserControlLease` 与物理 SandboxLease 分离；
+   平台 API 只返回业务状态、短时 opaque ticket 和同源 view URL；Adapter 在 Sandbox 内以固定 websockify
+   recipe 将 `6080` WebSocket 转发到 loopback `5901` TigerVNC，再经 OpenSandbox Server Proxy 做有界
+   WebSocket↔WebSocket 转发，raw endpoint/headers 只短暂存在于 Adapter 内存。同一 Session 只允许一个人工控制权和一个活动画面连接，MANUAL 与 Turn
+   fail closed 互斥；不存在 ACTIVE 控制权即为 Agent/idle，不持久化 AGENT Lease。右栏 noVNC 组件保持
+   壳层无关。离线闭环已验证；旧 raw TCP 诊断已暴露 endpoint 语义错误，修正镜像的 RFB 链路已通过真实
+   验证；修正镜像的 Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整 Smoke 已通过。
+   该证据仅适用于未配置 API key/secure runtime 的 trusted-local 环境，公网继续关闭；
 4. **Agent 输入附件**：Session 上传、Message 引用、ContextSnapshot 冻结、`/workspace/inbox` 物化与
    Chat UI；不开放任意 Browser 文件上传；
 5. **固定能力、Project Context 与硬预算**：复用 Phase 5 Catalog/Profile，补齐固定 Tool/MCP/Skill 的
@@ -552,8 +574,9 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
    显式运行真实 arXiv 搜索/页面/PDF Smoke，并同时验证非 allowlist 目标被拒绝；
 8. **产品整合、验证与复盘**：严格遵循 `docs/spec/web-ui-app-shell-redesign.md`。若其尚未实施，先按其中
    4 个独立 UI 子切片完成 `AppSidebar`、`PageBar`、工作区空间回收和视觉 token 刷新，再整合 Turn Detail、
-   Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；随后完成关键故障/取消/重复/越权测试、小型
-   Agent 评测、Deep Agents 升级契约、本地演示运行文档、模块学习笔记和 Research Agent Extension 完成
+   Tool 摘要、来源/Manifest、Browser、附件和 Artifact UI；随后按 ADR-0009 完成本地 noVNC 真实人工
+   输入 UI E2E（人工操作结束后，下一 Turn 由同 generation Playwright MCP 观察页面状态），并完成关键
+   故障/取消/重复/越权测试、小型 Agent 评测、Deep Agents 升级契约、本地演示运行文档、模块学习笔记和 Research Agent Extension 完成
    报告。Core 数据库/Storage 的生产备份恢复不转入本阶段。
 
 ## 测试方式
@@ -562,7 +585,12 @@ Phase 6 只在这些 Spike 实际通过后按 ADR-0011 的精简范围强化，�
 - **Application**：授权 Context、Tool 执行、取消、对账、Usage 和 Event 原子性；
 - **Runtime Contract**：Deep Agents 版本升级前后运行同一契约套件；
 - **MCP**：Schema 漂移、恶意 Tool 描述/输出、超时、断连、认证失败、会话泄漏和拦截器；
-- **Browser/HTTP**：IPv4/IPv6 私网、DNS rebinding、Redirect 链、超时、大响应、错误 MIME 和 Prompt Injection Fixture；
+- **Browser/HTTP**：Slice 3 已覆盖控制权状态、owner/Session/generation/fence、重复开始/结束、过期、
+  单控制者、旧 ticket、Turn 互斥、endpoint 隐藏与有界二进制双向代理；显式设置
+  `AGENT_RUN_OPENSANDBOX_BROWSER_TESTS=1` 才运行本地合成页 Smoke，核验经 OpenSandbox Server Proxy、
+  Sandbox 内 websockify 到固定 VNC 的 RFB 握手，并关联同一 Sandbox 的 Playwright MCP 页面操作，但不将
+  其视为 noVNC 人工输入 E2E；该 ADR-0009 最终验收保留到 Slice 8，Slice 7 再覆盖 IPv4/IPv6 私网、
+  DNS rebinding、Redirect 链、超时、大响应、错误 MIME 和 Prompt Injection Fixture；
 - **Sandbox**：Session 内跨 Turn 复用与跨 owner/Session 隔离、WorkspaceSnapshot 取回/重建、模型可见
   `execute` 只能到当前 OpenSandbox、Secret/宿主路径不可见、统一网络拒绝、CPU/内存/PID/磁盘/时间/
   输出限制、取消后不启动新命令、销毁和清理补偿；
@@ -615,7 +643,8 @@ Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何�
 - 公开资源可能变化、删除或限制访问，Manifest 必须保留获取时间和来源；
 - 第三方模型、MCP 和 Sandbox Provider 会带来成本、可用性、隐私和供应商风险；
 - Prompt Injection 无法只靠分类器或 Prompt 消除，系统依赖最小权限和基础设施隔离限制后果；
-- 首版只支持同一 generation、两个 Turn 之间的人工浏览器操作；复杂同 Turn 登录流程、Cookie/Profile
+- 首版只支持同一 generation、两个 Turn 之间的人工浏览器操作；画面断线只释放连接占用，不自动结束
+  最长 5 分钟的业务控制权。API 进程重启会轮换票据并使旧票据失效；复杂同 Turn 登录流程、Cookie/Profile
   持久化、跨 generation 恢复和凭据委托不属于首版目标；
 - 多 Agent、长期 Memory、宿主执行、动态安装和通用开放网络保持关闭；只开放固定 arXiv allowlist。
   OpenSandbox `execute` 不改变 Research Agent 的领域定位，也不代表通用 Coding Agent；

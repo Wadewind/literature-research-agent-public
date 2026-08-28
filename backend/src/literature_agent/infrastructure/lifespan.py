@@ -1,5 +1,6 @@
 """FastAPI lifespan 与应用级资源管理。"""
 
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ class AppState:
     storage: Storage
     queue: RunQueue
     event_notifier: EventNotifier
+    browser_ticket_secret: bytes
 
 
 @asynccontextmanager
@@ -65,6 +67,7 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
         storage=storage,
         queue=queue,
         event_notifier=event_notifier,
+        browser_ticket_secret=secrets.token_bytes(32),
     )
     try:
         # 显式写入 app.state：lifespan 产出的映射只会进入请求 scope["state"]，

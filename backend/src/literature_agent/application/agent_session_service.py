@@ -9,6 +9,7 @@ from typing import TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
 from literature_agent.application.ports.agent_repository import AgentRepository
+from literature_agent.application.ports.browser_control_repository import BrowserControlRepository
 from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
 from literature_agent.application.ports.claim_set_repository import ClaimSetRepository
 from literature_agent.application.ports.event_notifier import EventNotifier, NoopEventNotifier
@@ -30,6 +31,7 @@ from literature_agent.application.ports.skill_repository import SkillRepository
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import (
+    AgentBrowserControlBusyError,
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
     AgentSessionNotFoundError,
@@ -135,6 +137,7 @@ class AgentSessionService[TSession: Session]:
         skill_repo_factory: Callable[[TSession], SkillRepository] | None = None,
         platform_skills: tuple[SkillVersion, ...] = (),
         event_notifier: EventNotifier | None = None,
+        browser_control_repo_factory: Callable[[TSession], BrowserControlRepository],
     ) -> None:
         self._session_factory = session_factory
         self._project_repo_factory = project_repo_factory
@@ -154,6 +157,7 @@ class AgentSessionService[TSession: Session]:
         self._skill_repo_factory = skill_repo_factory
         self._platform_skills = platform_skills
         self._event_notifier = event_notifier or NoopEventNotifier()
+        self._browser_control_repo_factory = browser_control_repo_factory
 
     async def create_session(
         self, actor: ActorContext, project_id: str, *, title: str | None
@@ -326,6 +330,11 @@ class AgentSessionService[TSession: Session]:
                 raise ProjectNotFoundError(agent_session.project_id)
             if project.is_archived:
                 raise ProjectArchivedError(project.project_id)
+            browser_control = await self._browser_control_repo_factory(
+                session
+            ).get_current_for_update(session_id)
+            if browser_control is not None and browser_control.blocks_turn:
+                raise AgentBrowserControlBusyError(session_id)
             if agent_session.active_turn_run_id is not None:
                 active = await self._run_repo_factory(session).get_by_id(
                     agent_session.active_turn_run_id

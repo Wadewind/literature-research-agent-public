@@ -24,6 +24,9 @@ const BUSINESS_ERROR_MESSAGES: Record<string, string> = {
   agent_session_not_found: "研究会话不存在或无权访问",
   agent_turn_not_found: "研究 Turn 不存在或无权访问",
   agent_session_busy: "当前会话已有研究任务在执行，请等待完成或先停止本轮",
+  agent_browser_control_active: "请先在浏览器面板完成或结束人工操作",
+  browser_control_not_found: "浏览器控制已结束、过期或无权访问",
+  browser_control_unavailable: "当前会话没有可接管的浏览器，或浏览器正被其他视图控制",
   review_output_not_found: "所选 Evidence Matrix 不存在或不属于当前项目",
   mcp_profile_revision_conflict: "研究能力配置已变化，请刷新后重新选择",
   mcp_profile_invalid: "研究能力配置无效，请检查所填参数",
@@ -60,6 +63,12 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 /** 正式 Artifact 内容地址；Candidate 没有可下载 URL。 */
 export function agentArtifactContentUrl(artifactId: string): string {
   return `/api/v1/agent-artifacts/${encodeURIComponent(artifactId)}/content`;
+}
+
+/** noVNC 只连接平台同源 WebSocket，不接收 Provider endpoint。 */
+export function browserControlWebSocketUrl(viewPath: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${viewPath}`;
 }
 
 /** 把错误映射为面向用户的可见提示。 */

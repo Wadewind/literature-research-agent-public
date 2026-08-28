@@ -22,10 +22,6 @@ RUN apt-get update \
     && /opt/research-agent-venv/bin/pip install --no-cache-dir \
         --require-hashes \
         -r /tmp/requirements-mcp.lock \
-    && /opt/research-agent-venv/bin/pip install --no-cache-dir \
-        matplotlib==3.10.6 \
-        numpy==2.3.3 \
-        pandas==2.3.2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -34,6 +30,7 @@ COPY --from=playwright-mcp \
     /opt/research-agent-mcp-node/node_modules \
     /opt/research-agent-mcp-node/node_modules
 COPY --chmod=0755 start-mcp-service /opt/research-agent/start-mcp-service
+COPY --chmod=0755 start-browser-proxy /opt/research-agent/start-browser-proxy
 
 ENV PATH="/opt/research-agent-venv/bin:${PATH}" \
     HOME="/home/chrome" \

@@ -1,6 +1,6 @@
 # Research Agent 精简安全契约
 
-> 状态：Phase 6 Slice 1–2 已确认；Slice 3–8 的实施契约。
+> 状态：Phase 6 Slice 1–3 已确认；Slice 4–8 的实施契约。
 >
 > 基线：`b0ec3f4`（2026-08-28）。本文把已经由 Phase 5 代码/测试证明的事实与 Phase 6 目标事实分开；
 > “目标”“必须”“验收”不表示对应能力已经实现或经过真实环境验证。
@@ -38,19 +38,21 @@
 | Workspace | `WorkspaceSnapshot` 有 `STAGED/STABLE`，只允许 STABLE 恢复；上限为 128 个文件、单文件 10 MiB、总计 50 MiB；内容在 Storage，元数据在 PostgreSQL |
 | MCP/Skill | 固定 MCP Catalog/Profile、Tool 名称与 Schema hash、owner/Session 选择、调用拦截与 `ToolExecution` 已存在；平台 Skill 与 owner-scoped 声明式 Skill 使用不可变版本/hash 和只读 `/skills/` Backend |
 | Browser Spike | 固定 Playwright MCP 能连接同一 Sandbox Chromium，在禁网环境操作合成页面并下载到同一 Workspace；未提供面向用户的画面或控制权 |
+| Browser 人工控制 | 独立 BrowserControlLease、Turn 边界互斥、短时票据、固定 Server Proxy/websockify 平台代理和 noVNC 右栏组件已完成离线闭环；修正镜像的 RFB 与同一 Sandbox Playwright 合成页完整 trusted-local Smoke 已通过 |
 | Agent Artifact | `AgentArtifactCandidate` 已实现 `STAGED → VALIDATED → COMMITTED` 与 `STAGED → REJECTED`；独立不可变 `AgentArtifact` 只由 Turn 成功事务发布。真实 Sandbox Turn 固定装配 `submit_artifact`，Fake Runtime 描述符仍只停留在 `STAGED`；单文件上限为 10 MiB |
 | API/Event | 已有 Session/Message/Turn、MCP/Skill 配置和通用 Run cancel/Event API；Event 只保存筛选后的 Agent/Tool 生命周期摘要 |
 
-这些事实不证明 OpenSandbox 是生产级隔离，不证明统一 egress、真实 arXiv、公共下载、noVNC、正式
-附件、浏览器人工控制或完整硬预算已经实现。Slice 2 的正式 Agent Artifact 是本地受限交付能力，不是
-生产级恶意文件扫描结论。
+这些事实不证明 OpenSandbox 是生产级隔离，不证明统一 egress、真实 arXiv、公共下载、正式附件或完整
+硬预算已经实现。Slice 2 的正式 Agent Artifact 是本地受限交付能力，不是生产级恶意文件扫描结论；
+Slice 3 的真实 Smoke 只证明未配置 API key/secure runtime 的 trusted-local OpenSandbox 功能链路，不是
+noVNC 人工键鼠 UI E2E、通用认证或公网安全代理结论。
 
 ### 2.2 Phase 6 目标与责任切片
 
 | 尚缺目标 | 责任切片 |
 |---|---|
 | 独立 `AgentArtifact`、Candidate 完整生命周期、`submit_artifact`、预览和下载 | Slice 2（已完成） |
-| `BrowserControlLease`、鉴权画面代理、跨 Turn 人工控制和合成登录页验收 | Slice 3 |
+| `BrowserControlLease`、鉴权画面代理和跨 Turn 人工控制 | Slice 3（已完成；trusted-local RFB/同 Sandbox Playwright 合成页 Smoke 已通过；noVNC 人工输入 UI E2E 留到 Slice 8） |
 | `AgentAttachment`、上传/删除、消息引用、ContextSnapshot 冻结与 `/workspace/inbox` 物化 | Slice 4 |
 | 固定能力 Schema/hash 漂移拒绝、完整调用前 scope 检查、脱敏 Tool 摘要和硬预算 | Slice 5 |
 | 实测资源限制、TTL/清理补偿、Workspace 重建与覆盖全部 Sandbox 进程的 default-deny egress | Slice 6 |
@@ -70,7 +72,7 @@
             ├─ SDK Thread binding（opaque，Runtime 内部）
             ├─ Logical Workspace（业务命名空间）
             ├─ SandboxLease generation/fence（物理环境）
-            ├─ BrowserControlLease（当前 generation 的人工控制权，Slice 3）
+            ├─ BrowserControlLease（当前 generation 的人工控制权）
             ├─ AgentAttachment（输入，Slice 4）
             └─ AgentTurnRun.turn_run_id
                  ├─ User/Assistant AgentMessage
@@ -98,14 +100,14 @@
 
 | 区域 | 信任级别 | 可以持有 | 不得成为唯一事实来源 |
 |---|---|---|---|
-| PostgreSQL 业务层 | 业务事实来源 | 当前已有 owner/Project、Session/Message/Run、Context/Policy/Workspace Snapshot、Event、ToolExecution、Review Artifact、Candidate 生命周期与独立 AgentArtifact；Slice 3/4/5 后分别增加 BrowserControlLease、AgentAttachment 和 Agent 硬预算/Usage 事实 | SDK 对话状态、物理 Sandbox 文件 |
+| PostgreSQL 业务层 | 业务事实来源 | 当前已有 owner/Project、Session/Message/Run、Context/Policy/Workspace Snapshot、Event、ToolExecution、Review Artifact、Candidate 生命周期、独立 AgentArtifact 与 BrowserControlLease；Slice 4/5 后增加 AgentAttachment 和 Agent 硬预算/Usage 事实 | SDK 对话状态、物理 Sandbox 文件 |
 | API/Application | 可信策略执行者 | ActorContext、授权闭包、短事务和安全 DTO | 模型自行声明的 owner/Project/权限 |
 | ARQ Worker/Runtime Adapter | 受信代码、外部结果不可信 | Provider Secret 的最小使用、opaque binding、SDK client | Runtime 成功不能直接等于业务成功 |
 | Deep Agents/LangGraph | Runtime 内部状态 | Message、摘要、Checkpoint、内部文件卸载 | 业务权限、Run/Event、正式 Artifact |
 | Session OpenSandbox | 不可信执行区 | 当前 generation 的 Workspace、Chromium、固定 MCP 进程和 `execute` | Secret、宿主路径、业务所有权、正式文件 |
 | MCP/Browser/网页/arXiv | 外部不可信 | 有界响应和公开内容 | Tool 描述、网页文本或 Redirect 不能扩大策略 |
 | Storage | 不可信字节存储、受信 Adapter 寻址 | 当前已有 WorkspaceSnapshot/Review Artifact 与 Agent Artifact staging 内容寻址 blob；Slice 4 后增加 Attachment 内容 | 元数据授权与业务可见性 |
-| Web UI | 不可信客户端 | 当前已有业务 ID/公开 DTO；Slice 3 后增加短时 Browser view ticket | owner、raw endpoint、Sandbox path、策略配置 |
+| Web UI | 不可信客户端 | 当前已有业务 ID/公开 DTO与只驻留内存的短时 Browser view ticket | owner、raw endpoint、Sandbox path、策略配置 |
 
 ## 4. 威胁模型
 
@@ -141,7 +143,7 @@ DNS 结果、下载文件名/MIME/字节、Sandbox 生成文件和迟到的 Prov
 | MCP/Skill | Schema 漂移、供应链替换、Prompt Injection、Secret 泄漏 | 固定 Catalog/version/hash、allowlist 投影、只读 Skill、调用前策略复核 |
 | Sandbox `execute` | 宿主逃逸、资源耗尽、网络绕过、读取 Secret、生成危险文件 | 非 root 固定镜像、无宿主挂载、资源上限、统一 egress、显式文件提交 |
 | Browser/URL | SSRF、DNS rebinding、Redirect 到私网、下载炸弹、凭据外泄 | 精确 arXiv allowlist、连接目标绑定、每跳复核、隔离下载和文件策略 |
-| Browser 人工控制（Slice 3 目标） | 跨 Session 画面、旧 generation 控制、人/Agent 竞争、凭据落库 | BrowserControlLease、短时代理票据、generation/fence、Turn 边界互斥 |
+| Browser 人工控制 | 跨 Session 画面、旧 generation 控制、人/Agent 竞争、凭据落库 | BrowserControlLease、短时代理票据、generation/fence、Turn 边界互斥 |
 | Attachment/Artifact（Artifact 已实现；Attachment 为 Slice 4 目标） | 路径穿越、symlink、MIME 欺骗、越权下载、重复发布 | opaque ID/path、regular-file 校验、magic/hash/大小、staging 和成功 CAS |
 | 重试/恢复 | 同一消息重复追加、重复 Tool/Artifact、旧 Worker 晚到提交 | reconcile-first、稳定 binding/effect/candidate ID、唯一约束、fence/CAS |
 | Event/日志/Trace | Prompt、全文、Secret、endpoint 或大输出泄漏 | 字段白名单、hash/计数/安全摘要、大小限制和诊断信息分层 |
@@ -152,7 +154,7 @@ DNS 结果、下载文件名/MIME/字节、Sandbox 生成文件和迟到的 Prov
 
 ```text
 短事务：验证 owner/Project/Session/ReviewOutput/ChunkSet/配置
-  → 锁 Session 并确认没有活动 Turn；Slice 3 完成后同时确认没有人工 Browser 控制
+  → 锁 Session 并确认没有活动 Turn和人工 Browser 控制
   → 创建 User Message、Run、ContextSnapshot、PolicySnapshot、Event、Outbox
   → 提交
 Worker：事务外 resolve Runtime/MCP/Skill/Sandbox/Attachment
@@ -193,7 +195,7 @@ Infrastructure 约束必须同时允许，任一层不匹配即 fail closed。
 | Sandbox 离线 `execute` 与固定依赖绘图 | 自动执行 | 当前 Lease generation/fence、禁网、取消/预算预检、资源上限、无动态安装 |
 | 受支持类型的新 Agent Artifact | 自动执行 | 当前 Project/Turn、显式 `/workspace/outputs/` 路径、校验、不可变新 ID、Turn 成功 |
 | 用户通过 Attachment ID 提供受支持输入 | 自动执行（Slice 4 后） | 当前 owner/Project/Session、ContextSnapshot 冻结、受控 inbox 路径和文件校验 |
-| 用户在两个 Turn 之间控制当前 Chromium | 自动执行（Slice 3 后） | 无活动 Turn、健康且 generation 一致的 Lease、短 TTL 控制权、无原始 endpoint |
+| 用户在两个 Turn 之间控制当前 Chromium | 自动执行 | 无活动 Turn、健康且 generation 一致的 Lease、短 TTL 控制权、无原始 endpoint |
 | 平台或 Agent 持有/注入用户名、密码、Cookie、验证码、OAuth Token | 直接拒绝 | 不进入 Approval |
 | 表单提交、发帖、发送消息、上传到外站、修改远程资源、购买/发布 | 直接拒绝 | 不进入 Approval |
 | arXiv 精确 allowlist 外的网络、用户/MCP/网页动态增加主机 | 直接拒绝 | 不以用户确认放宽 |
@@ -233,7 +235,7 @@ SDK Thread/Checkpoint、Sandbox、Workspace、raw MCP 配置、网络策略或 f
 | Slice | 目标 API | 必须保持的授权/隐藏边界 |
 |---|---|---|
 | 2（已实现） | `GET /api/v1/agent-turn-runs/{run_id}/artifacts`；`GET /api/v1/agent-artifacts/{artifact_id}/content` | 每次 owner/Project/Session/Turn 授权；Candidate 不可下载；不返回 storage key/Sandbox path |
-| 3 | `POST/DELETE /api/v1/agent-sessions/{session_id}/browser-control`；`GET /api/v1/agent-sessions/{session_id}/browser-view` | 返回短时受控 view/ticket，不返回 VNC/noVNC/CDP/MCP/OpenSandbox endpoint |
+| 3（已实现） | `POST/GET/DELETE /api/v1/agent-sessions/{session_id}/browser-control`；`WS /api/v1/agent-browser-controls/view` | HTTP 开始/查询/结束只使用业务 Session ID；仅开始返回短时 ticket 和平台 view URL；WS 用 subprotocol 传 ticket；不返回 VNC/noVNC/CDP/MCP/OpenSandbox endpoint |
 | 4 | `POST /api/v1/agent-sessions/{session_id}/attachments`；删除未绑定附件；Message 增加有界 attachment ID 引用 | owner 来自 ActorContext；不接受物理路径；已被历史 Turn 引用的输入不可篡改 |
 | 5 | `GET /api/v1/agent-turn-runs/{run_id}/tool-executions`，必要的预算/Usage 投影 | 仅安全摘要、版本/hash、计数、状态/时长；不返回原始参数/结果/endpoint |
 | 7 | `GET /api/v1/agent-turn-runs/{run_id}/manifest` | 只返回规范化来源元数据和验证状态，不返回网页/PDF 全文或内部请求凭据 |
@@ -248,7 +250,8 @@ SDK 类型继续停留在 infrastructure。
 
 当前 Agent/Application 已产生 `agent_message_accepted`、`agent_runtime_bound`、`agent_turn_succeeded`、
 `agent_turn_cancelled`、`agent_artifact_staged`、`agent_artifact_validated`、`agent_artifact_committed` 和
-`agent_artifact_rejected`。Tool 事件按现有两条实现链路区分：
+`agent_artifact_rejected`，以及 `agent_browser_control_started`、`agent_browser_control_ended`、
+`agent_browser_control_expired`。Tool 事件按现有两条实现链路区分：
 
 - Project Context Tool 当前产生 `agent_tool_started`、`agent_tool_succeeded`、`agent_tool_failed`；
 - MCP `ToolExecution` 当前产生 `agent_tool_started`、`agent_tool_completed`、`agent_tool_failed`；
@@ -262,7 +265,7 @@ SDK 类型继续停留在 infrastructure。
 | Slice | 允许新增的业务事件 |
 |---|---|
 | 2（已实现） | `agent_artifact_validated`、`agent_artifact_committed`、`agent_artifact_rejected` |
-| 3 | `agent_browser_control_started`、`agent_browser_control_ended`、`agent_browser_control_expired` |
+| 3（已实现） | `agent_browser_control_started`、`agent_browser_control_ended`、`agent_browser_control_expired` |
 | 4 | `agent_attachment_added`，必要时增加删除/拒绝摘要事件 |
 | 5 | `agent_budget_updated`、`agent_tool_rejected`、`agent_policy_violation`、有界 Step 状态 |
 | 6 | `agent_workspace_created`、`agent_workspace_cleanup_requested`、`agent_workspace_cleaned` 及安全清理失败摘要 |
@@ -320,7 +323,8 @@ Artifact 或业务成功。
 | Artifact blob 已 staging、Candidate/业务失败 | blob 不可下载，稳定 key 可重用，后续 GC |
 | Artifact validated、Turn 成功 CAS 失败 | 不发布正式 Artifact；晚到处理不得覆盖 Run 终态 |
 | Sandbox create 成功、Lease CAS 失败 | loser 只回收自己的候选 Sandbox；不得销毁 winner 当前 Lease |
-| Browser view 断线/过期 | 控制权回到稳定非 MANUAL 状态；旧 ticket 失效，不改变 Browser 内容事实 |
+| Browser view 断线 | 只释放 viewer connection；MANUAL Lease 保持 ACTIVE 并允许 TTL 内使用当前 ticket 重连，不改变 Browser 内容事实 |
+| Browser control 显式结束、TTL 到期或 generation/fence 失效 | 控制权收敛到非 MANUAL；旧 ticket 按对应 revision/TTL/generation/fence 边界失效，不改变 Browser 内容事实 |
 
 ## 10. 后续切片安全门槛
 
@@ -334,11 +338,34 @@ Artifact 或业务成功。
   symlink/device 检查与传输后 size/hash 复核不构成无 TOCTOU 竞争的生产级恶意文件扫描；孤儿 staging GC
   与总量配额后移。
 
-### Slice 3：Browser 画面与人工控制
+### Slice 3：Browser 画面与人工控制（已完成）
 
-- 先冻结 `BrowserControlLease` 状态、单控制者、活动 Turn 冲突、TTL、generation 和票据失效；
-- 不暴露 raw endpoint，不保存凭据、Cookie、页面、点击或按键；
-- 自动测试使用合成页面和 Fake/本地画面通道；显式真实 Sandbox 验证同一 Chromium，不开放公网。
+- PostgreSQL `BrowserControlLease` 独立于物理 SandboxLease，绑定 owner/Project/Session、anchor Turn、
+  generation/fencing token、单调 revision、最长 5 分钟 TTL、ticket digest 和终态原因；每个 Session 由
+  部分唯一约束限制一个 ACTIVE 控制权。该表只持久化 MANUAL；不存在 ACTIVE 记录即表示 Agent/idle，
+  不创建 AGENT Lease；
+- 开始控制必须已有 ACTIVE 且未过期的当前 Sandbox Lease，并且没有活动 Turn；打开画面不会创建、续租或
+  轮换 Sandbox。ACTIVE 控制即使墙钟已过期但尚未 reconcile，也会阻止新 Turn；结束、过期和重复开始均
+  幂等收敛；
+- HTTP 只返回业务状态、短时 opaque ticket 和平台 view URL。ticket 通过 WebSocket subprotocol 传输，
+  数据库只保存 SHA-256 digest；旧 ticket、终态、TTL、generation/fence、revision 或当前连接不匹配时
+  fail closed；API 进程签名 key 变化会先终结旧控制权再发布新 revision。当前 WebSocket 从应用配置的
+  `dev_actor_id` 构造本地 actor，再结合 bearer ticket 校验 owner/Session，仅证明单用户本地边界；尚未
+  实现或验证通用认证上下文；
+- Adapter 在数据库事务外启动 Sandbox 内固定 websockify recipe（`6080` WebSocket → loopback `5901`
+  TigerVNC），再解析 OpenSandbox Server Proxy 的 `ws/wss` endpoint 与必需 headers，进行有帧大小、单向
+  总量、idle、连接、总时长和周期 fence 边界的 WebSocket↔WebSocket 二进制转发。raw endpoint、VNC 数据、按键、页面、
+  Cookie 和凭据不进入 DTO、数据库、Event 或日志；断线只释放单连接占用，不自动结束业务控制权；
+- Web 使用精确版本 noVNC `1.7.0` 的动态 import，ticket 只进入 React 内存和 WebSocket subprotocol，不写
+  URL、localStorage/sessionStorage 或日志。右栏显示 Agent/Manual、连接、断线、过期和旧 generation，
+  组件不依赖待替换的全局壳层；
+- 离线 Fake 通道、PostgreSQL 约束/并发和 Web 状态测试已通过。旧镜像诊断确认 Sandbox 内 TigerVNC
+  1.15.0/RFB 可用，同时证明旧 `5901` OpenSandbox endpoint 指向 HTTP egress sidecar，不能直连 raw TCP；
+  因此固定镜像 recipe 新增 websockify 0.13.0。仓库包含默认跳过、由
+  `AGENT_RUN_OPENSANDBOX_BROWSER_TESTS=1` 显式启用的本地 OpenSandbox 合成页 Smoke，用于经 Server
+  Proxy/websockify 的 RFB 握手与同一 Sandbox Playwright MCP 关联验证。修正镜像已重建，完整 Smoke
+  `5 passed in 13.06s`；前三次失败形成 endpoint、代理和 readiness/Fixture 回归测试。该 trusted-local
+  证据不覆盖 noVNC 人工键鼠 E2E、通用认证、API key/secure runtime、公网或跨 generation 登录恢复。
 
 ### Slice 4：Agent 输入附件
 
@@ -374,6 +401,8 @@ Artifact 或业务成功。
 - 故障、取消、响应丢失、重复、跨 owner/Project/Session/generation、Prompt Injection 和预算 E2E 必须覆盖；
 - UI 只消费平台业务 API，不直连 LangGraph Deployment/Thread State 或 Provider endpoint；
 - 真实 Provider、OpenSandbox、arXiv Smoke 显式启用并记录精确版本、预算、耗时、结果与限制；
+- 按 ADR-0009 完成本地 noVNC 真实人工输入 UI E2E：人在画面中操作后结束 MANUAL，下一 Turn 由同一
+  generation 的 Playwright MCP 观察该页面状态；该验收不能由 Slice 3 的协议/RFB/合成页工具 Smoke 替代；
 - 完成报告逐条区分离线证据、真实功能证据和未验证安全声明。
 
 ## 11. UI 强制契约

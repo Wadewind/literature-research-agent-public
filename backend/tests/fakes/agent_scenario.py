@@ -25,6 +25,9 @@ from literature_agent.domain.skill_configuration import SkillVersion
 from literature_agent.infrastructure.persistence.agent_repository import (
     SqlalchemyAgentRepository,
 )
+from literature_agent.infrastructure.persistence.browser_control_repository import (
+    SqlalchemyBrowserControlRepository,
+)
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
@@ -161,4 +164,5 @@ def make_agent_service(
         mcp_catalog=mcp_catalog,
         skill_repo_factory=SqlalchemySkillRepository,
         platform_skills=platform_skills,
+        browser_control_repo_factory=SqlalchemyBrowserControlRepository,
     )

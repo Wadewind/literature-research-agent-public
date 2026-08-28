@@ -75,6 +75,16 @@
 > 仅在 Turn 成功事务中发布独立不可变 AgentArtifact；Fake descriptor 不会伪造下载资源。公开 API 按
 > owner/Project/Session/Turn 闭包列出并校验下载内容，Web 仅预览 PNG/JPEG，其余受支持类型默认下载；
 > 固定 Tool/Policy 与 graph revision 分别提升到 v2/`deep-agent-graph.v6`，拒绝按旧能力契约恢复。
+>
+> v17 变更：Phase 6 Slice 3 完成 Browser 画面与跨 Turn 人工控制。平台以独立
+> `BrowserControlLease` 固定 owner/Project/Session 与 Sandbox generation/fence，MANUAL 与 Agent Turn
+> 互斥；业务 Lease 只持久化 MANUAL，不存在 ACTIVE 记录即为 Agent/idle。Web 通过短时 opaque ticket 和
+> 平台 WebSocket 使用 noVNC 1.7.0；Adapter 在事务外经 OpenSandbox Server Proxy 连接 Sandbox 内固定
+> websockify `6080`，再转发到 loopback TigerVNC `5901`，raw endpoint/headers 只短暂存在于 Adapter
+> 内存。断线可在控制权 TTL 内重连，不保存凭据或跨 generation Chrome Profile。旧 raw TCP endpoint 的
+> 诊断失败已修正，修正镜像已重建；Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
+> Smoke 已通过。该证据仅为未配置 API key/secure runtime 的 trusted-local 功能验证，不代表 noVNC 人工
+> 键鼠 UI E2E、通用认证、公网安全或跨 generation 登录恢复。
 
 ## 1. 文档用途
 
@@ -1112,6 +1122,12 @@ generation 鉴权代理提供短时人工控制；成果区通过 AgentArtifact 
 提供 Attachment ID 上传。Web 不接收原始 Sandbox 路径，也不看到 VNC/noVNC/CDP/MCP/OpenSandbox
 endpoint；WorkspaceSnapshot 仍不是文件管理器或下载列表。Slice 2 的成果组件只消费正式 AgentArtifact
 API，PNG/JPEG 可预览，其他类型展示安全元数据与下载入口；Candidate 只作为内部状态摘要且不可下载。
+Browser 首版只在两个 Turn 之间接管已有 Session Sandbox，不因查看画面创建或轮换 Sandbox。一个 Session
+同时只有一个 ACTIVE `BrowserControlLease` 和一个画面连接；ticket 不进入 URL 或浏览器持久存储，后端只
+保存 digest；没有 ACTIVE 控制权时即为 Agent/idle，不持久化 AGENT Lease。后端在事务外经固定
+websockify recipe 与 OpenSandbox Server Proxy 把 loopback VNC `5901` 桥接到平台 WebSocket，设置连接、idle、帧、总量、
+总时长和周期 fence 边界。WebSocket 断线不等于业务控制结束，用户可在短 TTL 内刷新重连；结束后下一
+Turn 继续复用同一 generation 的 Chromium。
 
 Run Detail 是核心页面，应展示：
 
@@ -1580,7 +1596,7 @@ Checkpointer、Project Context 与 RuntimeExecution control；真实模式缺少
 本切片尚未执行真实 Provider Smoke。切片 7.1 随后已实现 OpenSandbox/Lease/WorkspaceSnapshot 的
 SDK-neutral 边界、统一 Tool 预算与每 operation Saver/graph。ADR-0008 已将后续调整为 MCP 配置基础、
 同 Sandbox Playwright MCP/现有 Search MCP 和 Deep Agents 原生 Skills；不再自研 Browser Tool 或 MCP
-Server。真实 OpenSandbox Smoke 仍未运行。
+Server。该切片完成时真实 OpenSandbox Smoke 仍未运行。
 Slice 7.3 已进一步完成固定 Playwright/arXiv MCP 的生产 Catalog、Sandbox recipe 与 Worker resolver，
 并在无网络派生容器验证同 Chromium 合成页面和 Workspace 下载。由于开发环境没有运行 OpenSandbox
 server，opaque endpoint/header 与代理 Host 语义仍是显式 Smoke 门槛；该证据不扩张为公共浏览、真实

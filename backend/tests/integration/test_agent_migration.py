@@ -11,6 +11,7 @@ from testcontainers.community.postgres import PostgresContainer
 from literature_agent.infrastructure.persistence.models import (
     AgentArtifactCandidateORM,
     AgentArtifactORM,
+    AgentBrowserControlLeaseORM,
     AgentContextSnapshotORM,
     AgentMcpProfileORM,
     AgentOwnerSkillORM,
@@ -119,6 +120,43 @@ def test_sandbox_workspace_tables_reference_business_scope() -> None:
     }
 
 
+def test_browser_control_is_session_scoped_and_never_stores_raw_endpoint_or_ticket() -> None:
+    targets = {
+        foreign_key.target_fullname
+        for foreign_key in AgentBrowserControlLeaseORM.__table__.foreign_keys
+    }
+    assert targets == {
+        "agent_sessions.session_id",
+        "agent_turn_runs.turn_run_id",
+        "projects.project_id",
+    }
+    columns = set(AgentBrowserControlLeaseORM.__table__.columns.keys())
+    assert {
+        "sandbox_generation",
+        "sandbox_fencing_token",
+        "revision",
+        "ticket_digest",
+        "viewer_connection_id",
+        "expires_at",
+    } <= columns
+    assert {
+        "ticket",
+        "sandbox_id",
+        "endpoint",
+        "vnc_url",
+        "cdp_url",
+    }.isdisjoint(columns)
+    assert {
+        constraint.name
+        for constraint in AgentBrowserControlLeaseORM.__table__.constraints
+    } >= {
+        "ck_browser_control_status",
+        "ck_browser_control_state_fields",
+        "ck_browser_control_ttl",
+        "uq_agent_browser_control_session_revision",
+    }
+
+
 def test_mcp_profile_and_policy_snapshot_remain_sdk_neutral() -> None:
     """MCP Profile 隔离到 Session，逐 Turn Policy 只保存冻结引用。"""
     targets = {
@@ -217,6 +255,13 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
             finally:
                 engine.dispose()
 
+        def has_browser_table() -> bool:
+            engine = create_engine(url)
+            try:
+                return inspect(engine).has_table("agent_browser_control_leases")
+            finally:
+                engine.dispose()
+
         run_alembic("upgrade", "head")
         state_check = candidate_checks()["ck_agent_candidate_state_fields"]
         assert all(
@@ -225,8 +270,11 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         )
         assert "sandbox_generation > 0" in state_check
         assert "sandbox_fencing_token > 0" in state_check
+        assert has_browser_table()
         run_alembic("downgrade", "-1")
-        assert "ck_agent_candidate_state_fields" not in candidate_checks()
+        assert not has_browser_table()
+        assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("upgrade", "head")
+        assert has_browser_table()
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("check")

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from deepagents.backends.protocol import (
     ExecuteResponse,
@@ -27,10 +27,19 @@ from literature_agent.domain.workspace_snapshot import is_workspace_file_path
 
 _PLATFORM_MCP_SERVICES = frozenset({"playwright", "arxiv-search"})
 _PLATFORM_MCP_PORTS = frozenset({8931, 8932})
+_PLATFORM_BROWSER_PROXY_PORT = 6080
 _MCP_ALLOWED_HOST = re.compile(r"^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
 # OpenSandbox API 以十进制整数承载 chmod 的八进制数字，而不是 Python 位掩码值。
 _WORKSPACE_DIRECTORY_MODE = 700
 _WORKSPACE_FILE_MODE = 600
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserWebSocketEndpoint:
+    """仅在 Infrastructure 内短暂传递的 OpenSandbox 私有画面 endpoint。"""
+
+    url: str
+    headers: dict[str, str]
 
 
 class OpenSandboxBackend(BaseSandbox):
@@ -174,6 +183,59 @@ class OpenSandboxBackend(BaseSandbox):
         if execution.exit_code != 0:
             raise RuntimeError("Sandbox MCP Service 启动失败")
 
+    def prepare_browser_proxy(self) -> None:
+        """幂等启动固定 6080→5901 websockify，不接受调用方配置。"""
+        execution = self._sandbox.commands.run(
+            "/opt/research-agent/start-browser-proxy",
+            opts=RunCommandOpts(
+                working_directory="/workspace",
+                timeout=timedelta(seconds=30),
+            ),
+        )
+        if execution.exit_code != 0:
+            raise RuntimeError("Sandbox Browser proxy 启动失败")
+
+    def get_browser_websocket_endpoint(
+        self, port: int = _PLATFORM_BROWSER_PROXY_PORT
+    ) -> BrowserWebSocketEndpoint:
+        """解析固定 websockify server-proxy endpoint；不得持久化或输出。"""
+        if port != _PLATFORM_BROWSER_PROXY_PORT:
+            raise ValueError("Browser 端口未在固定镜像中注册")
+        endpoint = self._sandbox.get_endpoint(port)
+        endpoint_url = self._normalize_endpoint(str(endpoint.endpoint))
+        parts = urlsplit(endpoint_url)
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+            or bool(parts.fragment)
+        ):
+            raise ValueError("OpenSandbox Browser endpoint 非法")
+        headers: dict[str, str] = {}
+        for key, value in dict(endpoint.headers).items():
+            normalized_key = str(key)
+            normalized_value = str(value)
+            if (
+                not normalized_key
+                or "\r" in normalized_key
+                or "\n" in normalized_key
+                or "\r" in normalized_value
+                or "\n" in normalized_value
+            ):
+                raise ValueError("OpenSandbox Browser endpoint header 非法")
+            headers[normalized_key] = normalized_value
+        websocket_url = urlunsplit(
+            (
+                "wss" if parts.scheme == "https" else "ws",
+                parts.netloc,
+                parts.path,
+                parts.query,
+                "",
+            )
+        )
+        return BrowserWebSocketEndpoint(websocket_url, headers)
+
     def get_mcp_endpoint(self, port: int) -> tuple[str, dict[str, str], str]:
         """解析当前 Sandbox generation 的私有 endpoint；调用者不得持久化。"""
         if port not in _PLATFORM_MCP_PORTS:
@@ -302,3 +364,22 @@ class OpenSandboxProvider:
             skip_health_check=True,
         )
         await asyncio.to_thread(sandbox.destroy)
+
+    async def get_browser_websocket_target(
+        self,
+        sandbox_id: str,
+        *,
+        port: int = _PLATFORM_BROWSER_PROXY_PORT,
+    ) -> BrowserWebSocketEndpoint:
+        """在既有 Sandbox 启动固定 proxy，并解析带 Provider header 的 WS endpoint。"""
+        if port != _PLATFORM_BROWSER_PROXY_PORT:
+            raise ValueError("Browser 端口未在固定镜像中注册")
+        backend = await self.connect(sandbox_id)
+        try:
+            await asyncio.to_thread(backend.prepare_browser_proxy)
+            return await asyncio.to_thread(
+                backend.get_browser_websocket_endpoint,
+                port,
+            )
+        finally:
+            await asyncio.to_thread(backend.close)

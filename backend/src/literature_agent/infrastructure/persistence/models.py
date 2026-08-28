@@ -382,6 +382,67 @@ class AgentSandboxLeaseORM(Base):
     )
 
 
+class AgentBrowserControlLeaseORM(Base):
+    """用户在一个 Session/generation 上的短时浏览器人工控制事实。"""
+
+    __tablename__ = "agent_browser_control_leases"
+    control_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id"), index=True, nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.session_id"), index=True, nullable=False
+    )
+    anchor_turn_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_turn_runs.turn_run_id"), nullable=False
+    )
+    sandbox_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    sandbox_fencing_token: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticket_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    viewer_connection_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "revision", name="uq_agent_browser_control_session_revision"
+        ),
+        CheckConstraint("sandbox_generation >= 1", name="ck_browser_control_generation"),
+        CheckConstraint(
+            "sandbox_fencing_token >= 1", name="ck_browser_control_fence"
+        ),
+        CheckConstraint("revision >= 1", name="ck_browser_control_revision"),
+        CheckConstraint("mode = 'manual'", name="ck_browser_control_mode"),
+        CheckConstraint(
+            "status IN ('active','ended','expired')", name="ck_browser_control_status"
+        ),
+        CheckConstraint(
+            "started_at < expires_at AND "
+            "expires_at <= started_at + interval '5 minutes'",
+            name="ck_browser_control_ttl",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND ended_at IS NULL AND end_reason IS NULL) OR "
+            "(status IN ('ended','expired') AND ended_at IS NOT NULL "
+            "AND end_reason IS NOT NULL AND viewer_connection_id IS NULL)",
+            name="ck_browser_control_state_fields",
+        ),
+        Index(
+            "uq_agent_browser_control_active_session",
+            "session_id",
+            unique=True,
+            postgresql_where=status == "active",
+        ),
+    )
+
+
 class AgentWorkspaceSnapshotORM(Base):
     """跨 Turn 可重建的内部工作文件 Manifest；正文位于 Storage。"""
 

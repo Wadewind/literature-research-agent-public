@@ -472,6 +472,21 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .agent-evidence-margin { height: 100%; min-height: 0; padding: 20px; overflow-y: auto; overscroll-behavior: contain; background: var(--paper); border: 1px solid var(--line-dark); border-top: 5px solid var(--vermillion); }
 .agent-evidence-margin > header { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
 .agent-evidence-margin h2 { font-size: 24px; }
+.agent-browser-panel { display: grid; gap: 10px; margin: 16px -8px 18px; padding: 14px; background: #edf3f5; border: 1px solid #9fb5c0; border-left: 4px solid var(--blue); }
+.agent-browser-panel > header { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+.agent-browser-panel h3, .agent-browser-panel p { margin: 0; }
+.agent-browser-panel h3 { font-size: 17px; }
+.agent-browser-panel .eyebrow { margin-bottom: 3px; font-size: 11px; }
+.browser-mode { padding: 4px 7px; font: 650 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; border: 1px solid var(--line-dark); white-space: nowrap; }
+.browser-mode-agent { color: var(--blue-dark); background: var(--blue-soft); border-color: #8fb3c4; }
+.browser-mode-manual { color: #8e2f24; background: var(--vermillion-soft); border-color: #d19b8f; }
+.browser-mode-idle { color: var(--muted); background: var(--paper); }
+.agent-browser-canvas { min-height: 190px; aspect-ratio: 16 / 10; overflow: hidden; background: #0d1b24; border: 1px solid #07121a; box-shadow: inset 0 0 0 3px #213746; }
+.agent-browser-canvas canvas { width: 100% !important; height: 100% !important; object-fit: contain; }
+.agent-browser-canvas:focus-visible { outline: 3px solid var(--vermillion); outline-offset: 2px; }
+.agent-browser-status { min-height: 30px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.agent-browser-panel .button-secondary { justify-self: start; padding: 8px 11px; font-size: 11px; }
+.agent-browser-panel .notice, .agent-browser-panel .error-text { margin: 0; font-size: 11px; }
 .agent-context-ledger { margin: 12px 0 24px; border-top: 1px solid var(--line-dark); }
 .agent-context-ledger div { display: grid; grid-template-columns: 105px 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .agent-context-ledger dt { color: var(--muted); font: 9px var(--mono); text-transform: uppercase; }

@@ -1,6 +1,7 @@
 import type { AgentArtifact, AgentMessage, AgentTurn, CitationSummary, ReviewOutput } from "../api/types";
 import { formatCandidateSize, projectIndexLabel } from "../agent/presentation";
 import AgentArtifactList from "./AgentArtifactList";
+import AgentBrowserPanel from "./AgentBrowserPanel";
 
 interface AgentEvidenceMarginProps {
   projectId: string;
@@ -15,6 +16,8 @@ interface AgentEvidenceMarginProps {
   artifacts: AgentArtifact[] | undefined;
   artifactsLoading: boolean;
   artifactsError: boolean;
+  sessionId: string;
+  activeTurnRunId: string | null;
 }
 
 function pageLabel(citation: CitationSummary): string {
@@ -38,6 +41,8 @@ export default function AgentEvidenceMargin({
   artifacts,
   artifactsLoading,
   artifactsError,
+  sessionId,
+  activeTurnRunId,
 }: AgentEvidenceMarginProps) {
   const claims = assistantMessages.flatMap((message) => message.claims ?? []);
   const activeMatrixId = matrix?.output_id ?? turn?.review_output_id;
@@ -50,6 +55,7 @@ export default function AgentEvidenceMargin({
         <div><p className="eyebrow">EVIDENCE MARGIN</p><h2>证据批注</h2></div>
         {selectedEvidence && <button className="button-plain" type="button" onClick={onClearEvidence}>关闭</button>}
       </header>
+      <AgentBrowserPanel sessionId={sessionId} activeTurnRunId={activeTurnRunId} />
       <dl className="agent-context-ledger">
         <div><dt>Evidence Matrix</dt><dd className="mono">{activeMatrixId?.slice(0, 8) ?? "未选择"}</dd></div>
         <div>

@@ -23,6 +23,7 @@ from literature_agent.application.skill_configuration_service import (
 )
 from literature_agent.domain.exceptions import (
     AgentArtifactNotFoundError,
+    AgentBrowserControlBusyError,
     AgentReviewOutputNotFoundError,
     AgentSessionBusyError,
     AgentSessionNotFoundError,
@@ -44,6 +45,9 @@ from literature_agent.domain.skill_configuration import SkillProfileSelection, S
 from literature_agent.infrastructure.agent.mcp_catalog import PLATFORM_MCP_CATALOG
 from literature_agent.infrastructure.agent.skill_catalog import PLATFORM_SKILLS
 from literature_agent.infrastructure.persistence.agent_repository import SqlalchemyAgentRepository
+from literature_agent.infrastructure.persistence.browser_control_repository import (
+    SqlalchemyBrowserControlRepository,
+)
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
@@ -269,6 +273,7 @@ async def get_agent_session_service(request: Request) -> AgentSessionService:
         skill_repo_factory=SqlalchemySkillRepository,
         platform_skills=PLATFORM_SKILLS,
         event_notifier=state.event_notifier,
+        browser_control_repo_factory=SqlalchemyBrowserControlRepository,
     )
 
 
@@ -355,6 +360,8 @@ def _translate(exc: Exception) -> HTTPException:
         return HTTPException(404, code)
     if isinstance(exc, AgentSessionBusyError):
         return HTTPException(409, "agent_session_busy")
+    if isinstance(exc, AgentBrowserControlBusyError):
+        return HTTPException(409, "agent_browser_control_active")
     if isinstance(exc, ProjectArchivedError):
         return HTTPException(409, "project_archived")
     if isinstance(exc, ProjectNotIndexedError):

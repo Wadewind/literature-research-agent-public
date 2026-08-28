@@ -323,6 +323,30 @@ export interface AgentArtifact {
   created_at: string;
 }
 
+export interface BrowserControl {
+  control_id: string;
+  session_id: string;
+  mode: "manual";
+  status: "active" | "ended" | "expired";
+  revision: number;
+  sandbox_generation: number;
+  started_at: string;
+  expires_at: string;
+  ended_at: string | null;
+  end_reason: string | null;
+  viewer_connected: boolean;
+}
+
+export interface BrowserControlStatus {
+  control: BrowserControl | null;
+}
+
+export interface BrowserControlStart {
+  control: BrowserControl;
+  ticket: string;
+  view_url: string;
+}
+
 export interface AgentTurn {
   run_id: string;
   session_id: string;

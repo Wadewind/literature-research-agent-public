@@ -1,1 +1,5 @@
 arxiv-mcp-server==0.6.2
+matplotlib==3.10.6
+numpy==2.3.3
+pandas==2.3.2
+websockify==0.13.0

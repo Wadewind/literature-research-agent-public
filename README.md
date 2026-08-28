@@ -18,6 +18,17 @@ Phase 6 Slice 2 已完成受限 Agent 文件交付：真实 Sandbox Turn 可显�
 Agent 成果区只预览 PNG/JPEG，其余类型安全下载；Fake Runtime 的候选描述符与未提交 Candidate 都不是
 可下载资源。该实现不代表生产级恶意文件扫描，孤儿 staging GC 与总量配额仍待后续切片。
 
+Phase 6 Slice 3 已完成 Browser 人工控制的离线垂直闭环：用户可在两个 Agent Turn 之间申请当前 Session/
+Sandbox generation 的短时控制权，右侧 noVNC 面板通过平台 WebSocket 操作同一 Chromium；人工控制与
+Agent Turn 互斥，raw VNC/OpenSandbox endpoint 和页面输入不会进入公开 DTO、业务 Event 或持久存储。
+业务表只记录 MANUAL，缺少 ACTIVE 控制权即表示 Agent/idle。诊断 Smoke 已确认固定旧镜像包含
+TigerVNC 1.15.0，但也发现 OpenSandbox 暴露的旧 `5901` endpoint 实际经过 HTTP egress sidecar，不能作为
+raw TCP VNC 使用。当前镜像 recipe 已固定加入 websockify 0.13.0，以 Sandbox 内 `6080` WebSocket 转发
+loopback `5901`。修正镜像已重建，Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
+Smoke 已通过。此前 raw endpoint、宿主代理、服务 readiness/Fixture 转义三类失败均已形成回归测试。
+noVNC 人工键鼠 UI E2E、公网浏览与跨
+generation 登录恢复尚未验证。
+
 ## 仓库布局
 
 ```text

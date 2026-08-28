@@ -35,6 +35,9 @@ from literature_agent.infrastructure.persistence.agent_repository import Sqlalch
 from literature_agent.infrastructure.persistence.attempt_repository import (
     SqlalchemyAttemptRepository,
 )
+from literature_agent.infrastructure.persistence.browser_control_repository import (
+    SqlalchemyBrowserControlRepository,
+)
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
@@ -184,6 +187,7 @@ async def test_two_turns_reuse_runtime_session_and_persist_staged_candidates(db_
         outbox_repo_factory=SqlalchemyOutboxRepository,
         claim_set_repo_factory=SqlalchemyClaimSetRepository,
         evidence_repo_factory=SqlalchemyEvidenceRepository,
+        browser_control_repo_factory=SqlalchemyBrowserControlRepository,
     )
     runtime = _TransactionAssertingRuntime(tracked_factory)
     agent_executor = AgentTurnExecutor(

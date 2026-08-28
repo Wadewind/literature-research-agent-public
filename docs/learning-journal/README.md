@@ -82,6 +82,11 @@ Phase 5 已验证事实与后续目标，冻结 owner/Project/Session/Turn/Sandb
 Effectively Once、API/Event 增量和 Slice 2–8 安全门槛。Slice 2 已完成
 [Agent 输出 Artifact 交付](modules/agent-artifact-delivery.md)：真实 Sandbox Tool、Candidate 生命周期、
 事务外 Storage/文件校验、Turn 成功原子发布、owner-scoped 下载与壳层无关成果组件均已落地；Fake
-descriptor 仍不可下载，真实 OpenSandbox Artifact Smoke 与生产级扫描没有被伪称通过。下一切片为
-Browser 画面与跨 Turn 人工控制。最终 UI 同时受
+descriptor 仍不可下载，真实 OpenSandbox Artifact Smoke 与生产级扫描没有被伪称通过。
+[Agent Browser 人工控制](modules/agent-browser-control.md)也已完成离线闭环：业务控制权、Turn 互斥、短时
+ticket、固定 Server Proxy/websockify Adapter、单连接有界代理和 noVNC 右栏组件均已通过离线/临时
+PostgreSQL 验证。修正镜像已重建，Server Proxy→websockify→RFB 与同一 Sandbox Playwright 合成页完整
+Smoke 已通过；前三次 endpoint、宿主代理、readiness/Fixture 失败均形成回归测试。该证据仅为未配置
+API key/secure runtime 的 trusted-local 功能验证，未验证 noVNC 人工键鼠 UI E2E、通用认证或公网安全。
+下一切片为 Agent 输入附件。最终 UI 同时受
 [`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-redesign.md)约束，前置功能组件必须保持壳层无关。

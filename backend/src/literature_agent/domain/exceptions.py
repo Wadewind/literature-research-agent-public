@@ -198,6 +198,30 @@ class AgentSessionBusyError(Exception):
         super().__init__(f"AgentSession {session_id} 已有进行中的 Turn")
 
 
+class AgentBrowserControlBusyError(Exception):
+    """Session 正处于人工浏览器控制或状态尚未 reconcile。"""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(f"AgentSession {session_id} 正处于人工浏览器控制")
+
+
+class BrowserControlNotFoundError(Exception):
+    """控制权不存在、已越权或票据不可用。"""
+
+    def __init__(self, reference: str) -> None:
+        self.reference = reference
+        super().__init__(f"Browser control {reference} 不存在")
+
+
+class BrowserControlConflictError(Exception):
+    """人工控制与 Turn、Sandbox generation 或另一个 viewer 冲突。"""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 class AgentReviewOutputNotFoundError(Exception):
     """指定 Evidence Matrix 不属于当前 owner/Project。"""
 
