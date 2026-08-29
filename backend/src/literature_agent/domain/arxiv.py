@@ -1,6 +1,7 @@
 """受限 arXiv 检索与下载领域契约。"""
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,10 +33,25 @@ class ArxivSortOrder(StrEnum):
 class ArxivError(Exception):
     """arXiv 操作失败，并携带可持久化稳定错误码。"""
 
-    def __init__(self, code: str, *, temporary: bool) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        temporary: bool,
+        http_status: int | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        if http_status is not None and not 100 <= http_status <= 599:
+            raise ValueError("arxiv_http_status_invalid")
+        if retry_after_seconds is not None and (
+            not math.isfinite(retry_after_seconds) or retry_after_seconds < 0
+        ):
+            raise ValueError("arxiv_retry_after_invalid")
         super().__init__(code)
         self.code = code
         self.temporary = temporary
+        self.http_status = http_status
+        self.retry_after_seconds = retry_after_seconds
 
 
 class ArxivQueryValidationError(ValueError):

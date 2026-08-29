@@ -37,10 +37,16 @@ Phase 4 增加生产组装边界 `_build_arxiv_gateway()`：`fake` 读取仓库�
 - MIME 必须是 `application/pdf`，Content-Length 必须是非负整数（允许缺失），正文必须以
   `%PDF-` 开头，最后计算 SHA-256；`DownloadedPdf` 自身也重新校验 MIME、magic 与摘要一致性，
   避免替换 Gateway 绕过内容寻址不变量；
-- Adapter 的 Feed/PDF 上限、重定向次数、尝试次数和 PDF Host allowlist，以及 Service 总下载预算
-  都在构造时 fail-fast；Host allowlist 只能取官方 Host 的非空子集，不能用配置扩成任意 Host；
-- timeout、transport、429、5xx 最多尝试三次，耗尽后向 Run 层上抛；404、非法 PDF、重定向和超限
-  属单篇永久失败；
+- Adapter 的 Feed/PDF 上限、重定向次数和 PDF Host allowlist，以及 Service 总下载预算都在构造时
+  fail-fast；Host allowlist 只能取官方 Host 的非空子集，不能用配置扩成任意 Host；
+- 遵守 arXiv Legacy API 的单连接与请求起始时间至少间隔 3 秒约束；同一 Worker 的共享 Adapter 以
+  异步锁串行化检索并统一节流；
+- Adapter 不做内部重试，timeout、transport、429 和 5xx 每次只向外抛一次稳定 `ArxivError`，由业务
+  Run 的唯一重试预算决定是否重投，避免 Adapter 三次乘 Run 三次形成最多九次请求；
+- 429 保存 `arxiv_search_rate_limited`、HTTP 429 和有界 `Retry-After` 提示；业务层优先尊重该提示，
+  缺失时使用 15–60 秒的确定性指数退避与小幅抖动。5xx、404 和其他 HTTP 状态分别保存安全类别；
+- 不实现检索结果短期缓存；重复业务执行仍以 Run/Step/Source 幂等事实收敛，避免把实时发现语义和
+  缓存失效策略引入本次可靠性修复；
 - 普通测试全部使用 RESPX/httpx2 mock，不访问实时 arXiv，也不发送用户 Cookie 或凭据。
 
 ## 事务、缓存与幂等
@@ -82,8 +88,8 @@ Graph State。
 ## 重要测试和运行结果
 
 - 领域：查询规范化、允许字段、URL/控制字符拒绝、现代与旧式 versioned ID；
-- HTTP Mock：Atom 映射、顺序、去重、截断、URL 注入、重定向 Host、临时重试、404、MIME、
-  Content-Length、magic bytes、流式大小/总预算和 SHA-256；
+- HTTP Mock：Atom 映射、顺序、去重、截断、URL 注入、重定向 Host、单次临时失败、429 安全诊断、
+  3 秒串行节流、404、MIME、Content-Length、magic bytes、流式大小/总预算和 SHA-256；
 - 应用：零结果完成事实、出网前权限、事务外 Storage、部分失败、临时失败、重复 Job、ready ChunkSet、
   跨 Project Run 和归档 Paper；
 - PostgreSQL：两个 Review Run 并发首次导入同 hash 收敛为一套导入 bundle；注入失败验证 Paper、
@@ -96,6 +102,10 @@ Graph State。
 `2 passed`；Backend
 非集成全量 `446 passed, 4 skipped`，PostgreSQL/Valkey 集成全量 `95 passed`；Ruff、Pyright 和
 diff check 通过。
+
+2026-08-29 针对 Real 429 修复实际运行：先以新增契约得到 `9 failed, 43 passed`，最小实现后定向
+领域/Adapter/应用回归 `92 passed`；Docker socket 受执行沙箱限制的首次集成测试不是代码失败，获准在
+宿主权限下重跑后 PostgreSQL 集成测试 `2 passed`。本次未访问实时 arXiv，也未验证限流窗口已经解除。
 
 ## 代码入口
 
@@ -121,6 +131,8 @@ diff check 通过。
   arXiv 路径已满足文件写入不在数据库事务内，Phase 1 重构应是独立可靠性变更；
 - Worker 已装配官方 Host、50 MiB 单文件上限和固定总预算；超时、并发与总预算仍需真实小样本校准，
   校准值应继续进入 Review Profile 快照。
+- 当前 3 秒节流只在单个 Worker 进程的共享 Adapter 内生效；如果未来横向扩展多个 Worker，需要增加
+  跨进程的全局 arXiv API 限流协调。本次明确不增加短期查询缓存。
 
 ## 60 秒面试说明
 

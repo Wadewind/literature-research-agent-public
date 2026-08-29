@@ -1,7 +1,7 @@
 """RunExecutionService 应用服务测试。"""
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -11,6 +11,7 @@ from literature_agent.application.run_execution_service import (
     ExecutionOutcome,
     RunExecutionService,
 )
+from literature_agent.domain.arxiv import ArxivError
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import InvalidPdfInputError
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
@@ -411,6 +412,46 @@ async def test_execute_transient_error_schedules_retry(
     attempt = await attempt_repo.get_latest_by_run(run.run_id)
     assert attempt is not None
     assert attempt.status.value == "failed"
+
+
+async def test_execute_arxiv_rate_limit_persists_safe_details_and_respects_hint(
+    run_repo: FakeRunRepository,
+    event_repo: FakeEventRepository,
+    attempt_repo: FakeAttemptRepository,
+    outbox_repo: FakeOutboxRepository,
+) -> None:
+    """429 使用安全分类和 Retry-After，不按通用 1 秒立即重投。"""
+
+    async def _failing_executor(_run: Run, _correlation_id: str) -> None:
+        raise ArxivError(
+            "arxiv_search_rate_limited",
+            temporary=True,
+            http_status=429,
+            retry_after_seconds=30.0,
+        )
+
+    before = datetime.now(UTC)
+    run = await _add_run(run_repo)
+    await _seed_dispatched_outbox(outbox_repo, run.run_id)
+    service = _make_service(
+        run_repo, event_repo, attempt_repo, outbox_repo, _failing_executor
+    )
+
+    outcome = await service.execute(run.run_id, correlation_id="job-arxiv-429")
+
+    assert outcome is ExecutionOutcome.RETRY_SCHEDULED
+    retry_event = next(
+        event for event in event_repo._events if event.event_type == "run_retry_scheduled"
+    )
+    assert retry_event.payload["error"] == {
+        "type": "ArxivError",
+        "message": "arxiv_search_rate_limited",
+        "http_status": 429,
+        "retry_after_seconds": 30.0,
+    }
+    entry = await outbox_repo.get_by_run_id(run.run_id)
+    assert entry is not None
+    assert entry.scheduled_at >= before + timedelta(seconds=30)
 
 
 async def test_execute_permanent_error_marks_failed(

@@ -21,6 +21,21 @@ class ChunkedStream(httpx.AsyncByteStream):
             yield chunk
 
 
+class FakeClock:
+    """为 arXiv 频率限制测试提供不等待真实时间的单调时钟。"""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.sleeps.append(delay)
+        self.now += delay
+
+
 def _entry(identifier: str, title: str = " Agent  Systems ") -> str:
     return f"""
     <entry>
@@ -60,7 +75,6 @@ def gateway() -> Iterator[HttpxArxivGateway]:
         ({"max_file_bytes": 0}, "arxiv_max_file_bytes_invalid"),
         ({"max_feed_bytes": 0}, "arxiv_max_feed_bytes_invalid"),
         ({"max_redirects": -1}, "arxiv_max_redirects_invalid"),
-        ({"max_attempts": 0}, "arxiv_max_attempts_invalid"),
         ({"allowed_pdf_hosts": frozenset()}, "arxiv_pdf_hosts_invalid"),
         (
             {"allowed_pdf_hosts": frozenset({"arxiv.org", "evil.example"})},
@@ -165,7 +179,7 @@ async def test_search_streaming_feed_limit_checks_actual_bytes(
 @pytest.mark.parametrize(
     "response,code,temporary",
     [
-        (httpx.Response(503), "arxiv_search_temporary_http", True),
+        (httpx.Response(503), "arxiv_search_server_error", True),
         (
             httpx.Response(200, content=b"not atom", headers={"content-type": "text/html"}),
             "arxiv_search_content_type_invalid",
@@ -187,6 +201,24 @@ async def test_search_classifies_failures(
 
 
 @pytest.mark.asyncio
+async def test_search_429_preserves_only_safe_rate_limit_diagnostics(
+    httpx2_mock: respx.Router, gateway: HttpxArxivGateway
+) -> None:
+    route = httpx2_mock.get(API_URL).mock(
+        return_value=httpx.Response(429, headers={"retry-after": "17"})
+    )
+
+    with pytest.raises(ArxivError) as caught:
+        await gateway.search(ArxivSearchQuery("all:agents"))
+
+    assert caught.value.code == "arxiv_search_rate_limited"
+    assert caught.value.temporary is True
+    assert caught.value.http_status == 429
+    assert caught.value.retry_after_seconds == 17.0
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_search_timeout_is_temporary(
     httpx2_mock: respx.Router, gateway: HttpxArxivGateway
 ) -> None:
@@ -198,7 +230,7 @@ async def test_search_timeout_is_temporary(
 
 
 @pytest.mark.asyncio
-async def test_search_retries_temporary_http_then_succeeds(
+async def test_search_does_not_retry_temporary_http_inside_adapter(
     httpx2_mock: respx.Router, gateway: HttpxArxivGateway
 ) -> None:
     route = httpx2_mock.get(API_URL).mock(
@@ -211,9 +243,35 @@ async def test_search_retries_temporary_http_then_succeeds(
             ),
         ]
     )
-    papers = await gateway.search(ArxivSearchQuery("all:agents"))
-    assert papers[0].arxiv_id == "2401.00001"
+    with pytest.raises(ArxivError, match="arxiv_search_server_error"):
+        await gateway.search(ArxivSearchQuery("all:agents"))
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_search_serializes_requests_and_spaces_starts_by_three_seconds(
+    httpx2_mock: respx.Router,
+) -> None:
+    clock = FakeClock()
+    client = httpx2.AsyncClient(trust_env=False, follow_redirects=False)
+    gateway = HttpxArxivGateway(
+        client=client,
+        clock=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    route = httpx2_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=_feed(_entry("2401.00001v1")),
+            headers={"content-type": "application/atom+xml"},
+        )
+    )
+
+    await gateway.search(ArxivSearchQuery("all:first"))
+    await gateway.search(ArxivSearchQuery("all:second"))
+
     assert route.call_count == 2
+    assert clock.sleeps == [3.0]
 
 
 @pytest.mark.asyncio
@@ -246,7 +304,7 @@ async def test_download_returns_hash_after_pdf_validation(
 
 
 @pytest.mark.asyncio
-async def test_download_retries_temporary_http_then_succeeds(
+async def test_download_does_not_retry_temporary_http_inside_adapter(
     httpx2_mock: respx.Router, gateway: HttpxArxivGateway
 ) -> None:
     url = "https://arxiv.org/pdf/2401.00001v1"
@@ -260,8 +318,9 @@ async def test_download_retries_temporary_http_then_succeeds(
             ),
         ]
     )
-    await gateway.download_pdf(url, remaining_budget_bytes=32)
-    assert route.call_count == 2
+    with pytest.raises(ArxivError, match="arxiv_pdf_server_error"):
+        await gateway.download_pdf(url, remaining_budget_bytes=32)
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -269,7 +328,7 @@ async def test_download_retries_temporary_http_then_succeeds(
     "response,budget,code,temporary",
     [
         (httpx.Response(404), 32, "arxiv_pdf_not_found", False),
-        (httpx.Response(503), 32, "arxiv_pdf_temporary_http", True),
+        (httpx.Response(503), 32, "arxiv_pdf_server_error", True),
         (
             httpx.Response(200, content=b"html", headers={"content-type": "text/html"}),
             32,

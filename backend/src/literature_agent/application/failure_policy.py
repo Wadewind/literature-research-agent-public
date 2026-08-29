@@ -9,6 +9,7 @@ Outbox 记录缺失或不可重置时降级为 FAILED，避免 Run 滞留
 调用方负责在同一事务中持有 Run 行锁并提交。
 """
 
+import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -22,6 +23,7 @@ from literature_agent.application.ports.research_agent_runtime import (
 )
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
+from literature_agent.domain.arxiv import ArxivError
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import RunConcurrentModificationError
 from literature_agent.domain.retry_policy import compute_retry_backoff, is_permanent_error
@@ -87,7 +89,13 @@ async def apply_run_failure[TSession: Session](
     )
 
     retryable = not permanent and attempts_used < max_run_attempts
-    next_at = now + timedelta(seconds=compute_retry_backoff(attempts_used))
+    next_at = now + timedelta(
+        seconds=_compute_failure_retry_delay(
+            run_id=run.run_id,
+            attempts_used=attempts_used,
+            exc=exc,
+        )
+    )
     # 重试前提：Outbox 记录仍处于 DISPATCHED 可重置；缺失或状态异常时
     # 无法保证重新投递，降级为 FAILED，避免 Run 卡在 RETRY_WAIT
     if retryable and await outbox_repo.reset_for_retry(run.run_id, next_at):
@@ -126,3 +134,22 @@ async def apply_run_failure[TSession: Session](
         )
     )
     return outcome
+
+
+def _compute_failure_retry_delay(
+    *, run_id: str, attempts_used: int, exc: BaseException | None
+) -> float:
+    """计算失败后的业务重试等待；arXiv 429 使用更保守的有界退避。"""
+    generic_delay = compute_retry_backoff(attempts_used)
+    if not isinstance(exc, ArxivError) or not exc.temporary:
+        return generic_delay
+    if exc.http_status != 429:
+        return max(generic_delay, 3.0)
+
+    # 固定输入产生固定抖动，使同一批任务错峰，同时保持测试和恢复可重现。
+    digest = hashlib.sha256(f"{run_id}:{attempts_used}".encode()).digest()
+    jitter = int.from_bytes(digest[:2], "big") / 65535 * 3.0
+    fallback = min(60.0, 15.0 * (2 ** max(attempts_used - 1, 0)) + jitter)
+    if exc.retry_after_seconds is None:
+        return fallback
+    return max(fallback, exc.retry_after_seconds)

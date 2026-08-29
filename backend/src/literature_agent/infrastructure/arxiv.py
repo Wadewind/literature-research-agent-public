@@ -1,6 +1,10 @@
 """基于 httpx2 的官方 arXiv API/PDF Adapter。"""
 
-from datetime import datetime
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree
 
@@ -18,6 +22,8 @@ from literature_agent.domain.arxiv import (
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV = "{http://arxiv.org/schemas/atom}"
 _OFFICIAL_PDF_HOSTS = frozenset({"arxiv.org", "export.arxiv.org"})
+_API_MIN_INTERVAL_SECONDS = 3.0
+_MAX_RETRY_AFTER_SECONDS = 3600.0
 
 
 class HttpxArxivGateway(ArxivGateway):
@@ -32,8 +38,9 @@ class HttpxArxivGateway(ArxivGateway):
         max_file_bytes: int = 50 * 1024 * 1024,
         max_feed_bytes: int = 2 * 1024 * 1024,
         max_redirects: int = 3,
-        max_attempts: int = 3,
         timeout_seconds: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._client = client or httpx2.AsyncClient(
             timeout=httpx2.Timeout(timeout_seconds), trust_env=False, follow_redirects=False
@@ -54,16 +61,16 @@ class HttpxArxivGateway(ArxivGateway):
         if max_redirects < 0:
             raise ValueError("arxiv_max_redirects_invalid")
         self._max_redirects = max_redirects
-        if max_attempts < 1:
-            raise ValueError("arxiv_max_attempts_invalid")
-        self._max_attempts = max_attempts
+        self._clock = clock
+        self._sleep = sleep
+        self._api_request_lock = asyncio.Lock()
+        self._last_api_request_started_at: float | None = None
 
     async def aclose(self) -> None:
         """关闭底层 HTTP 客户端。"""
         await self._client.aclose()
 
     async def search(self, query: ArxivSearchQuery) -> list[ArxivPaper]:
-        feed_content = None
         params = {
             "search_query": query.expression,
             "start": query.start,
@@ -71,23 +78,12 @@ class HttpxArxivGateway(ArxivGateway):
             "sortBy": query.sort_by.value,
             "sortOrder": query.sort_order.value,
         }
-        for attempt in range(self._max_attempts):
-            try:
-                feed_content = await self._fetch_feed(params)
-                break
-            except httpx2.TimeoutException as exc:
-                error = ArxivError("arxiv_search_timeout", temporary=True)
-                if attempt + 1 == self._max_attempts:
-                    raise error from exc
-            except httpx2.TransportError as exc:
-                error = ArxivError("arxiv_search_transport_error", temporary=True)
-                if attempt + 1 == self._max_attempts:
-                    raise error from exc
-            except ArxivError as exc:
-                if not exc.temporary or attempt + 1 == self._max_attempts:
-                    raise
-        if feed_content is None:
-            raise AssertionError("unreachable")
+        try:
+            feed_content = await self._fetch_feed(params)
+        except httpx2.TimeoutException as exc:
+            raise ArxivError("arxiv_search_timeout", temporary=True) from exc
+        except httpx2.TransportError as exc:
+            raise ArxivError("arxiv_search_transport_error", temporary=True) from exc
         try:
             root = ElementTree.fromstring(feed_content)
         except ElementTree.ParseError as exc:
@@ -107,36 +103,44 @@ class HttpxArxivGateway(ArxivGateway):
         return found
 
     async def _fetch_feed(self, params: dict[str, str | int]) -> bytes:
-        async with self._client.stream("GET", self._api_url, params=params) as response:
-            self._raise_http_error(response.status_code, operation="search")
-            media_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
-            if media_type not in {"application/atom+xml", "application/xml", "text/xml"}:
-                raise ArxivError("arxiv_search_content_type_invalid", temporary=False)
-            declared = _parse_content_length(
-                response.headers.get("content-length"),
-                invalid_code="arxiv_search_content_length_invalid",
-            )
-            if declared is not None and declared > self._max_feed_bytes:
+        async with self._api_request_lock:
+            await self._wait_for_api_slot()
+            self._last_api_request_started_at = self._clock()
+            async with self._client.stream("GET", self._api_url, params=params) as response:
+                self._raise_http_error(response, operation="search")
+                return await self._read_feed(response)
+
+    async def _wait_for_api_slot(self) -> None:
+        if self._last_api_request_started_at is None:
+            return
+        elapsed = self._clock() - self._last_api_request_started_at
+        remaining = _API_MIN_INTERVAL_SECONDS - elapsed
+        if remaining > 0:
+            await self._sleep(remaining)
+
+    async def _read_feed(self, response: httpx2.Response) -> bytes:
+        media_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+        if media_type not in {"application/atom+xml", "application/xml", "text/xml"}:
+            raise ArxivError("arxiv_search_content_type_invalid", temporary=False)
+        declared = _parse_content_length(
+            response.headers.get("content-length"),
+            invalid_code="arxiv_search_content_length_invalid",
+        )
+        if declared is not None and declared > self._max_feed_bytes:
+            raise ArxivError("arxiv_search_feed_too_large", temporary=False)
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in response.aiter_bytes():
+            size += len(chunk)
+            if size > self._max_feed_bytes:
                 raise ArxivError("arxiv_search_feed_too_large", temporary=False)
-            chunks: list[bytes] = []
-            size = 0
-            async for chunk in response.aiter_bytes():
-                size += len(chunk)
-                if size > self._max_feed_bytes:
-                    raise ArxivError("arxiv_search_feed_too_large", temporary=False)
-                chunks.append(chunk)
-            return b"".join(chunks)
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     async def download_pdf(self, url: str, *, remaining_budget_bytes: int) -> DownloadedPdf:
         if remaining_budget_bytes <= 0:
             raise ArxivError("arxiv_total_download_budget_exceeded", temporary=False)
-        for attempt in range(self._max_attempts):
-            try:
-                return await self._download_pdf_once(url, remaining_budget_bytes)
-            except ArxivError as exc:
-                if not exc.temporary or attempt + 1 == self._max_attempts:
-                    raise
-        raise AssertionError("unreachable")
+        return await self._download_pdf_once(url, remaining_budget_bytes)
 
     async def _download_pdf_once(
         self, url: str, remaining_budget_bytes: int
@@ -156,7 +160,7 @@ class HttpxArxivGateway(ArxivGateway):
                             raise ArxivError("arxiv_pdf_redirect_limit", temporary=False)
                         current = urljoin(current, location)
                         continue
-                    self._raise_http_error(response.status_code, operation="pdf")
+                    self._raise_http_error(response, operation="pdf")
                     media_type = (
                         response.headers.get("content-type", "").split(";", 1)[0].lower()
                     )
@@ -204,14 +208,34 @@ class HttpxArxivGateway(ArxivGateway):
             raise ArxivError("arxiv_pdf_host_not_allowed", temporary=False)
 
     @staticmethod
-    def _raise_http_error(status_code: int, *, operation: str) -> None:
+    def _raise_http_error(response: httpx2.Response, *, operation: str) -> None:
+        status_code = response.status_code
         if 200 <= status_code < 300:
             return
         if status_code == 404 and operation == "pdf":
-            raise ArxivError("arxiv_pdf_not_found", temporary=False)
-        if status_code == 429 or status_code >= 500:
-            raise ArxivError(f"arxiv_{operation}_temporary_http", temporary=True)
-        raise ArxivError(f"arxiv_{operation}_http_error", temporary=False)
+            raise ArxivError(
+                "arxiv_pdf_not_found", temporary=False, http_status=status_code
+            )
+        if status_code == 429:
+            raise ArxivError(
+                f"arxiv_{operation}_rate_limited",
+                temporary=True,
+                http_status=status_code,
+                retry_after_seconds=_parse_retry_after(
+                    response.headers.get("retry-after")
+                ),
+            )
+        if status_code >= 500:
+            raise ArxivError(
+                f"arxiv_{operation}_server_error",
+                temporary=True,
+                http_status=status_code,
+            )
+        raise ArxivError(
+            f"arxiv_{operation}_http_error",
+            temporary=False,
+            http_status=status_code,
+        )
 
     @staticmethod
     def _parse_entry(entry: ElementTree.Element) -> ArxivPaper:
@@ -285,6 +309,23 @@ def _parse_content_length(value: str | None, *, invalid_code: str) -> int | None
     if parsed < 0:
         raise ArxivError(invalid_code, temporary=False)
     return parsed
+
+
+def _parse_retry_after(value: str | None, *, now: datetime | None = None) -> float | None:
+    """解析标准 Retry-After 秒数或 HTTP 日期，仅保留有界等待提示。"""
+    if value is None or not value.strip():
+        return None
+    candidate = value.strip()
+    try:
+        seconds = float(candidate) if candidate.isdigit() else None
+        if seconds is None:
+            target = parsedate_to_datetime(candidate)
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=UTC)
+            seconds = (target.astimezone(UTC) - (now or datetime.now(UTC))).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return min(max(seconds, 0.0), _MAX_RETRY_AFTER_SECONDS)
 
 
 def _budget_code(size: int, max_file_bytes: int) -> str:

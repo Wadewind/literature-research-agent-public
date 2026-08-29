@@ -4,6 +4,7 @@
 按 Outbox 退避参数重试。分类表集中在这里，不引入错误码注册表。
 """
 
+from literature_agent.domain.arxiv import ArxivError
 from literature_agent.domain.exceptions import (
     CheckpointDataError,
     EvidenceMatrixInvalidError,
@@ -64,6 +65,8 @@ def is_permanent_error(exc: BaseException) -> bool:
     参数:
         exc: 执行过程中抛出的异常。
     """
+    if isinstance(exc, ArxivError):
+        return not exc.temporary
     return isinstance(exc, _PERMANENT_TYPES)
 
 

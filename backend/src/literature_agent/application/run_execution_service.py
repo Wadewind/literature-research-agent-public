@@ -39,6 +39,7 @@ from literature_agent.application.ports.research_agent_runtime import (
 )
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
+from literature_agent.domain.arxiv import ArxivError
 from literature_agent.domain.event import create_event
 from literature_agent.domain.run import Run, RunStatus
 from literature_agent.domain.run_attempt import (
@@ -382,11 +383,18 @@ class RunExecutionService:
 
         条件更新失败（例如执行器已自行收尾或被并发取消）时不产生第二个终态。
         """
+        error: dict[str, object]
         if isinstance(exc, ResearchAgentRuntimeError):
             error = {
                 "type": exc.code,
                 "message": exc.safe_message[:_ERROR_MESSAGE_MAX_LENGTH],
             }
+        elif isinstance(exc, ArxivError):
+            error = {"type": "ArxivError", "message": exc.code}
+            if exc.http_status is not None:
+                error["http_status"] = exc.http_status
+            if exc.retry_after_seconds is not None:
+                error["retry_after_seconds"] = exc.retry_after_seconds
         else:
             error = {
                 "type": type(exc).__name__,

@@ -272,3 +272,45 @@ completion token 恰好达到该 Step 的 2000 上限，随后发生 JSON Schema
 - 分别覆盖非法 JSON、缺必需字段、额外字段、维度规则和 arXiv query 校验；
 - 若增加 repair，验证最多一次调用，且重复 Job 不会重复产生已持久化结果或无限增加费用；
 - 普通自动测试继续使用 Fake/HTTP Mock，显式 Real Provider 验证只记录低敏元数据。
+
+## P4-REAL-005：arXiv 429 被通用临时错误和双层重试放大
+
+- 发现日期：2026-08-29
+- 状态：代码已修复，Real 回归待限流窗口解除后显式执行
+- 影响 Project：`117f946c-bef8-4f27-86d3-f0d282ab7490`
+- 影响 Review/Run：`9c8786be-c855-4ff8-bf5e-293202dbc64e`
+- 最终 Attempt：`3018adb0-c827-4d52-a9f2-abb1c7d53793`
+- 原稳定错误消息：`arxiv_search_temporary_http`
+- 新稳定错误消息：`arxiv_search_rate_limited`
+
+### 现象与排查证据
+
+Search Strategy 已成功保存，随后 `search_arxiv` 经三次 Run Attempt 进入 `run_retry_scheduled`、
+`run_requeued`，最终以 `ArxivError` 失败。使用与 Worker 相同的查询对官方 API 做一次受控直连复现得到
+HTTP 429，因此本次失败不是模型输出验证问题，也不是 Vite 启动阶段的 API 连接拒绝。
+
+代码审查进一步确认两个放大因素：旧 `HttpxArxivGateway` 会对 timeout、transport、429 和 5xx 内部
+最多重试三次，而 Run 层也有三次 Attempt 预算，最坏会把一次业务执行放大为九次外部请求；Adapter
+也没有实现 arXiv Legacy API 要求的单连接与请求间至少三秒约束。HTTP 客户端固定
+`trust_env=False`，所以保留在宿主环境中的代理变量不是该 Adapter 的实际请求路径。
+
+### 修复决定
+
+- 移除 Adapter 内部重试，让一次 Run Attempt 最多发起一次检索或下载请求；
+- 同一 Worker 的共享 Adapter 以锁串行检索，并确保相邻检索请求起始时间至少间隔三秒；
+- 将 429、5xx 和其他 HTTP 失败分为稳定错误码，安全保存 `http_status` 和有界 `Retry-After`，不保存
+  Feed、响应正文、完整查询或 Header；
+- 业务 Run 继续作为唯一重试预算：429 优先尊重 `Retry-After`，缺失时采用 15–60 秒的确定性退避与
+  小幅抖动；其他临时 arXiv 失败至少等待三秒；永久 arXiv 错误不重试；
+- 按用户决定，不加入相同检索式的短期结果缓存；幂等仍由 Run、Step、Source 与数据库约束承担。
+
+### 验证与已知限制
+
+- TDD 初始结果：`9 failed, 43 passed`；实现后定向契约 `52 passed`；
+- 扩大领域、Adapter、Application 回归：`92 passed`；Ruff 与 diff check 通过；
+- PostgreSQL arXiv 导入集成测试首次因执行沙箱无 Docker socket 权限得到 2 个 setup error；在获准的
+  宿主权限下以同一命令重跑为 `2 passed`；
+- 普通验证未访问实时 arXiv，因而不能宣称当前外部 429 已解除；下一次 Real Smoke 应在限流窗口解除后
+  显式运行，并观察新 Event 的错误码、状态和调度时间；
+- 当前节流锁只覆盖一个 Worker 进程。未来若部署多个 Worker 进程，需要跨进程全局限流；本地单 Worker
+  演示不引入该复杂度。

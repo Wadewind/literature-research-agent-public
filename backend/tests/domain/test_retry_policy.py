@@ -1,5 +1,6 @@
 """错误分类与重试退避策略测试。"""
 
+from literature_agent.domain.arxiv import ArxivError
 from literature_agent.domain.exceptions import (
     CheckpointDataError,
     CheckpointUnavailableError,
@@ -47,6 +48,16 @@ def test_temporary_errors() -> None:
     assert not is_permanent_error(ValueError("未知"))
     assert not is_permanent_error(ConnectionError("网络断开"))
     assert not is_permanent_error(CheckpointUnavailableError("数据库暂不可用"))
+    assert not is_permanent_error(
+        ArxivError("arxiv_search_rate_limited", temporary=True, http_status=429)
+    )
+
+
+def test_permanent_arxiv_error_is_not_retried() -> None:
+    """arXiv 领域契约中的 permanent 分类必须进入通用失败策略。"""
+    assert is_permanent_error(
+        ArxivError("arxiv_search_content_type_invalid", temporary=False)
+    )
 
 
 def test_retry_backoff_exponential_with_cap() -> None:
