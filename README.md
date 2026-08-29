@@ -40,13 +40,17 @@ agent-service/
 ├─ backend/   # Python、FastAPI、Worker、数据库迁移与后端测试
 ├─ web/       # React/Vite 前端
 ├─ docs/      # 总体规范、阶段 Spec、学习笔记与决策
+├─ sandbox/   # 固定 Research Agent 镜像、MCP Node 锁文件与 VNC wrapper
+├─ config/    # 本地 OpenSandbox Server 固定配置
 ├─ deploy/    # PostgreSQL/Valkey Compose
 └─ scripts/   # 本地开发启动脚本
 ```
 
 ## 首次准备
 
-需要 Python 3.13、uv、Node.js/npm、Docker Compose。
+核心 Fake 演示需要 Python 3.13、uv、Node.js/npm 和 Docker Compose。显式启用真实 Research Agent 时，
+还需要固定版本的 OpenSandbox Server 与已审查 Research Sandbox 镜像；详细准备边界见
+[本地 OpenSandbox Runbook](docs/runbooks/local-opensandbox-server.md)。
 
 ```bash
 cd backend
@@ -85,6 +89,59 @@ chmod 600 .env
 ```
 
 脚本会启动 PostgreSQL/Valkey、执行 Alembic 迁移，再并行启动 API、Worker 和 Web。按 `Ctrl-C` 停止 API、Worker、npm 及其 Vite 子进程；数据库和 Valkey 容器继续运行。脚本不会安装依赖、删除数据卷或打印 API Key；Fake 模式也不会读取 `.env`。
+
+### 启动组合
+
+| 目标 | 命令 | 是否需要 OpenSandbox |
+|---|---|---|
+| 完全离线演示，包含 Fake Research Agent | `./scripts/dev.sh --fake` | 否 |
+| 真实 Parser/Embedding/Chat/arXiv，Agent 仍为 Fake | `.env` 保持 `AGENT_RESEARCH_RUNTIME_BACKEND=fake`，再运行 `./scripts/dev.sh --real` | 否 |
+| 真实 Deep Agents + Sandbox/Browser/MCP/Skill | 先启动 OpenSandbox，再以 `deep_agents` 配置运行 `./scripts/dev.sh --real` | 是 |
+
+`scripts/dev.sh` 只管理 PostgreSQL、Valkey、API、Worker 和 Web，不会安装、启动或停止
+OpenSandbox Server。真实 Research Agent 模式下，Server 必须在 Worker 启动前就绪。
+
+### 启用真实 Research Agent 与 OpenSandbox
+
+首次使用前按 [OpenSandbox Runbook](docs/runbooks/local-opensandbox-server.md)准备固定 Server 版本、
+research/execd/egress 镜像并核对 digest。不要回退到 `latest`；新机器无法解析当前本地审查
+digest 时，需要重建、重跑显式 Smoke 并单独更新 pin，不能把近似镜像冒充已审查资产。
+
+在终端 1 启动 Server。Server Key 使用隐藏输入，不写入 shell history：
+
+```bash
+uv tool install 'opensandbox-server==0.2.2'
+read -rsp 'OpenSandbox local API key: ' OPENSANDBOX_SERVER_API_KEY
+echo
+export OPENSANDBOX_SERVER_API_KEY
+./scripts/opensandbox-server.sh
+```
+
+在根目录 `.env` 中显式启用真实 Runtime，并让 Worker Key 与终端 1 的 Server Key 取值相同：
+
+```bash
+AGENT_RESEARCH_RUNTIME_BACKEND=deep_agents
+AGENT_RESEARCH_MODEL_BASE_URL=https://api.deepseek.com
+AGENT_RESEARCH_MODEL_API_KEY=...
+AGENT_RESEARCH_MODEL=deepseek-v4-flash
+AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048
+
+AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080
+AGENT_RESEARCH_SANDBOX_PROTOCOL=http
+AGENT_RESEARCH_SANDBOX_API_KEY=...  # 与 OPENSANDBOX_SERVER_API_KEY 同值
+AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1
+```
+
+然后在终端 2 启动应用：
+
+```bash
+./scripts/dev.sh --real
+```
+
+Sandbox 在 Agent Session 需要时由 Worker 按 lease/generation 惰性创建，不需要手工逐个创建。首个
+Agent Turn 准备好同一 Sandbox Chromium 后，研究助手右侧可显示受平台 ticket 保护的 noVNC
+画面；人工控制只允许在两个 Turn 之间进行。停止应用后，还需要在终端 1 单独停止
+OpenSandbox Server；短 TTL Sandbox 由已有清理/补偿机制收敛。
 
 API 与 Worker 日志以单行 JSON 输出。HTTP 响应会回显 `X-Correlation-ID`；客户端可以提供 1–128 个
 `A-Za-z0-9._:-` 字符的 ID，缺失或非法时由 API 生成 UUID。API mutation 的 ID 会进入对应业务 Event；
@@ -147,6 +204,11 @@ AGENT_RESEARCH_MODEL_BASE_URL=https://api.deepseek.com
 AGENT_RESEARCH_MODEL_API_KEY=...
 AGENT_RESEARCH_MODEL=deepseek-v4-flash
 AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048
+
+AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080
+AGENT_RESEARCH_SANDBOX_PROTOCOL=http
+AGENT_RESEARCH_SANDBOX_API_KEY=...
+AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1
 ```
 
 - Embedding Base URL 是 API 根路径；Adapter 会自行追加 `/embeddings`。
@@ -157,6 +219,8 @@ AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048
 - Research Agent Provider 与 RAG/Review Chat 配置分离；模型固定为 `deepseek-v4-flash` 且 thinking 固定
   关闭。`scripts/dev.sh --real` 不会自动启用真实 Agent，只有配置文件显式选择 `deep_agents` 才会产生
   Agent 模型调用；专用 Key 只保留在 Worker 环境中。
+- `OPENSANDBOX_SERVER_API_KEY` 只供独立 Server 进程启动时使用；Worker 通过
+  `AGENT_RESEARCH_SANDBOX_API_KEY` 连接 Server。两者环境变量名不同、取值必须相同，且都不得提交。
 
 真实 Provider 只在 Worker 内调用。API 与 Worker 必须使用同一 `AGENT_STORAGE_ROOT`；推荐都从 `backend/` 目录启动。
 
