@@ -30,7 +30,7 @@ from literature_agent.application.ports.workspace_snapshot_publisher import (
 )
 from literature_agent.domain.agent_answer import (
     INSUFFICIENT_AGENT_EVIDENCE_TEXT,
-    parse_agent_answer,
+    extract_agent_evidence_claims,
 )
 from literature_agent.domain.answer_schema import RagAnswerOutput
 from literature_agent.domain.citation_validator import validate_citations
@@ -361,7 +361,7 @@ class AgentTurnExecutor[TSession: Session]:
     ) -> RagAnswerOutput:
         """正文标记与 Runtime 结果必须精确一致。"""
         try:
-            output, marked_ids = parse_agent_answer(assistant_content)
+            output, marked_ids = extract_agent_evidence_claims(assistant_content)
         except ValueError as exc:
             raise ResearchAgentRuntimeError(
                 kind=RuntimeErrorKind.PERMANENT,

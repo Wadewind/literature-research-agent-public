@@ -90,9 +90,34 @@ Assistant Message。第二轮还留下 `ToolExecution=RUNNING`，而对应 Sandb
 - MCP 纯文本超限时只保留带截断说明的有界前缀，不保存超大原文；非文本超限降级为有界 Tool error；
 - 普通 Tool 超时提升到 60 秒，Project Research Policy 升至 v4；MCP 内部边界提前 1 秒，并在外层取消时
   尝试把 Effect 收口为 temporary failure；
-- 本轮实际使用 Project Context Tool 时，从 SDK 富文本中仅提取并规范化合法带引用 Claim，仍由
-  Application 校验 Evidence 所属 Run/Project；未读取项目证据的浏览器/文件/执行任务不强制 RAG 格式；
+- 本轮最终回复显式写出 Evidence 标记时，只提取合法带引用 Claim，仍由 Application 校验 Evidence 所属
+  Run/Project；完整富文本的保存和跨 Turn 判定缺陷随后由 P6-REAL-004 收口；
 - 每轮消息注入 `ContextSnapshot.created_at` 的 UTC 时间基准，约束“今年”等相对日期。
 
 普通回归保持完全离线。本修复不证明百度或任意公网目标一定能在 60 秒内完成，也没有新增 Browser trace；
 若目标持续不可达，将以可重试 MCP 超时和已收口 Effect 失败，而不是悬空副作用记录结束。
+
+## P6-REAL-004：历史 Project Tool 污染后续 Turn 且混合回复被过度清洗
+
+### 现象与根因
+
+同一 Session 首轮读取 Project Chunk 后，后续“保存为 TXT”或 Browser 操作即使没有读取项目证据，也会被
+判定为证据型回答。原因是 Runtime 在最终 Checkpoint 上扫描整个 SDK Thread 的 `ToolMessage`，把前序
+Turn 的 Project Tool 当成本轮依据；一旦命中，又会把 SDK 富文本清洗为只有合法 Evidence Claim 的产品
+消息。普通说明、外部论文网址、Browser/Search 结果、文件回执和 Artifact 说明因此可能被删除，完全不带
+Evidence 的正常回复则被错误拒绝为 `runtime_output_invalid`。
+
+### 修复
+
+- 引用契约不再由 Project Tool 历史触发，只由当前最终回复中的显式 `[evidence:...]` 或固定证据不足文案
+  触发；
+- Runtime 与 Application 完整保存 Assistant Message，只从显式标记行提取 Claim 和 Evidence ID；
+- 显式 Evidence 仍执行语法、数量、ID 一致性以及 Run/Project 授权校验，非法或伪造标记继续使 Turn
+  永久失败；
+- 未标记的世界知识、外部来源、推断、工具结果和操作回执正常保存，但平台不把它们标记为由 Project
+  Evidence 验证；
+- 回归覆盖“前一轮 Project 检索、后一轮普通文件说明”，以及同一回复同时包含项目 Claim、arXiv URL 与
+  Artifact 回执的场景。
+
+这一行为允许 Agent 在一轮内组合 Project Context、外部 Search/Browser、Sandbox 文件处理和 Artifact
+交付；外部网址及世界知识的可信度仍取决于对应 Tool/来源契约，不自动转化为 Project Citation。

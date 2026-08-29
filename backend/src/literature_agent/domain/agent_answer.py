@@ -59,6 +59,51 @@ def canonicalize_agent_answer(content: str) -> str:
     return canonical
 
 
+def extract_agent_evidence_claims(content: str) -> tuple[RagAnswerOutput, tuple[str, ...]]:
+    """从混合富文本中提取显式引用 Claim，不改写未标记的模型正文。"""
+    normalized = content.strip()
+    if len(content) > AGENT_ANSWER_MAX_CHARS:
+        raise AgentAnswerContractError("Agent 回答超过字符上限")
+    if normalized == INSUFFICIENT_AGENT_EVIDENCE_TEXT:
+        return parse_agent_answer(normalized)
+    if not normalized:
+        raise AgentAnswerContractError("Agent 回答不能为空")
+
+    claims: list[ClaimDraft] = []
+    ordered_ids: list[str] = []
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if "[evidence:" not in line:
+            continue
+        matched = _TRAILING_EVIDENCE.fullmatch(line)
+        if matched is None:
+            raise AgentAnswerContractError("显式 Evidence 标记必须位于论述行末")
+        text = _MARKDOWN_PREFIX.sub("", matched.group("text").strip(), count=1).strip()
+        evidence_ids = [item.strip() for item in matched.group("ids").split(",")]
+        if (
+            not text
+            or len(text) > AGENT_CLAIM_MAX_CHARS
+            or "[evidence:" in text
+            or not evidence_ids
+            or len(evidence_ids) > AGENT_CLAIM_MAX_EVIDENCE
+            or any(not _EVIDENCE_ID.fullmatch(item) for item in evidence_ids)
+            or len(evidence_ids) != len(set(evidence_ids))
+        ):
+            raise AgentAnswerContractError("Agent Evidence 标记非法")
+        claims.append(ClaimDraft(text=text, evidence_ids=evidence_ids))
+        if len(claims) > AGENT_ANSWER_MAX_CLAIMS:
+            raise AgentAnswerContractError("Agent Claim 数量超过上限")
+        for evidence_id in evidence_ids:
+            if evidence_id not in ordered_ids:
+                ordered_ids.append(evidence_id)
+    if not claims:
+        raise AgentAnswerContractError("Agent 回答没有显式 Evidence Claim")
+    return (
+        RagAnswerOutput(answer_status=AnswerStatus.ANSWERED, claims=claims),
+        tuple(ordered_ids),
+    )
+
+
 def parse_agent_answer(content: str) -> tuple[RagAnswerOutput, tuple[str, ...]]:
     """把逐行行内标记解析为既有 ``RagAnswerOutput`` 语义。"""
     normalized = content.strip()

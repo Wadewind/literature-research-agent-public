@@ -67,10 +67,11 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   SDK-neutral `ProjectResearchContext` Port。两个工具用锁定的 `ToolRuntime` 注入 `turn_run_id`：模型
   schema 只能看到 query 或空参数，不能伪造 owner/Project/Snapshot/ReviewOutput/ChunkSet ID；
 - Project Context 的 temporary/permanent/cancelled 安全错误会映射为既有 `RuntimeErrorKind`。只有本轮
-  实际读取 Project Chunk/Evidence Matrix、显式产生 Evidence 标记或返回固定证据不足文案时才启用引用
-  契约；Runtime 从 SDK 富文本中确定性保留合法、带引用的 Claim，并规范化后交给产品消息，未引用标题、
-  引言和非法占位标记不进入 PostgreSQL。浏览器/文件/`execute` 等未读取项目证据的任务可自然回复；
-  Application 仍负责 Evidence 的 Run/Project 授权与事务提交；
+  最终回复显式产生 Evidence 标记或返回固定证据不足文案时才启用引用契约；Runtime 不按 Project Tool
+  调用历史重分类或清洗回复，而是完整交付 SDK 富文本，并只提取合法、位于行末的显式 Evidence Claim。
+  标题、世界知识、外部来源、Browser/文件/`execute` 结果和操作说明可以与引用 Claim 共存并进入
+  PostgreSQL，但未标记正文不获得平台 Evidence 背书；任何已经写出的非法 Evidence 标记仍使本轮失败。
+  Application 负责显式 Evidence 的 Run/Project 授权、Citation Validator 与事务提交；
 - 每轮 HumanMessage 在正文前附加 `ContextSnapshot.created_at` 的 UTC 时间基准，使“今年”等相对日期不依赖
   模型训练时间；它不复制历史消息或改变 Deep Agents 的上下文/压缩职责；
 - 切片 4 当时未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，

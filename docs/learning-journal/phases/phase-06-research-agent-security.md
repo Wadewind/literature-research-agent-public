@@ -813,9 +813,11 @@ Fake Runtime 评测、真实 Sandbox 功能 Smoke 与生产安全声明必须继
    Markdown 的语义级检测仍不由该工程门禁保证。
 
 阶段完成后的 v4 Real 模式收口已确认：普通 Tool 预算由 30 秒提升为 60 秒；MCP 超大纯文本只向模型和
-Effect Store 交付有界前缀，外层取消时尝试关闭已认领 Effect；实际读取 Project Context 后，SDK 富文本
-只把合法带引用 Claim 规范化为产品消息，未读取项目证据的 Browser/文件/`execute` 任务可自然回复；每轮
-消息还携带 Snapshot UTC 时间基准。旧 v3 Turn 不被原地升级，详细证据见 Real 模式体验缺陷台账。
+Effect Store 交付有界前缀，外层取消时尝试关闭已认领 Effect；Assistant Message 完整保留 SDK 最终回复，
+只有显式以 `[evidence:...]` 结尾的行进入 Project Evidence 校验与 Claim/Citation，未标记的世界知识、
+外部来源、Browser/文件/`execute` 结果和操作说明按普通正文保存，但不获得“已由项目证据验证”的平台语义；
+每轮消息还携带 Snapshot UTC 时间基准。是否启用引用校验只由本轮最终回复的显式标记决定，不扫描历史
+Thread 的 ToolMessage。旧 v3 Turn 不被原地升级，详细证据见 Real 模式体验缺陷台账。
 
 Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何把代码执行扩大到宿主、允许
 private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/网络 Profile、正式外部写产品能力或

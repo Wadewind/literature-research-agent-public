@@ -5,6 +5,7 @@ import pytest
 from literature_agent.domain.agent_answer import (
     AgentAnswerContractError,
     canonicalize_agent_answer,
+    extract_agent_evidence_claims,
     parse_agent_answer,
 )
 from literature_agent.domain.evidence import AnswerStatus
@@ -51,6 +52,36 @@ def test_parse_agent_answer_allows_empty_lines_between_bounded_claims() -> None:
     )
 
     assert [claim.text for claim in output.claims] == ["第一条", "第二条"]
+
+
+def test_extract_agent_evidence_claims_ignores_unmarked_world_knowledge_and_receipts() -> None:
+    content = (
+        "## 综合结果\n"
+        "该方向由项目论文提出 [evidence:e-1]\n"
+        "另外检索到 https://arxiv.org/abs/2401.00001 。\n"
+        "已生成 hallucination.txt，可在成果区下载。"
+    )
+
+    output, evidence_ids = extract_agent_evidence_claims(content)
+
+    assert [claim.text for claim in output.claims] == ["该方向由项目论文提出"]
+    assert output.claims[0].evidence_ids == ["e-1"]
+    assert evidence_ids == ("e-1",)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "普通说明\n论述 [evidence:]",
+        "论述 [evidence:e-1] 后面还有内容\n普通说明",
+        "合法论述 [evidence:e-1]\n伪造论述 [evidence:e-2,e-2]",
+    ],
+)
+def test_extract_agent_evidence_claims_rejects_any_malformed_explicit_marker(
+    content: str,
+) -> None:
+    with pytest.raises(AgentAnswerContractError):
+        extract_agent_evidence_claims(content)
 
 
 def test_canonicalize_agent_answer_keeps_only_valid_grounded_markdown_claims() -> None:

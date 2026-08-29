@@ -71,6 +71,8 @@ Phase 6 的本地个人项目精简交付已完成。系统在 Phase 5 的 `Rese
 - OpenSandbox 未配置 secure runtime，Docker overlay 物理磁盘硬配额、Storage staging orphan GC 未完成；
 - public-egress 只约束目标网络边界，不解析 HTTP method；raw Browser/Shell/MCP 可能发出外部写请求；
 - Agent 不获得平台外部写 Tool 或凭据，但公网 Shell 可下载用户态内容，属于 trusted-local 风险；
+- Assistant Message 可以混合项目引用、外部来源和工具回执；平台只验证显式 `[evidence:...]` Claim，
+  未标记正文不会被删除，也不获得 Project Evidence 背书；外部来源真实性仍依赖对应 Tool/来源契约；
 - noVNC 只支持同 generation、两个 Turn 之间单人控制，不保存 Cookie/Profile，不支持同 Turn interrupt；
 - 固定 arXiv Smoke 验证了有界 PDF 前缀、类型、magic 和 hash，没有把慢速完整 PDF 下载宣称为通过；
 - Fake Agent 评测不衡量真实模型 Groundedness；真实 Provider 质量和费用需显式、小预算评测；

@@ -94,16 +94,22 @@ Search Chunk 与 Matrix source Evidence 都通过 `get_or_add_many` 幂等物化
 下的 Evidence 快照。这样 Agent 不能直接把 Review Run Evidence ID 当成本轮引用事实，也不能伪造跨
 Run/Project Evidence。
 
-最终回答的严格契约是每条非空 Claim 独占一行：
+Assistant Message 可以是包含标题、项目证据、世界知识、外部来源、操作结果和 Artifact 说明的混合富文本。
+其中只有需要声明“由当前 Project Evidence 支持”的 Claim 使用以下严格行末标记：
 
 ```text
 论述文本 [evidence:evidence-id-1,evidence-id-2]
 ```
 
-或只输出固定文本 `当前授权上下文证据不足。`。总内容、Claim 数、单行、每 Claim Evidence 数和 ID
-长度均有上限；空行只作为 Claim 间分隔并被忽略，每行只能存在一个位于末尾的 Evidence marker。正文按
-首次出现顺序得到的唯一 Evidence IDs 必须与 `RuntimeTurnResult.evidence_ids` 精确一致。Application 随后加载 Evidence，复用既有
-`validate_citations` 和通用 `ClaimSet/Claim/Citation`。
+整轮没有任何有效内容时也可以只输出固定文本 `当前授权上下文证据不足。`。总内容、显式 Claim 数、单条
+Claim、每 Claim Evidence 数和 ID 长度均有上限；任何包含 `[evidence:` 的行都必须符合语法，不能用非法
+占位标记降级为普通正文。显式 Claim 按首次出现顺序得到的唯一 Evidence IDs 必须与
+`RuntimeTurnResult.evidence_ids` 精确一致。Application 随后只为这些 Claim 加载 Evidence，并复用既有
+`validate_citations` 和通用 `ClaimSet/Claim/Citation`；未标记正文原样持久化，但没有平台验证的引用语义。
+
+是否启用该契约只看当前 Turn 的最终 Assistant Message，不看同一 SDK Thread 中前序 Turn 是否曾调用
+Project Context Tool。因此“上一轮检索项目论文，下一轮生成文件”不会被旧 ToolMessage 污染；同一轮也
+可以组合 Project 检索、外部 Search/Browser、`execute`、文件写入和 Artifact 提交。
 
 成功时 `ClaimSet/Claim/Citation`、带可空 `claim_set_id` 的 Assistant Message、Runtime Binding、staged
 candidate、安全 Event、Run SUCCEEDED 与 Session active Turn 释放在同一短事务提交。引用缺失、伪造、
@@ -177,7 +183,8 @@ Phase 5 Spec：
 ChunkSet。Deep Adapter 只通过 ToolRuntime 注入 turn_run_id，Application 每次从 PostgreSQL 重建并复核
 Run、Turn、Session、Context/Policy Snapshot。检索精确固定 PaperVersion 与 ChunkSet，Matrix 只复制
 实际返回行的 Evidence 到当前 Agent Run。每个 Tool 参数生成稳定 effect，成功重放不再检索，RUNNING
-并发拒绝，temporary 失败沿同一 effect 重试，安全 Event 不保存 query 或正文。最终回答用严格行内
-Evidence 标记，再复用已有 Citation Validator 和 ClaimSet，在一个事务中提交 Message、Citation、
-Binding 和 Run 终态。这样复用了 Deep Agents 的 Agent Harness，同时 PostgreSQL 仍拥有权限、审计、
-引用和可靠性；尚未解决的 orphan RUNNING 和记录前崩溃窗口明确留在下一恢复门槛。”
+并发拒绝，temporary 失败沿同一 effect 重试，安全 Event 不保存 query 或正文。最终回复完整保存，只有
+显式行内 Evidence Claim 复用 Citation Validator 和 ClaimSet，并在一个事务中提交 Message、Citation、
+Binding 和 Run 终态；未标记内容可以表达外部研究与工具结果，但不会伪装成平台验证事实。这样复用了
+Deep Agents 的 Agent Harness，同时 PostgreSQL 仍拥有权限、审计、引用和可靠性；尚未解决的 orphan
+RUNNING 和记录前崩溃窗口明确留在下一恢复门槛。”

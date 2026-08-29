@@ -297,6 +297,36 @@ class _MatrixToolModel(_ProjectToolModel):
         )
 
 
+class _ProjectFirstThenNaturalReplyModel(_ProjectToolModel):
+    """首轮读取项目证据，次轮只返回不带引用的普通说明。"""
+
+    def _next_message(self, messages: list[Any]) -> AIMessage:
+        self.model_call_count += 1
+        latest_human_index = max(
+            index for index, message in enumerate(messages) if isinstance(message, HumanMessage)
+        )
+        latest_human = messages[latest_human_index]
+        if "第二轮继续" in latest_human.text:
+            return AIMessage(content="请明确要保存的内容，我会生成 TXT 文件。")
+        used_project_tool = any(
+            isinstance(message, ToolMessage) and message.name == "search_project_chunks"
+            for message in messages[latest_human_index + 1 :]
+        )
+        if used_project_tool:
+            return AIMessage(content="首轮项目结论 [evidence:evidence-agent-1]")
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "search_project_chunks",
+                    "args": {"query": "首轮研究"},
+                    "id": "project-first-turn",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+
 class _FailingMatrixContext(_ProjectContext):
     async def read_review_evidence_matrix(self, turn_run_id: str) -> ProjectContextToolResult:
         self.matrix_calls.append(turn_run_id)
@@ -2006,7 +2036,9 @@ async def test_project_tool_injects_turn_scope_and_hides_platform_ids_from_model
     assert project_context.search_calls == [(request.turn_run_id, "图神经网络")]
     assert project_context.matrix_calls == []
     assert result.assistant_content == (
-        "该方法得到本地论文支持 [evidence:evidence-agent-1]"
+        "## 研究结论\n"
+        "- 该方法得到本地论文支持[evidence:evidence-agent-1]\n"
+        "仍需进一步验证。"
     )
     assert result.evidence_ids == ("evidence-agent-1",)
     search_schemas = [
@@ -2027,6 +2059,30 @@ async def test_project_tool_injects_turn_scope_and_hides_platform_ids_from_model
             "turn_run_id",
         )
     )
+
+
+async def test_previous_turn_project_tool_does_not_reclassify_natural_reply() -> None:
+    model = _ProjectFirstThenNaturalReplyModel()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        project_context=_ProjectContext(),
+        checkpointer=MemorySaver(),
+    )
+
+    await _collect(
+        runtime.execute_turn(
+            _request(allowed_tool_names=("search_project_chunks",), max_tool_calls=1)
+        )
+    )
+    await _collect(
+        runtime.execute_turn(
+            _request(turn_run_id="turn-2", allowed_tool_names=(), max_tool_calls=0)
+        )
+    )
+    result = await runtime.collect_turn_result("turn-2")
+
+    assert result.assistant_content == "请明确要保存的内容，我会生成 TXT 文件。"
+    assert result.evidence_ids == ()
 
 
 async def test_matrix_tool_injects_turn_scope_with_no_model_controlled_arguments() -> None:
@@ -2188,22 +2244,6 @@ def test_restricted_harness_excludes_execute_without_executable_backend(monkeypa
 
     assert len(captured) == 1
     assert captured[0][1].excluded_tools == frozenset({"execute"})
-
-
-def test_only_actual_project_context_tool_use_requires_grounded_answer() -> None:
-    project_message = ToolMessage(
-        content="bounded evidence",
-        tool_call_id="call-project",
-        name="search_project_chunks",
-    )
-    browser_message = ToolMessage(
-        content="page opened",
-        tool_call_id="call-browser",
-        name="playwright_browser_navigate",
-    )
-
-    assert runtime_module._used_project_context_tool([project_message]) is True  # noqa: SLF001
-    assert runtime_module._used_project_context_tool([browser_message]) is False  # noqa: SLF001
 
 
 async def test_exact_model_harness_profile_does_not_pollute_same_provider() -> None:

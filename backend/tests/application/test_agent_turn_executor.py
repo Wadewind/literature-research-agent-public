@@ -578,7 +578,7 @@ async def test_executor_calls_runtime_after_read_transaction_and_commits_result_
 
 
 @pytest.mark.asyncio
-async def test_cited_runtime_result_commits_message_claims_and_omits_cross_turn_citations(
+async def test_mixed_runtime_result_preserves_message_and_commits_only_explicit_claims(
     db_engine,
 ) -> None:
     scenario = await seed_agent_scenario(db_engine)
@@ -601,8 +601,14 @@ async def test_cited_runtime_result_commits_message_claims_and_omits_cross_turn_
         evidence_run_id=submitted.run_id,
         chunk_id="agent-citation-chunk",
     )
+    assistant_content = (
+        "## 综合研究结果\n"
+        f"该结论有证据支持 [evidence:{evidence.evidence_id}]\n"
+        "外部检索结果：https://arxiv.org/abs/2401.00001\n"
+        "已生成 research-note.md，可在成果区下载。"
+    )
     runtime = _CitedRuntime(
-        content=f"该结论有证据支持 [evidence:{evidence.evidence_id}]",
+        content=assistant_content,
         evidence_ids=(evidence.evidence_id,),
     )
     executor = AgentTurnExecutor(
@@ -641,7 +647,10 @@ async def test_cited_runtime_result_commits_message_claims_and_omits_cross_turn_
 
     messages = await service.list_messages(scenario.actor, agent_session.session_id)
     assistant = messages[-1]
+    assert assistant.content == assistant_content
     assert assistant.claim_set_id is not None
+    turn_view = await service.get_turn(scenario.actor, submitted.run_id)
+    assert [candidate.name for candidate in turn_view.candidates] == ["research-note.md"]
     async with scenario.factory() as session:
         claim_repo = SqlalchemyClaimSetRepository(session)
         claim_set = await claim_repo.get_by_run_id(submitted.run_id)
