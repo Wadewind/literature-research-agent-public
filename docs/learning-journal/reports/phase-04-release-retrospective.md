@@ -65,9 +65,12 @@ repair/retry、放宽 Validator 或记录 Schema/messages。自动回归仍只�
 不访问真实 Provider。后续新 Review 已通过 `formulate_search_strategy`，但它不是隔离的 Provider 回归
 测试，不能扩大为完整真实质量结论。
 
-后续 Real 旅程又发现旧失败 ingestion Run 的 ARQ 重投递假成功，以及章节输出触及 token 上限后结构
-校验失败。三项缺陷的确认事实、推断边界、影响 ID、候选修复和所需回归测试统一维护在
-[Phase 4 Real 模式体验缺陷台账](phase-04-real-mode-defect-log.md)，后续体验问题继续按编号追加。
+后续 Real 旅程又发现旧失败 ingestion Run 的 ARQ 重投递假成功、章节输出触及 token 上限后
+结构校验失败，以及 Search Strategy 输出触顶后 Schema 校验失败。四项缺陷的确认事实、推断边界、
+影响 ID、候选修复和所需回归测试统一维护在
+[Phase 4 Real 模式体验缺陷台账](phase-04-real-mode-defect-log.md)，后续体验问题继续按编号追加。本次排查引出的平台级
+错误可观测性与 Run 诊断思考另行记录在
+[错误可观测性与 Run 诊断反思](../reflections/error-observability-and-run-diagnostics.md)，当前为延期方案。
 
 ## 60 秒面试说明
 

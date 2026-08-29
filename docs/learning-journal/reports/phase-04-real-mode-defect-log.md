@@ -171,3 +171,68 @@ completion 恰好达到 4000 token，且第二章节 Prompt 明显大于第一�
 - 若引入 repair，断言最多执行一次，失败后稳定终止，不形成无限重试或重复费用。
 - 恢复执行时不得重写已成功持久化的第一章节。
 - 普通自动测试只用 Fake/HTTP Mock，不访问真实 Provider；显式 Real 回归另行记录 token、阶段与结果。
+
+## P4-REAL-004：Search Strategy 输出疑似触及 token 上限后 Schema 校验失败
+
+- 发现日期：2026-08-28
+- 状态：调查中；高概率截断，未修复
+- 影响 Project：`117f946c-bef8-4f27-86d3-f0d282ab7490`
+- 影响 Review/Run：`b84fda4f-33cf-44b7-99e7-3d451fd49a27`
+- 影响 Attempt：`6c779328-8d2a-4b92-aafe-4b511f581f79`
+- 影响 Step：`formulate_search_strategy`
+- 稳定错误消息：`search_strategy_schema_invalid`
+- 关联提交：无
+
+### 现象
+
+Provider 请求以 `model_request_completed / succeeded` 结束，紧接着 Worker 以
+`SearchStrategyValidationError` 终止 Review。页面只能看到 Run 失败，日志本身没有指出是
+Provider 输出截断、JSON 语法错误、必需字段缺失，还是后续业务规则拒绝。
+
+### 已确认事实与证据链
+
+1. `run_attempts.error` 为
+   `{"type":"SearchStrategyValidationError","message":"search_strategy_schema_invalid"}`；
+2. `run_steps` 中 `validate_request` 成功，`formulate_search_strategy` 以
+   `search_strategy_invalid` 失败；
+3. ModelInvocation 记录 `prompt_tokens=410`、`completion_tokens=2000`、Provider 调用状态为
+   `succeeded`；
+4. `ReviewSearchStrategyService` 对该阶段固定传入 `max_tokens=2000`；
+5. Research Question 长度为 18 个字符，可排除超长用户问题直接导致庞大输出；
+6. `search_strategy_schema_invalid` 仅在 Pydantic 无法将返回字符串解析为
+   `search-strategy.v1` 负载时产生；尚未进入维度数量、维度字段或 arXiv query 业务校验；
+7. 没有生成 Search Strategy ReviewOutput，当前设计也不会对非法策略执行 repair；
+8. OpenAI-compatible Adapter 只返回 content/model/usage，未读取或持久化 Provider
+   `finish_reason`，也不保存完整模型输出。
+
+### 高概率推断（尚未确认）
+
+completion token 恰好达到该 Step 的 2000 上限，随后发生 JSON Schema 解析失败，因此
+“输出触顶后被截断”是当前最高概率解释。由于没有 `finish_reason`、原始响应或脱敏的 JSON
+解析错误位置，不能把该推断写成已确认根因。
+
+### 与已有缺陷的关系
+
+- P4-REAL-001 是 `json_object` fallback 没有传递业务 Schema 的已确认 Adapter 缺陷；本次尚无
+  证据表明该修复回归，不应合并为同一根因；
+- P4-REAL-003 同样表现为“Provider 成功 + completion token 触顶 + 本地结构校验失败”，
+  共同暴露了缺少 `finish_reason` 和细分校验类别的诊断缺口；
+- `review-default.v2` 把章节输出上限提高到 8000，但 Search Strategy 仍在 Service 中固定为
+  2000，因此上一次章节预算缓解不影响本 Step。
+
+### 候选修复（待决策，当前延期）
+
+- 安全保留 allowlist 内的 `finish_reason`、请求输出上限、响应字节数、内容 hash 和结构校验类别，
+  不保存完整 Prompt 或模型响应；
+- 区分 `structured_output.truncated`、`structured_output.schema_invalid` 和后续业务校验错误；
+- 评估 Search Strategy 的独立输出预算、更精简 Prompt 或非思考模式；
+- 如增加 repair，最多一次，必须同时固定费用、幂等和失败终止语义；
+- 更普遍的错误契约和 Run Diagnostic 方案见
+  [错误可观测性与 Run 诊断反思](../reflections/error-observability-and-run-diagnostics.md)。
+
+### 所需回归测试
+
+- 使用 HTTP Mock 返回 `finish_reason=length` 和截断 JSON，验证不再统一降级为 Schema error；
+- 分别覆盖非法 JSON、缺必需字段、额外字段、维度规则和 arXiv query 校验；
+- 若增加 repair，验证最多一次调用，且重复 Job 不会重复产生已持久化结果或无限增加费用；
+- 普通自动测试继续使用 Fake/HTTP Mock，显式 Real Provider 验证只记录低敏元数据。

@@ -12,6 +12,7 @@ learning-journal/
 ├─ phases/      # 阶段目标、范围、切片、验收和复盘
 ├─ modules/     # 核心模块完成后形成的学习笔记
 ├─ decisions/   # 需要保留背景、选项和后果的架构决策
+├─ reflections/ # 由真实故障或实施经历形成的方法论、问题反思与延期方案
 └─ reports/     # 实际评测、性能与显式真实 Provider 运行记录
 ```
 
@@ -23,6 +24,8 @@ learning-journal/
 - 测试记录只写实际执行过的命令和结果。
 - 设计与实现不一致时，先在 Phase Spec 或 ADR 中明确决定。
 - 每份完成的模块笔记应包含代码入口、已知限制和 60 秒面试说明。
+- Reflection 必须区分已确认事实、高概率推断和候选方案；未经决策的延期方案不得写成
+  已实现能力或阶段承诺。
 
 ## 当前阶段
 
@@ -107,3 +110,8 @@ Slice 8 已按 [`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-r
 Browser/Artifact/Manifest 整合与视觉刷新。最终固定评测、升级门禁和已知限制见
 [`Research Agent 固定评测与升级门禁`](modules/agent-evaluation.md)及
 [`Phase 6 完成报告`](reports/phase-06-research-agent-extension-completion.md)。
+
+Phase 6 完成后的一次 Real Review 排查进一步暴露了“业务审计事实较完整，故障诊断语义仍分散”的
+横切问题。已确认事实、排查方法、统一 Failure 契约和 Run Diagnostic 的渐进方案记录在
+[错误可观测性与 Run 诊断反思](reflections/error-observability-and-run-diagnostics.md)；当前状态为
+`Proposed / Deferred`，不改变 Phase 6 已完成结论。

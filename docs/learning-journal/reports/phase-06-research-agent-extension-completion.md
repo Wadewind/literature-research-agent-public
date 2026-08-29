@@ -75,6 +75,10 @@ Phase 6 的本地个人项目精简交付已完成。系统在 Phase 5 的 `Rese
 - 固定 arXiv Smoke 验证了有界 PDF 前缀、类型、magic 和 hash，没有把慢速完整 PDF 下载宣称为通过；
 - Fake Agent 评测不衡量真实模型 Groundedness；真实 Provider 质量和费用需显式、小预算评测；
 - 不支持多 Agent、长期 Memory、用户自定义 MCP URL/命令/网络 Profile、动态安装或宿主执行。
+- Run/Attempt/Event 已保存可追溯的业务事实，但平台尚无统一、版本化的 Failure 契约和
+  Run Diagnostic 聚合视图；当前诊断仍可能需要手工联系日志、多张业务表和代码路径。问题证据、
+  方法论和延期渐进方案见
+  [错误可观测性与 Run 诊断反思](../reflections/error-observability-and-run-diagnostics.md)。
 
 ## 阶段提交索引
 
