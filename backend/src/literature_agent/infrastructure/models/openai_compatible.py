@@ -257,16 +257,27 @@ class OpenAiCompatibleEmbedding(_OpenAiCompatibleBase, EmbeddingModel):
 class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
     """OpenAI 兼容 ChatCompletions Adapter（默认 DeepSeek 端点）。"""
 
-    def __init__(self, *, json_schema_supported: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        json_schema_supported: bool = True,
+        thinking_mode: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         """初始化 Chat Adapter。
 
         参数:
             json_schema_supported: Provider 是否支持 ``json_schema`` 形态的
                 ``response_format``；不支持时降级为 ``json_object``。
+            thinking_mode: 已注册 Provider 可固定为 ``disabled``；通用路径不发送
+                Provider 专属字段，也不允许开启 thinking。
             **kwargs: 见 ``_OpenAiCompatibleBase``。
         """
+        if thinking_mode not in {None, "disabled"}:
+            raise ValueError("thinking_mode 未在平台注册")
         super().__init__(**kwargs)
         self._json_schema_supported = json_schema_supported
+        self._thinking_mode = thinking_mode
 
     async def generate(
         self,
@@ -281,6 +292,8 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
             "model": self.model,
             "messages": request_messages,
         }
+        if self._thinking_mode is not None:
+            payload["thinking"] = {"type": self._thinking_mode}
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if json_schema is not None:

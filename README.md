@@ -218,6 +218,9 @@ AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3
 
 - Embedding Base URL 是 API 根路径；Adapter 会自行追加 `/embeddings`。
 - 不支持 `response_format=json_schema` 的 Chat Provider 必须设置 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false`，业务输出仍会经过 Pydantic Schema 和 Citation Validator。
+- RAG/Review 使用官方 `api.deepseek.com` 的 `deepseek-v4-flash`/`deepseek-v4-pro` 时固定关闭
+  thinking，避免推理 token 消耗结构化输出预算；其他 OpenAI-compatible Provider 不会收到 DeepSeek
+  专属字段，也不开放任意 `extra_body` 配置。
 - Docling 主路径失败时只对结构性 PDF 错误降级到 pypdf；OCR 默认关闭。
 - Docling 首次运行需要下载模型。缓存准备后可在 `.env` 设置 `HF_HUB_OFFLINE=1`；缓存缺失时不要设置。
 - 若真实模式检测到 SOCKS 代理但虚拟环境未安装 `socksio`，一键脚本会明确告警，并仅为本次启动清除无法使用的 SOCKS 代理变量；不会修改系统设置。若网络必须经过 SOCKS，需要显式安装并锁定 `socksio`。手动启动 Worker 时则需自行处理代理环境。

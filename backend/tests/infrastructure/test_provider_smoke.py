@@ -66,6 +66,7 @@ async def test_real_chat_smoke() -> None:
         timeout_seconds=settings.model_timeout_seconds,
         max_retries=settings.model_max_retries,
         json_schema_supported=settings.chat_json_schema_supported,
+        thinking_mode="disabled",
     )
     try:
         result = await adapter.generate(

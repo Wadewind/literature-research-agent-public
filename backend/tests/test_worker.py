@@ -124,6 +124,46 @@ def test_fake_model_stack_uses_offline_tokenizer() -> None:
     assert closables == []
 
 
+@pytest.mark.parametrize(
+    ("base_url", "model", "expected_thinking_mode"),
+    [
+        ("https://api.deepseek.com", "deepseek-v4-flash", "disabled"),
+        ("https://api.deepseek.com/v1", "deepseek-v4-pro", "disabled"),
+        ("https://gateway.example/v1", "deepseek-v4-flash", None),
+        ("https://api.deepseek.com", "other-model", None),
+    ],
+)
+def test_real_chat_model_stack_scopes_deepseek_non_thinking_mode(
+    monkeypatch,
+    base_url: str,
+    model: str,
+    expected_thinking_mode: str | None,
+) -> None:
+    """只有官方 DeepSeek V4 文本模型获得固定 non-thinking Provider 参数。"""
+    captured: dict[str, object] = {}
+
+    class StubChat:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+            self.provider = str(kwargs["provider"])
+            self.model = str(kwargs["model"])
+
+    monkeypatch.setattr("literature_agent.worker.OpenAiCompatibleChat", StubChat)
+
+    _gateway, _profile, closables = _build_model_stack(
+        Settings(
+            chat_backend="openai_compatible",
+            chat_base_url=base_url,
+            chat_model=model,
+        ),
+        lambda: None,  # type: ignore[arg-type]
+    )
+
+    assert captured["thinking_mode"] == expected_thinking_mode
+    assert len(closables) == 1
+    assert isinstance(closables[0], StubChat)
+
+
 def test_fake_research_runtime_does_not_construct_provider(monkeypatch) -> None:
     """默认 Fake 不构造模型、不打开 Checkpointer，也不触网。"""
     monkeypatch.setattr(

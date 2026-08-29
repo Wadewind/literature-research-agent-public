@@ -186,6 +186,10 @@ Run 快照和创建请求指纹：
 不会迁移或静默改写历史 Run。当前 UI 只收集研究问题和 Outline 决策，不让用户提交上述原始参数。
 如果后续需要不同规模，优先新增“快速/标准”等版本化 Profile，而不是开放任意数字。
 
+RAG/Review 的 Chat Adapter 在官方 `api.deepseek.com` 且模型为 `deepseek-v4-flash` 或
+`deepseek-v4-pro` 时固定发送 `thinking.type=disabled`，让上述预算只约束可见结构化输出。其他
+OpenAI-compatible Provider 保持通用请求形状；不提供任意 `extra_body` 环境配置。
+
 ## 4. Agent MCP Catalog 与用户选择
 
 平台 Catalog 当前固定：

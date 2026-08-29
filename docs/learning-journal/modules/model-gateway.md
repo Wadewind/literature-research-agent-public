@@ -46,6 +46,10 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
   漂移；严格 Provider 路径和自由文本路径的请求形状保持不变。
 - **缺 API Key 不在启动时崩溃**：本地开发默认 Fake backend；真实模式下首次调用抛 `ModelAuthError`，与「开发绕过必须显式」的安全基线一致。
 - **Provider 默认值可替换**：智谱 `embedding-3`（`https://open.bigmodel.cn/api/paas/v4`，维度默认 1024 可选 256/512/2048）与 DeepSeek `deepseek-v4-flash`（`https://api.deepseek.com`）只是 Settings 默认值，base_url/key/model 全部环境变量可配（2026-08-20 与用户定稿）。
+- **DeepSeek V4 的 thinking 显式收窄**：官方 `api.deepseek.com` 的 `deepseek-v4-flash`/
+  `deepseek-v4-pro` 默认会开启 thinking，而 RAG/Review 需要稳定、可校验的结构化正文预算。Worker 只对这组
+  已注册 host/model 向 Adapter 传入 `thinking_mode=disabled`；Adapter 只接受 `disabled` 或不发送该字段，
+  不允许开启 thinking、不开放任意 `extra_body`，其他兼容 Provider 的请求形状不变。
 
 ## 失败、重试、重复和取消行为
 
@@ -80,6 +84,8 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - PostgreSQL 集成 `tests/integration/test_model_invocation_repository.py`（3 例）；
 - 2026-08-29 结构化输出诊断回归：Adapter/ModelGateway/Section/Workflow 定向测试 `74 passed`，
   ModelInvocation PostgreSQL 集成 `3 passed`；未访问真实 Provider；
+- 2026-08-30 DeepSeek V4 non-thinking 修复新增 Adapter 请求体与 Worker host/model allowlist 契约；普通测试
+  不访问真实 Provider，修复后的完整 Real Review 仍需显式重建验证；
 - 切片 3 完成时：非集成 216 passed + 4 skipped，integration 43 passed，ruff/pyright 全绿。
 - 切片 10 真实 Smoke（2026-08-21）：`embedding-3` 返回 1 个 1024 维向量且 usage 非空；真实 Chat 在 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false` 的 `json_object` 模式返回符合 `RagAnswerOutput` 的 `insufficient_evidence`，usage 非空。普通入口仍为 2 skipped，不触网。初次实跑还验证了 401 正确映射认证错误、完整端点误作 Base URL 会形成 404，以及不支持 `json_schema` 时 400 被归为永久非法请求；修正配置后通过。
 - Phase 4 发布后首次 Real Review 暴露：Provider 调用成功，但旧 `json_object` 分支丢弃传入的
@@ -108,6 +114,8 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - `json_object` 降级不能由 Provider 强制 Schema；新 system instruction 只是提高遵循概率，严格 Pydantic
   解析和各业务 Validator 仍是确定性边界。Search Strategy 当前不做结构修复，非法输出仍稳定失败；其他
   用例是否允许有限修复由各自业务契约决定。
+- 当前不持久化 Provider 的 `completion_tokens_details.reasoning_tokens`；固定 non-thinking 后不依赖该字段
+  执行业务判断，若 Provider 漂移仍由 `finish_reason`、响应指纹和严格 Validator 稳定失败并提供诊断。
 
 ## 60 秒面试说明
 

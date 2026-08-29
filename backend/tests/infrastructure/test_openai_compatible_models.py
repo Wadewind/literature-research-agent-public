@@ -257,10 +257,30 @@ async def test_chat_success_with_json_schema(httpx2_mock: respx.Router) -> None:
     assert body["model"] == "deepseek-v4-flash"
     assert body["messages"] == [{"role": "user", "content": "问题"}]
     assert body["max_tokens"] == 512
+    assert "thinking" not in body
     assert body["response_format"] == {
         "type": "json_schema",
         "json_schema": {"name": "response", "schema": schema},
     }
+
+
+async def test_chat_explicitly_disables_thinking_for_registered_provider(
+    httpx2_mock: respx.Router,
+) -> None:
+    """已注册 Provider 可以固定关闭 thinking，避免推理耗尽结构化输出预算。"""
+    route = httpx2_mock.post(_CHAT_URL).mock(return_value=httpx.Response(200, json=_chat_payload()))
+    adapter = _chat_adapter(thinking_mode="disabled")
+
+    await adapter.generate([ChatMessage(role="user", content="问题")], max_tokens=512)
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["thinking"] == {"type": "disabled"}
+
+
+def test_chat_rejects_unregistered_thinking_mode() -> None:
+    """通用 Adapter 不接受调用方借 thinking 参数扩大 Provider 行为。"""
+    with pytest.raises(ValueError, match="thinking_mode"):
+        _chat_adapter(thinking_mode="enabled")
 
 
 async def test_chat_unknown_finish_reason_is_safely_normalized(

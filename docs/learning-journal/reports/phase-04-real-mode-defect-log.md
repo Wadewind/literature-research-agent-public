@@ -119,7 +119,7 @@ Review 检索到 10 篇论文，其中 5 篇进入 `ready`，另 5 篇长期停�
 ## P4-REAL-003：章节输出触及 token 上限后结构校验失败
 
 - 发现日期：2026-08-24
-- 状态：已补安全诊断契约，原始失败根因与新 Real 回归仍待确认
+- 状态：已补安全诊断契约并修复 DeepSeek V4 默认 thinking 配置缺口，修复后 Real 回归待执行
 - 影响 Project：`a8a53cf8-32d6-48f2-b5f5-d915220394d0`
 - 影响 Review：`57439d97-115b-4191-8c01-1fab4eaab98e`
 - 影响 Step：`draft_sections` 的第二章节 `solution_frameworks`
@@ -197,6 +197,23 @@ completion 恰好达到 4000 token，且第二章节 Prompt 明显大于第一�
 - 若引入 repair，断言最多执行一次，失败后稳定终止，不形成无限重试或重复费用。
 - 恢复执行时不得重写已成功持久化的第一章节。
 - 普通自动测试只用 Fake/HTTP Mock，不访问真实 Provider；显式 Real 回归另行记录 token、阶段与结果。
+
+### 2026-08-30 DeepSeek V4 默认 thinking 定位与修复
+
+- 新影响 Review/Run：`dd195343-0fe1-4498-a4d5-6dc8db63bef5`，使用 `review-default.v3`；前五个 Section
+  已成功持久化，第六个 `cross_dimension_analysis` 失败，第七个尚未执行；
+- 失败调用记录为 `prompt_tokens=5746`、`requested_max_tokens=8000`、
+  `completion_tokens=8000`、`finish_reason=length`、`response_bytes=0`，因此 8000 预算已经正确送达
+  Provider，失败不是 Review Profile 未生效；
+- 代码核对确认 RAG/Review 的 `OpenAiCompatibleChat` 请求此前没有发送 DeepSeek `thinking` 字段；
+  2026-08-30 核对的 DeepSeek V4 官方契约表明 thinking 默认启用且默认 effort 为 high，推理正文通过独立
+  `reasoning_content` 返回。项目没有保存 `reasoning_tokens` 明细，因此无法事后证明精确推理 token 数；
+  但“恰好触顶、`length`、空 content”与推理在最终 JSON 前耗尽预算高度一致；
+- 最小修复不继续提高 8000 预算、不增加 repair/retry，也不改写终态 Run。Worker 仅对官方
+  `api.deepseek.com` 与 `deepseek-v4-flash`/`deepseek-v4-pro` 组合选择 `thinking_mode=disabled`；通用
+  Adapter 只接受 `disabled` 或不发送该字段，其他 OpenAI-compatible Provider 不受影响；
+- 已增加 HTTP Mock 请求体契约和 Worker host/model allowlist 测试；普通测试不访问真实 Provider。需要新建
+  Review Run 才能完成修复后的 Real 回归，不能把旧 Run 或离线结果写成已通过。
 
 ## P4-REAL-004：Search Strategy 输出疑似触及 token 上限后 Schema 校验失败
 

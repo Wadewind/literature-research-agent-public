@@ -240,6 +240,9 @@ from literature_agent.observability import (
 
 logger = logging.getLogger(__name__)
 
+_DEEPSEEK_API_HOST = "api.deepseek.com"
+_DEEPSEEK_NON_THINKING_CHAT_MODELS = frozenset({"deepseek-v4-flash", "deepseek-v4-pro"})
+
 
 def _build_parser_and_profile(settings: Settings) -> tuple[DocumentParser, ParseProfile]:
     """按 ``parser_backend`` 配置选择 Parser 实现与默认 ParseProfile。
@@ -281,6 +284,17 @@ def _build_chunk_profile(settings: Settings) -> ChunkProfile:
         embedding_model=settings.embedding_model,
         embedding_dimensions=settings.embedding_dimensions,
     )
+
+
+def _chat_thinking_mode(settings: Settings) -> str | None:
+    """只为官方 DeepSeek V4 文本模型固定关闭默认 thinking。"""
+    parsed = urlparse(settings.chat_base_url)
+    if (
+        parsed.hostname == _DEEPSEEK_API_HOST
+        and settings.chat_model in _DEEPSEEK_NON_THINKING_CHAT_MODELS
+    ):
+        return "disabled"
+    return None
 
 
 def _build_model_stack(
@@ -337,6 +351,7 @@ def _build_model_stack(
             timeout_seconds=settings.model_timeout_seconds,
             max_retries=settings.model_max_retries,
             json_schema_supported=settings.chat_json_schema_supported,
+            thinking_mode=_chat_thinking_mode(settings),
         )
         chat_model = chat_adapter
         closables.append(chat_adapter)
