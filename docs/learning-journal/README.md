@@ -115,3 +115,7 @@ Phase 6 完成后的一次 Real Review 排查进一步暴露了“业务审计�
 横切问题。已确认事实、排查方法、统一 Failure 契约和 Run Diagnostic 的渐进方案记录在
 [错误可观测性与 Run 诊断反思](reflections/error-observability-and-run-diagnostics.md)；当前状态为
 `Proposed / Deferred`，不改变 Phase 6 已完成结论。
+
+项目也对“单人线性开发全部进入 `main` 是否合理”进行了独立复盘：当前可运行、可回退的切片提交可以
+保留，后续项目则优先采用稳定 `main`、短功能分支、自审 PR 和 Tag 里程碑。具体权衡与推荐流程见
+[单人项目中的 main、功能分支与提交历史](reflections/solo-development-branching-and-commit-strategy.md)。
