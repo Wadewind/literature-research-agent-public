@@ -35,7 +35,12 @@ ARQ execute_run(run_id)
 - ARQ Job 仍只携带 `run_id`。API 进程的 contextvar 不跨进程传播；Worker correlation 是当前 Job 的
   本地诊断标识，API mutation 与 Run 的关系仍可经持久 Event correlation 查询；
 - `configure_logging` 只维护一个项目 JSON Handler，不删除 pytest/宿主已有 Handler，重复
-  `create_app()` 或 Worker startup 不会叠加项目 Handler。
+  `create_app()` 或 Worker startup 不会叠加项目 Handler；`AGENT_LOG_LEVEL` 经统一 `Settings` 严格解析，
+  API、Worker 与 Uvicorn logger/handler 使用同一阈值。允许值为
+  `DEBUG/INFO/WARNING/ERROR/CRITICAL`，大小写不敏感，默认 `INFO`，未知值使进程启动失败；
+- `scripts/dev.sh` 使用 `--no-access-log` 关闭 Uvicorn 的逐请求 access log。HTTP 请求仍由
+  `CorrelationMiddleware` 输出带路由模板、状态、耗时和 correlation 的安全结构化事件，避免同一请求
+  同时出现无字段价值的 `unstructured_log` 与 `request_completed`。
 
 ## 日志契约与安全
 
@@ -81,11 +86,15 @@ Event notifier、Attempt close 和 heartbeat 的“记录失败不破坏业务�
 ## 重要测试和实际结果
 
 - `tests/test_observability.py`：合法单行 JSON、UTC、严格 allowlist、异常脱敏、嵌套恢复、asyncio 并发
-  隔离、重复配置；
+  隔离、重复配置及 Uvicorn 等级同步；
+- `tests/infrastructure/test_config.py`：日志等级默认值、大小写归一化和未知值 fail-fast；
+- `tests/test_dev_script.py`：本地启动关闭重复 Uvicorn access log；
 - `tests/api/test_correlation.py`：header 接受/拒绝/生成/回显、安全 500、query/header 不入日志、退出
   reset；Run、Upload、Conversation、Review API 测试验证客户端 correlation 进入 Event 或服务调用；
 - Run/Worker/Model 测试：持久 Run/Attempt 上下文、各既有 outcome、Worker 有界确定 correlation、
   Model 成功/失败日志不含 Prompt、结果或异常正文；
+- 2026-08-29 日志等级维护验证：配置、Formatter、开发脚本与 Worker 定向测试 `45 passed`；
+  `ruff check src tests`、`pyright`、`bash -n scripts/dev.sh` 与 `git diff --check` 通过；
 - 切片 5 最终定向测试：`103 passed`；完整非集成（安全修复前一轮，生产路径随后仅收紧日志序列化）：
   `637 passed, 4 skipped`；相关 PostgreSQL/Valkey
   Run/Outbox/Worker/Event/ModelInvocation/Retrieval 集成：`41 passed`；`ruff check src tests` 与
@@ -102,6 +111,9 @@ Event notifier、Attempt close 和 heartbeat 的“记录失败不破坏业务�
 ## 已知限制
 
 - 没有 OpenTelemetry Trace、集中日志采集、保留策略、搜索 UI 或告警；本地 stdout/stderr 是唯一输出；
+- 当前只有一个统一阈值，没有按模块独立等级或“文件保留 INFO、终端只显示 WARNING”的双 Handler；将
+  `AGENT_LOG_LEVEL` 提高到 `WARNING` 会同时丢弃 API 与 Worker 的全部 INFO 日志，但不会影响数据库中的
+  Event、Run/Attempt、ModelInvocation 或 Prometheus Metrics；
 - API correlation 不作为 ARQ payload 跨进程传播；API Event correlation 和 Worker 自有 correlation 通过
   同一 `run_id` 关联，而不是伪装成分布式 Trace；
 - 尚未逐行机械迁移全仓所有历史 logger；Formatter 会安全降级旧消息，关键 Worker/Run/Provider/Outbox/

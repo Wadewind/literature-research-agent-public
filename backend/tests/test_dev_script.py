@@ -23,3 +23,10 @@ def test_dev_script_keeps_research_agent_fake_by_default_and_worker_only_secret(
         "unset AGENT_EMBEDDING_API_KEY AGENT_CHAT_API_KEY "
         "AGENT_RESEARCH_MODEL_API_KEY" in script
     )
+
+
+def test_dev_script_disables_duplicate_uvicorn_access_log() -> None:
+    """项目中间件已有安全请求日志，不再重复输出 Uvicorn access log。"""
+    script = (Path(__file__).parents[2] / "scripts" / "dev.sh").read_text()
+
+    assert "--no-access-log" in script

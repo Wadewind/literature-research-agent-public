@@ -157,10 +157,13 @@ def configure_logging(*, service: str, level: int = logging.INFO) -> None:
     handler.setLevel(level)
     root.setLevel(level)
     # Uvicorn 默认使用不向 root 传播的自有 Handler；应用工厂在其配置完成后
-    # 被调用，因此在这里统一 Formatter，避免 access/error 行退回纯文本。
+    # 被调用，因此在这里统一等级与 Formatter，避免日志阈值分裂或回退纯文本。
     for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-        for external_handler in logging.getLogger(logger_name).handlers:
+        external_logger = logging.getLogger(logger_name)
+        external_logger.setLevel(level)
+        for external_handler in external_logger.handlers:
             external_handler.setFormatter(formatter)
+            external_handler.setLevel(level)
 
 
 def log_event(

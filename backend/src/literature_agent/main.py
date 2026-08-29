@@ -14,6 +14,7 @@ from literature_agent.api.papers import router as papers_router
 from literature_agent.api.projects import router as projects_router
 from literature_agent.api.reviews import router as reviews_router
 from literature_agent.api.runs import router as runs_router
+from literature_agent.infrastructure.config import Settings
 from literature_agent.infrastructure.lifespan import app_lifespan
 from literature_agent.observability import CorrelationMiddleware, configure_logging
 
@@ -24,7 +25,8 @@ def create_app() -> FastAPI:
     工厂本身无状态：所有应用级资源都由 lifespan 上下文管理器创建和回收。
     这样测试不会依赖全局单例，也便于重复创建应用实例。
     """
-    configure_logging(service="api")
+    settings = Settings.from_env()
+    configure_logging(service="api", level=settings.log_level)
     app = FastAPI(
         title="Literature Review Agent",
         lifespan=app_lifespan,

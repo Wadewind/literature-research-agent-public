@@ -166,7 +166,7 @@ printf 'API Metrics: http://127.0.0.1:8000/metrics\n'
 (
     cd "${BACKEND_DIR}"
     exec setsid .venv/bin/uvicorn literature_agent.main:create_app \
-        --factory --host 127.0.0.1 --port 8000
+        --factory --host 127.0.0.1 --port 8000 --no-access-log
 ) &
 child_pids+=("$!")
 

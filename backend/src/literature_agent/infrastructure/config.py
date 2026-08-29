@@ -1,5 +1,6 @@
 """应用配置。"""
 
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -62,6 +63,14 @@ _DEFAULT_RESEARCH_SANDBOX_IMAGE = (
 # arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。
 _DEFAULT_ARXIV_BACKEND = "fake"
 _DEFAULT_WORKER_METRICS_PORT = 8001
+_DEFAULT_LOG_LEVEL = logging.INFO
+_LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,10 +136,18 @@ class Settings:
     research_sandbox_image: str = field(default=_DEFAULT_RESEARCH_SANDBOX_IMAGE)
     arxiv_backend: str = field(default=_DEFAULT_ARXIV_BACKEND)
     worker_metrics_port: int = field(default=_DEFAULT_WORKER_METRICS_PORT)
+    log_level: int = field(default=_DEFAULT_LOG_LEVEL)
 
     @classmethod
     def from_env(cls) -> "Settings":
         """根据环境变量创建设置对象。"""
+        raw_log_level = os.getenv("AGENT_LOG_LEVEL", "INFO").strip().upper()
+        try:
+            log_level = _LOG_LEVELS[raw_log_level]
+        except KeyError as exc:
+            raise ValueError(
+                "AGENT_LOG_LEVEL 必须为 DEBUG、INFO、WARNING、ERROR 或 CRITICAL"
+            ) from exc
         raw_max_upload = os.getenv("AGENT_MAX_UPLOAD_SIZE_BYTES")
         max_upload_size = int(raw_max_upload) if raw_max_upload else _DEFAULT_MAX_UPLOAD_SIZE_BYTES
         raw_parser_timeout = os.getenv("AGENT_PARSER_TIMEOUT_SECONDS")
@@ -334,4 +351,5 @@ class Settings:
             research_sandbox_image=research_sandbox_image,
             arxiv_backend=os.getenv("AGENT_ARXIV_BACKEND", _DEFAULT_ARXIV_BACKEND),
             worker_metrics_port=worker_metrics_port,
+            log_level=log_level,
         )

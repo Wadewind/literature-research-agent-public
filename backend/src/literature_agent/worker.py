@@ -721,7 +721,7 @@ async def _sandbox_cleanup_loop(ctx: dict[str, Any]) -> None:
 
 async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
     """Worker 启动：建立数据库、队列依赖并启动派发与对账循环。"""
-    configure_logging(service="worker")
+    configure_logging(service="worker", level=settings.log_level)
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     queue = ArqRunQueue(settings.redis_url)
@@ -1098,8 +1098,8 @@ def make_worker_settings(settings: Settings) -> type:
 
 def main() -> None:
     """Worker 进程入口。"""
-    configure_logging(service="worker")
     settings = Settings.from_env()
+    configure_logging(service="worker", level=settings.log_level)
     run_worker(make_worker_settings(settings))
 
 

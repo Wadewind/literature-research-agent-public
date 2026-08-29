@@ -90,19 +90,27 @@ def test_repeated_configuration_does_not_stack_project_handlers() -> None:
     root = logging.getLogger()
     access_logger = logging.getLogger("uvicorn.access")
     before = list(root.handlers)
+    before_root_level = root.level
     before_access = list(access_logger.handlers)
+    before_access_level = access_logger.level
     access_handler = logging.StreamHandler()
     access_logger.handlers = [access_handler]
     try:
-        configure_logging(service="api")
-        configure_logging(service="api")
+        configure_logging(service="api", level=logging.WARNING)
+        configure_logging(service="api", level=logging.WARNING)
         owned = [h for h in root.handlers if getattr(h, "_literature_agent_json", False)]
         assert len(owned) == 1
         assert isinstance(owned[0].formatter, JsonLogFormatter)
+        assert owned[0].level == logging.WARNING
+        assert root.level == logging.WARNING
         assert isinstance(access_handler.formatter, JsonLogFormatter)
+        assert access_handler.level == logging.WARNING
+        assert access_logger.level == logging.WARNING
     finally:
         root.handlers[:] = before
+        root.setLevel(before_root_level)
         access_logger.handlers[:] = before_access
+        access_logger.setLevel(before_access_level)
 
 
 def test_log_event_never_serializes_unapproved_values() -> None:

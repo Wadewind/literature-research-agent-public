@@ -146,8 +146,10 @@ OpenSandbox Server；短 TTL Sandbox 由已有清理/补偿机制收敛。
 API 与 Worker 日志以单行 JSON 输出。HTTP 响应会回显 `X-Correlation-ID`；客户端可以提供 1–128 个
 `A-Za-z0-9._:-` 字符的 ID，缺失或非法时由 API 生成 UUID。API mutation 的 ID 会进入对应业务 Event；
 Worker 为每个 Job 建立独立 correlation，并通过同一 `run_id` 与 API/Event 链路关联。日志不包含请求
-query/body/headers、完整 Prompt、模型响应、PDF/Chunk 全文或异常 traceback。当前只提供本地标准输出，
-没有集中日志平台、OpenTelemetry Trace、告警或 SLA。
+query/body/headers、完整 Prompt、模型响应、PDF/Chunk 全文或异常 traceback。`AGENT_LOG_LEVEL` 控制
+API 与 Worker 的 Python 日志阈值，允许 `DEBUG/INFO/WARNING/ERROR/CRITICAL`，默认 `INFO`；无效值会在
+启动时失败。`scripts/dev.sh` 关闭重复的 Uvicorn access log，项目自身的 `request_completed/failed`
+事件仍按上述阈值输出。当前只提供本地标准输出，没有集中日志平台、OpenTelemetry Trace、告警或 SLA。
 
 Prometheus text exposition 按进程独立暴露：API 的 <http://127.0.0.1:8000/metrics> 只包含 API 进程
 Registry；Worker 的 <http://127.0.0.1:8001/metrics> 只包含 Worker 进程 Registry。Worker endpoint 固定

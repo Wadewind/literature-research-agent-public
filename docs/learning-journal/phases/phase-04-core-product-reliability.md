@@ -289,6 +289,10 @@ LLM-as-a-Judge。
   Event notification、ModelGateway 和 Retrieval 摘要已迁移为固定结构化事件；Model 日志只含
   capability/provider/model/status/duration/error type，不含 Prompt、结果或 Provider 错误正文。日志不替代
   Event/Attempt/ModelInvocation，也未引入 Trace、日志平台或 Metrics。
+- Phase 6 完成后的本地开发维护补充：新增统一 `AGENT_LOG_LEVEL`，默认 `INFO`，严格接受
+  `DEBUG/INFO/WARNING/ERROR/CRITICAL` 并同步 API、Worker 与 Uvicorn 阈值；`scripts/dev.sh` 关闭与
+  `CorrelationMiddleware` 重复的 Uvicorn access log，保留项目自身安全请求事件。未引入文件 Handler、
+  集中日志平台或按模块等级。
 - 切片 5 实际验证：最终定向 API/Application/Worker/日志测试 `103 passed`；Backend 完整非集成
   （安全修复前一轮，生产路径随后仅收紧日志序列化）`637 passed, 4 skipped`；相关 PostgreSQL/Valkey Run、Outbox、Worker、Event notifier、
   ModelInvocation 与 Retrieval 集成 `41 passed`；`ruff check src tests`、`pyright` 通过。普通测试未访问

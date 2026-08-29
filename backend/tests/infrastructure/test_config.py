@@ -1,8 +1,30 @@
 """应用环境配置测试。"""
 
+import logging
+
 import pytest
 
 from literature_agent.infrastructure.config import Settings
+
+
+def test_log_level_defaults_to_info_and_accepts_case_insensitive_name(monkeypatch) -> None:
+    """API 与 Worker 默认保留 INFO，显式等级名允许常见的小写写法。"""
+    monkeypatch.delenv("AGENT_LOG_LEVEL", raising=False)
+    assert Settings.from_env().log_level == logging.INFO
+
+    monkeypatch.setenv("AGENT_LOG_LEVEL", " warning ")
+    assert Settings.from_env().log_level == logging.WARNING
+
+
+def test_log_level_rejects_unknown_name(monkeypatch) -> None:
+    """拼写错误不能静默回退到默认等级。"""
+    monkeypatch.setenv("AGENT_LOG_LEVEL", "verbose")
+
+    with pytest.raises(
+        ValueError,
+        match="AGENT_LOG_LEVEL 必须为 DEBUG、INFO、WARNING、ERROR 或 CRITICAL",
+    ):
+        Settings.from_env()
 
 
 def test_chat_json_schema_supported_defaults_to_true(monkeypatch) -> None:
