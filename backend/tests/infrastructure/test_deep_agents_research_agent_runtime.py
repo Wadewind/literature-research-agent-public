@@ -2144,6 +2144,25 @@ async def test_execute_remains_forbidden_even_if_registered_and_policy_named() -
     assert all("execute" not in names for names in model.visible_tool_names)
 
 
+def test_restricted_harness_does_not_globally_exclude_sandbox_execute(monkeypatch) -> None:
+    captured: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        runtime_module,
+        "register_harness_profile",
+        lambda key, profile: captured.append((key, profile)),
+    )
+
+    DeepAgentsResearchAgentRuntime._register_restricted_harness_profile(  # noqa: SLF001
+        ScriptedDeepAgentChatModel(model_name="sandbox-execute-model")
+    )
+
+    assert len(captured) == 1
+    key, profile = captured[0]
+    assert key == "phase5fake:sandbox-execute-model"
+    assert profile.excluded_tools == frozenset()
+    assert profile.general_purpose_subagent.enabled is False
+
+
 async def test_exact_model_harness_profile_does_not_pollute_same_provider() -> None:
     restricted_model = ScriptedDeepAgentChatModel(model_name="restricted-model")
     runtime = DeepAgentsResearchAgentRuntime(

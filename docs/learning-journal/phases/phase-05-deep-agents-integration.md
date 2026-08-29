@@ -694,9 +694,9 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
   `_summarization_event`；最终 raw Graph State 中 `message-turn-1/message-turn-2` 各恰好一次，而第二轮
   模型有效上下文只看到摘要与保留尾部，证明没有重新提交第一轮 HumanMessage；
 - 使用精确 `provider:model` 的公开 `HarnessProfile` 关闭当前模型的默认 general-purpose subagent，且不
-  污染同 Provider 其他模型；公开 `FilesystemMiddleware` 只注入六个文件能力并移除 `execute`，额外策略
-  中间件再取 Adapter 注册集合与本轮 Policy allowlist 的交集，同时在模型 schema 与 Tool 实际执行边界
-  强制执行；空策略时文件/自定义 Tool 均不可见，模型伪造隐藏 Tool 名称也不会执行；
+  污染同 Provider 其他模型；Harness 不全局排除 `execute`，Adapter 根据 Backend 是否支持执行决定是否
+  注册它，再由策略中间件取 Adapter 注册集合与本轮 Policy allowlist 的交集，并在模型 schema 与 Tool
+  实际执行边界强制执行；StateBackend 或空策略时 `execute` 均不可见，模型伪造隐藏 Tool 名称也不会执行；
 - Runtime 只输出 `bound/started/assistant_delta/completed` 白名单，不转存 Tool 原始输出、完整 Prompt、
   Graph State 或思考过程；`STARTED` 前已形成真实 checkpoint，随后取消不再发起 Fake Model/Tool 调用；
 - 首轮红灯为缺少真实 Adapter 的 `ModuleNotFoundError`；主审补强的权限、Profile 作用域和

@@ -1607,7 +1607,6 @@ class DeepAgentsResearchAgentRuntime:
         register_harness_profile(
             f"{provider}:{model_name}",
             HarnessProfile(
-                excluded_tools=frozenset({"execute"}),
                 general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
             ),
         )

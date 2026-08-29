@@ -52,3 +52,21 @@ OpenSandbox 0.1.15 Server 按 Kubernetes label 规则把 value 限制为最多 6
 本次只修复 metadata 组合契约与对应 UI 诊断。平台仍没有统一的 Run Diagnostic 聚合 API；更普遍的
 FailureRecord 和诊断视图继续按
 [错误可观测性与 Run 诊断反思](../reflections/error-observability-and-run-diagnostics.md) 延期处理。
+
+## P6-REAL-002：Sandbox `execute` 被全局 Harness Profile 隐藏
+
+### 现象与根因
+
+固定 PolicySnapshot 已允许 `execute`，OpenSandbox Backend 也实现了执行协议，但 Adapter 为精确模型注册的
+Harness Profile 无条件把 `execute` 加入 `excluded_tools`。Deep Agents 0.7.8 在最终模型调用前过滤这项
+能力，因此模型看不到 Tool Schema；已有测试只证明伪造的同名 Tool call 可以到达 Tool node，没有证明
+真实模型能看到并自主选择 `execute`。
+
+### 最小修复
+
+- Harness Profile 只关闭默认 general-purpose subagent，不再承担 Backend 相关的 Tool 可见性；
+- `execute` 仍需同时满足 Backend 实现执行协议、Adapter 注册该能力、PolicySnapshot 允许三项条件；
+- StateBackend 和未授权 Turn 继续由 `_RuntimeToolPolicyMiddleware` 隐藏并在实际调用边界拒绝 `execute`；
+- 增加 Harness Profile 回归测试，防止后续升级再次把 Sandbox `execute` 全局排除。
+
+本修复不开放宿主 Shell/Python，也不改变 Sandbox 镜像、网络 Profile、超时、预算或动态安装依赖边界。

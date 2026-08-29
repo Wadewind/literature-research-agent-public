@@ -56,9 +56,9 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
 - 读取并校验模型的 `ls_provider` 与 `ls_model_name`，只为精确 `provider:model` key 注册公开
   `HarnessProfile`；general-purpose subagent 设为 disabled，并显式传 `subagents=[]`，使 `task` 不进入
   当前模型且不污染同 Provider 的其他模型。重复构造只合并相同 set/scalar 配置，行为保持幂等；
-- 使用公开 `FilesystemMiddleware(tools=...)` 只保留 `ls/read_file/write_file/edit_file/glob/grep`，不
-  创建 `execute`；Harness Profile 同时排除 `execute` 作为纵深保护。Middleware 注入能力不等于本轮
-  授权，文件 Tool 与自定义 Tool 都必须同时属于 Adapter 注册集合和当前
+- Harness Profile 只关闭默认 general-purpose subagent，不全局排除 `execute`。StateBackend 因不支持
+  执行而只注册 `ls/read_file/write_file/edit_file/glob/grep`；Session 专属 OpenSandbox Backend 才注册
+  `execute`。Middleware 注入能力不等于本轮授权，所有 Tool 都必须同时属于 Backend 能力集合和当前
   `PolicySnapshot.allowed_tool_names` 才能对模型可见；
 - 同一策略中间件在实际 Tool 调用 wrapper 再校验一次，避免模型伪造未展示的 Tool 名称绕过 schema
   可见性；空 allowlist 时文件与自定义 Tool 均不可见且不能执行；
