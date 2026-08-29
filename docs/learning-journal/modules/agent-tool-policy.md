@@ -39,9 +39,9 @@ Project Context Tool、`submit_artifact` 和 `mcp_refs.tools`。它们也只有�
 | 模型步骤 | 8 / Turn | 逻辑步骤调用前持久预留；不保证物理 Provider 请求至多 8 次 |
 | Tool 调用 | 12 / Turn | 调用前持久预留 |
 | Turn 墙钟 | 300 秒 | 从首次 Runtime 边界开始，重试不重置 |
-| 固定 Tool/MCP | 30 秒 / 次 | 同时受剩余墙钟约束 |
+| 固定 Tool/MCP | 60 秒 / 次 | 同时受剩余墙钟约束；MCP interceptor 提前 1 秒超时并收口 Effect |
 | Sandbox `execute` | 60 秒 / 次 | 同时受剩余墙钟约束 |
-| Tool 安全输出 | 64 KiB / 次 | 对稳定结构化 ToolMessage 计算；超限不再继续 |
+| Tool 安全输出 | 64 KiB / 次 | 通用后置上限；MCP 原文先裁剪到 8,000 字符的持久化边界 |
 | 相同 Tool + args hash | 2 次 / Turn | 第 3 个不同 invocation 在执行前拒绝 |
 | 模型输入 | 约 60,000 Token / 次 | `count_tokens_approximately`，包含 system 与 Tool schemas |
 | 模型输出 | 2,048 Token / 次 | Provider `max_tokens` 硬限制 |
@@ -49,6 +49,9 @@ Project Context Tool、`submit_artifact` 和 `mcp_refs.tools`。它们也只有�
 输入 Token 是近似安全上限，不是 Provider 精确计费。Provider 返回 `usage_metadata` 时以可空字段渐进记录；
 同一字段只允许 `NULL → value` 或同值重放。响应丢失时 usage 可能缺失，总 Token 和费用不可得时不做虚假
 硬拒绝。Workspace 50 MiB、单文件/Artifact 10 MiB 沿用既有契约；下载次数与总量属于 Slice 7。
+
+三种 Project Research Policy 已随上述行为从 v3 提升到 v4；旧 Turn 继续使用冻结的 v3 数值，新 Turn
+才获得 60 秒 Tool 预算和 MCP 超时分层。
 
 ## 安全与公开投影
 
@@ -67,8 +70,9 @@ Usage middleware 位于 policy guard 外层，只有后置 fence 校验通过才
 - Budget、deadline、schema 漂移、未授权、第三次相同调用均在外部 effect 前 fail closed；
 - Tool claim 使用条件更新；未知 RUNNING effect 不由新 Worker 重新执行；
 - 终态成功/失败只接受 hash/size 或安全错误完全相同的重放，冲突永久拒绝；
-- 取消或 fence 失效后不开始新 Provider/Tool；若外部调用期间发生变化，后置检查阻止后续步骤，同时已发生
-  effect 仍按真实状态对账；
+- 取消或 fence 失效后不开始新 Provider/Tool；若外部调用期间发生变化，后置检查阻止后续步骤。MCP
+  handler 被外层超时取消时会先尝试写 temporary failure；若 fence 已失效而不能安全写回，仍交给
+  reconcile，不由旧 Worker 越权完成；
 - `agent_budget_updated` 只记录计数与上限；拒绝由稳定 Runtime 错误进入既有 Turn 失败事件链。
 
 ## 重要测试与入口

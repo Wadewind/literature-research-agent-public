@@ -396,8 +396,9 @@ Artifact 或业务成功。
 ### Slice 5：固定能力、Project Context 与硬预算（已完成）
 
 - `PolicySnapshot` 冻结全部允许 Tool 的 version/input schema hash，以及模型 8 次、Tool 12 次、首次 Runtime
-  后 300 秒墙钟、固定 Tool/MCP 30 秒、`execute` 60 秒、单次 64 KiB 安全输出、同 Tool+args hash 最多
-  2 个 invocation、每次约 60,000 输入 Token 与 Provider 2,048 输出 Token；snapshot hash 覆盖这些字段；
+  后 300 秒墙钟、固定 Tool/MCP 60 秒、`execute` 60 秒、单次 64 KiB 通用安全输出、同 Tool+args hash 最多
+  2 个 invocation、每次约 60,000 输入 Token 与 Provider 2,048 输出 Token；MCP interceptor 在外层之前
+  1 秒结束，并把纯文本裁剪到 8,000 字符的持久化边界；snapshot hash 覆盖这些字段；
 - 每个 Turn 同事务创建 `AgentTurnUsage`，模型使用稳定 ordinal reservation，Tool 使用稳定 tool_call ID；
   PostgreSQL 行锁、唯一约束和条件更新保证重放不重复计数/认领。Provider Usage 允许可空字段逐步
   `NULL → value`，总 Token/费用不可得时不做虚假硬拒绝；
@@ -481,8 +482,9 @@ Artifact 或业务成功。
   CAPTCHA/付费墙/robots/授权；Smoke 只证明目标网络边界，不证明 HTTP 业务动作只读。
 
 历史恢复语义：三种 `agent-policy.project-research-*.v2` Snapshot 保持原 default-deny 网络边界，可恢复或
-复用 NULL Profile Lease；新建 v3 Turn 一律冻结 public-egress 三元组，遇到历史 NULL Profile Lease 必须
-轮换 generation，不能把旧环境原地升格为公网。其他未知或不完整 Policy/Profile 组合稳定 fail closed。
+复用 NULL Profile Lease；v3 及新建 v4 Turn 一律冻结 public-egress 三元组，遇到历史 NULL Profile Lease
+必须轮换 generation，不能把旧环境原地升格为公网。v4 只调整 Tool 超时、MCP 输出收口和回答契约；旧
+v3 Turn 继续使用其冻结预算。其他未知或不完整 Policy/Profile 组合稳定 fail closed。
 
 2026-08-28 的主智能体独立离线复核合计 137 passed，其中 PostgreSQL/Alembic 26 passed。第三轮显式真实
 Smoke 为 1 passed（39.67s），实际覆盖同一 Sandbox 内部 loopback、`wget` arXiv 首页、固定

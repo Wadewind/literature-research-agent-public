@@ -120,6 +120,10 @@ Research Agent Provider 与 RAG/Review Chat 独立：
 - `AGENT_RESEARCH_MODEL=deepseek-v4-flash`，当前固定且 thinking 关闭；
 - `AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048`。
 
+Research Policy 不是 `.env`：当前 Workspace、MCP 和完整能力档案均为 v4，新 Turn 固定 8 次模型步骤、
+12 次 Tool、300 秒墙钟、60 秒普通 Tool/`execute` 超时、64 KiB 通用 ToolMessage 上限；MCP 文本另在
+8,000 字符处确定性裁剪。用户不能提高这些预算，旧 Turn 继续使用其不可变 v3 快照。
+
 Sandbox 部署配置：
 
 - `AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080`；

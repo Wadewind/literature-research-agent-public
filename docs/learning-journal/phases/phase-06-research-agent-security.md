@@ -686,8 +686,9 @@ ADR-0007/0008 本身当作测试结果：
 4. **Agent 输入附件（已完成）**：Session 上传、并发幂等收敛、Message/删除行锁互斥、有界有序引用、ContextSnapshot 不可变元数据冻结、事务外 `/workspace/inbox` 物化、WorkspaceSnapshot 排除与
    可重试上传意图 Chat UI 均已落地；不开放任意 Browser 文件上传，Storage GC 延期；
 5. **固定能力、Project Context 与硬预算（已完成）**：复用 Phase 5 Catalog/Profile，全部允许 Tool 的
-   version/schema hash 与 8 次模型、12 次 Tool、300 秒墙钟、30/60 秒单调用、64 KiB 安全输出、同签名
-   最多 2 次、约 60,000 输入 Token/2,048 输出 Token 均由不可变 PolicySnapshot 冻结；PostgreSQL Usage
+   version/schema hash 与 8 次模型、12 次 Tool、300 秒墙钟、60/60 秒单调用、64 KiB 通用安全输出、同签名
+   最多 2 次、约 60,000 输入 Token/2,048 输出 Token 均由不可变 PolicySnapshot 冻结；MCP 内层提前
+   1 秒超时，纯文本另裁剪到 8,000 字符的持久化边界；PostgreSQL Usage
    与稳定 reservation 承担并发/重放事实，公开 API 只投影脱敏摘要。Project/MCP/Artifact 仅通过既有
    effect cache 对账，文件/`execute` 未知 effect fail closed；不建设完整 Registry、Approval 或精确计费；
 6. **Workspace/Sandbox 与统一 egress 强化（已完成）**：Session Lease 增加内部 `RETIRED` 状态；过期、
@@ -715,7 +716,7 @@ ADR-0007/0008 本身当作测试结果：
    结果是否指向正常公网，Candidate/Artifact 保存规范化 URL/hash，Manifest 用
    `declared_public_target_checked` 明确表示“声明目标已分类”，不表示文件来源已证明；raw Workspace 文件仍不可通过
    公开下载 API。普通离线测试已覆盖 URL/DNS、Profile/hash、Schema 和 generation 漂移；
-   v2 且 default-deny 的已运行 Turn 可继续在原冻结边界恢复；v3 Turn 遇到历史 NULL Profile Lease 必须
+   v2 且 default-deny 的已运行 Turn 可继续在原冻结边界恢复；v3/v4 Turn 遇到历史 NULL Profile Lease 必须
    退役并递增 generation，其他未知 default-deny PolicySnapshot 稳定 fail closed；
    `AGENT_RUN_OPENSANDBOX_PUBLIC_EGRESS_TESTS=1` 的首轮真实 Smoke 只确认内部 loopback；固定镜像没有
    `curl`，第一条公网命令因此失败且没有形成网络拒绝证据。改用 `/usr/bin/wget` 后的第二轮已通过
@@ -810,6 +811,11 @@ Fake Runtime 评测、真实 Sandbox 功能 Smoke 与生产安全声明必须继
 6. 首批平台 Skill 与 owner-scoped 声明式 Skill 已在 Phase 5 固定版本、只读内容、required Tool 不扩权、
    首 Turn 前锁定和禁用边界，并纳入 Phase 6 固定回归/Deep Agents 升级门禁。真实模型研究质量和恶意
    Markdown 的语义级检测仍不由该工程门禁保证。
+
+阶段完成后的 v4 Real 模式收口已确认：普通 Tool 预算由 30 秒提升为 60 秒；MCP 超大纯文本只向模型和
+Effect Store 交付有界前缀，外层取消时尝试关闭已认领 Effect；实际读取 Project Context 后，SDK 富文本
+只把合法带引用 Claim 规范化为产品消息，未读取项目证据的 Browser/文件/`execute` 任务可自然回复；每轮
+消息还携带 Snapshot UTC 时间基准。旧 v3 Turn 不被原地升级，详细证据见 Real 模式体验缺陷台账。
 
 Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何把代码执行扩大到宿主、允许
 private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/网络 Profile、正式外部写产品能力或

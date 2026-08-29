@@ -258,7 +258,7 @@ def test_workspace_policy_version_only_changes_for_the_added_capability() -> Non
     assert {ref.name for ref in workspace.tool_refs} == set(workspace.allowed_tool_names)
     assert {ref.name for ref in mcp_only.tool_refs} == set(mcp_only.allowed_tool_names)
     assert workspace.wall_clock_limit_seconds == 300
-    assert workspace.tool_timeout_seconds == 30
+    assert workspace.tool_timeout_seconds == 60
     assert workspace.execute_timeout_seconds == 60
     assert workspace.max_tool_output_bytes == 64 * 1024
     assert workspace.max_repeated_tool_calls == 2

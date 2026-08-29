@@ -38,7 +38,7 @@ def test_turn_usage_freezes_lean_profile_and_starts_deadline_once() -> None:
     assert usage.started_at is None
     assert usage.deadline_at is None
     assert usage.wall_clock_limit_seconds == AGENT_TURN_WALL_CLOCK_SECONDS == 300
-    assert usage.tool_timeout_seconds == AGENT_TOOL_TIMEOUT_SECONDS == 30
+    assert usage.tool_timeout_seconds == AGENT_TOOL_TIMEOUT_SECONDS == 60
     assert usage.execute_timeout_seconds == AGENT_EXECUTE_TIMEOUT_SECONDS == 60
     assert usage.max_tool_output_bytes == AGENT_MAX_TOOL_OUTPUT_BYTES == 64 * 1024
     assert usage.max_repeated_tool_calls == AGENT_MAX_REPEATED_TOOL_CALLS == 2

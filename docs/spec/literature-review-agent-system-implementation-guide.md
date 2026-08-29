@@ -1754,7 +1754,7 @@ Workspace、Sandbox、arXiv 访问和文件交付的安全与可靠性；不建�
 - AgentAttachment、WorkspaceSnapshot、AgentArtifactCandidate 与 AgentArtifact 的显式输入/内部状态/输出
   边界，以及 `submit_artifact` v2 的可选声明来源目标、Manifest 与预览下载闭环。Slice 7 实现中
   PolicySnapshot/SandboxLease 均冻结 `research-public-egress.v1` 的 ID/version/canonical hash；历史 NULL
-  Profile 保持可读但不得被新 v3 Turn 续租；已运行 v2 Turn 仅可在原 default-deny 边界恢复。声明 URL/DNS
+  Profile 保持可读但不得被 v3/v4 Turn 续租；已运行 v2 Turn 仅可在原 default-deny 边界恢复。声明 URL/DNS
   分类不证明 Artifact 文件字节来自该 URL。
 - 最终 Agent UI 遵循 [`Web UI 应用壳与视觉重设计`](web-ui-app-shell-redesign.md)：左侧固定 Sidebar、轻量
   PageBar、桌面优先三栏工作区和浅色编辑风；功能切片不得重新依赖将被删除的旧 Header、

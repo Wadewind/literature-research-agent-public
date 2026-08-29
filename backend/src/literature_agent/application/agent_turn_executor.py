@@ -14,10 +14,6 @@ from literature_agent.application.ports.claim_set_repository import ClaimSetRepo
 from literature_agent.application.ports.event_notifier import EventNotifier, NoopEventNotifier
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.evidence_repository import EvidenceRepository
-from literature_agent.application.ports.project_research_context import (
-    READ_REVIEW_EVIDENCE_MATRIX,
-    SEARCH_PROJECT_CHUNKS,
-)
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntime,
     ResearchAgentRuntimeError,
@@ -141,9 +137,8 @@ class AgentTurnExecutor[TSession: Session]:
         if result.turn_run_id != run.run_id:
             self._raise_runtime_scope_mismatch()
         citation_contract_enabled = bool(
-            {SEARCH_PROJECT_CHUNKS, READ_REVIEW_EVIDENCE_MATRIX}
-            & set(request.policy_snapshot.allowed_tool_names)
-            or result.evidence_ids
+            result.evidence_ids
+            or "[evidence:" in result.assistant_content
             or result.assistant_content.strip() == INSUFFICIENT_AGENT_EVIDENCE_TEXT
         )
         output = (

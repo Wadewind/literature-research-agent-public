@@ -11,7 +11,7 @@ Artifact。
 
 `research-public-egress.v1` 是 Domain 中 SDK-neutral、canonical JSON 哈希的固定档案。新 Turn 的
 `PolicySnapshot` 冻结 Profile ID/version/hash；`SandboxLease` 保存相同三元组。Lease 复用同时校验镜像、
-状态、TTL、generation 时长和 Profile 三元组。新 v3 Turn 遇到历史 NULL Profile 或漂移会进入已有
+状态、TTL、generation 时长和 Profile 三元组。v3/v4 Turn 遇到历史 NULL Profile 或漂移会进入已有
 rotation/cleanup 流程，绝不续租旧环境。已经运行的三种 v2 Snapshot 则只在其冻结的 default-deny/NULL
 Profile 边界恢复，避免阶段升级破坏恢复语义；未知 default-deny Policy 仍 fail closed。
 

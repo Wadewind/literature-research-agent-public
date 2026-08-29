@@ -64,9 +64,35 @@ Harness Profile 无条件把 `execute` 加入 `excluded_tools`。Deep Agents 0.7
 
 ### 最小修复
 
-- Harness Profile 只关闭默认 general-purpose subagent，不再承担 Backend 相关的 Tool 可见性；
+- Harness Profile 关闭默认 general-purpose subagent，并按 Backend 能力处理 `execute`：StateBackend
+  精确排除，Session 专属可执行 Backend 保留；不再对所有 Backend 无条件排除；
 - `execute` 仍需同时满足 Backend 实现执行协议、Adapter 注册该能力、PolicySnapshot 允许三项条件；
 - StateBackend 和未授权 Turn 继续由 `_RuntimeToolPolicyMiddleware` 隐藏并在实际调用边界拒绝 `execute`；
 - 增加 Harness Profile 回归测试，防止后续升级再次把 Sandbox `execute` 全局排除。
 
 本修复不开放宿主 Shell/Python，也不改变 Sandbox 镜像、网络 Profile、超时、预算或动态安装依赖边界。
+
+## P6-REAL-003：三个连续 Turn 暴露 MCP、Browser 与引用输出组合缺陷
+
+### 已确认事实
+
+Session `60c1afa7-44b2-46f1-8370-ee1900081017` 的三个 Turn 分别失败于：arXiv Search MCP 序列化结果
+超过 8,000 字符、Playwright `browser_navigate` 在 30 秒外层 Tool 边界超时、Deep Agents 已完成但富文本
+不符合严格逐行 Evidence 契约。三轮分别只使用 1/12、1/12、6/12 次 Tool，不是 Tool 总预算耗尽。
+
+第三轮 Checkpoint 的最终输出包含 17 个非空 Markdown 行和 8 个 Evidence 标记；有效标记前缺少契约要求
+的空格，另有非法占位 ID。Runtime 状态为 succeeded，但业务事务正确拒绝提交，因此 PostgreSQL 没有
+Assistant Message。第二轮还留下 `ToolExecution=RUNNING`，而对应 Sandbox generation 已因 dirty 清理。
+第一轮实际把“今年”解析为 `date_from=2025-01-01`，说明模型没有可靠的平台日期基准。
+
+### 修复
+
+- MCP 纯文本超限时只保留带截断说明的有界前缀，不保存超大原文；非文本超限降级为有界 Tool error；
+- 普通 Tool 超时提升到 60 秒，Project Research Policy 升至 v4；MCP 内部边界提前 1 秒，并在外层取消时
+  尝试把 Effect 收口为 temporary failure；
+- 本轮实际使用 Project Context Tool 时，从 SDK 富文本中仅提取并规范化合法带引用 Claim，仍由
+  Application 校验 Evidence 所属 Run/Project；未读取项目证据的浏览器/文件/执行任务不强制 RAG 格式；
+- 每轮消息注入 `ContextSnapshot.created_at` 的 UTC 时间基准，约束“今年”等相对日期。
+
+普通回归保持完全离线。本修复不证明百度或任意公网目标一定能在 60 秒内完成，也没有新增 Browser trace；
+若目标持续不可达，将以可重试 MCP 超时和已收口 Effect 失败，而不是悬空副作用记录结束。

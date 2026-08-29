@@ -11,11 +11,52 @@ AGENT_ANSWER_MAX_CLAIMS = 32
 AGENT_CLAIM_MAX_CHARS = 2_000
 AGENT_CLAIM_MAX_EVIDENCE = 10
 _CLAIM_LINE = re.compile(r"^(?P<text>.+?) \[evidence:(?P<ids>[^\[\]]+)\]$")
+_TRAILING_EVIDENCE = re.compile(r"^(?P<text>.+?)\s*\[evidence:(?P<ids>[^\[\]]+)\]$")
 _EVIDENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
+_MARKDOWN_PREFIX = re.compile(r"^(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")
 
 
 class AgentAnswerContractError(ValueError):
     """Agent 最终回答不符合可确定性验证的引用语法。"""
+
+
+def canonicalize_agent_answer(content: str) -> str:
+    """从 Runtime 富文本中只保留可验证 Claim，并规范为产品消息契约。"""
+    normalized = content.strip()
+    if len(content) > AGENT_ANSWER_MAX_CHARS:
+        raise AgentAnswerContractError("Agent 回答超过字符上限")
+    if normalized == INSUFFICIENT_AGENT_EVIDENCE_TEXT:
+        return normalized
+
+    claims: list[str] = []
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if "[evidence:" not in line:
+            continue
+        matched = _TRAILING_EVIDENCE.fullmatch(line)
+        if matched is None:
+            continue
+        text = _MARKDOWN_PREFIX.sub("", matched.group("text").strip(), count=1).strip()
+        evidence_ids = [item.strip() for item in matched.group("ids").split(",")]
+        if (
+            not text
+            or len(text) > AGENT_CLAIM_MAX_CHARS
+            or "[evidence:" in text
+            or not evidence_ids
+            or len(evidence_ids) > AGENT_CLAIM_MAX_EVIDENCE
+            or any(not _EVIDENCE_ID.fullmatch(item) for item in evidence_ids)
+            or len(evidence_ids) != len(set(evidence_ids))
+        ):
+            continue
+        claims.append(f"{text} [evidence:{','.join(evidence_ids)}]")
+        if len(claims) > AGENT_ANSWER_MAX_CLAIMS:
+            raise AgentAnswerContractError("Agent Claim 数量超过上限")
+
+    canonical = "\n".join(claims)
+    if not canonical:
+        raise AgentAnswerContractError("Agent 回答没有可验证的带引用论述")
+    parse_agent_answer(canonical)
+    return canonical
 
 
 def parse_agent_answer(content: str) -> tuple[RagAnswerOutput, tuple[str, ...]]:

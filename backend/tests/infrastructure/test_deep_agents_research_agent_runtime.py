@@ -257,7 +257,13 @@ class _ProjectToolModel(ScriptedDeepAgentChatModel):
     def _next_message(self, messages: list[Any]) -> AIMessage:
         self.model_call_count += 1
         if self._tool_requested:
-            return AIMessage(content="该方法得到本地论文支持 [evidence:evidence-agent-1]")
+            return AIMessage(
+                content=(
+                    "## 研究结论\n"
+                    "- 该方法得到本地论文支持[evidence:evidence-agent-1]\n"
+                    "仍需进一步验证。"
+                )
+            )
         self._tool_requested = True
         return AIMessage(
             content="",
@@ -1999,6 +2005,9 @@ async def test_project_tool_injects_turn_scope_and_hides_platform_ids_from_model
     assert events[-1].kind is RuntimeEventKind.COMPLETED
     assert project_context.search_calls == [(request.turn_run_id, "图神经网络")]
     assert project_context.matrix_calls == []
+    assert result.assistant_content == (
+        "该方法得到本地论文支持 [evidence:evidence-agent-1]"
+    )
     assert result.evidence_ids == ("evidence-agent-1",)
     search_schemas = [
         schemas["search_project_chunks"]
@@ -2153,7 +2162,8 @@ def test_restricted_harness_does_not_globally_exclude_sandbox_execute(monkeypatc
     )
 
     DeepAgentsResearchAgentRuntime._register_restricted_harness_profile(  # noqa: SLF001
-        ScriptedDeepAgentChatModel(model_name="sandbox-execute-model")
+        ScriptedDeepAgentChatModel(model_name="sandbox-execute-model"),
+        allow_execute=True,
     )
 
     assert len(captured) == 1
@@ -2161,6 +2171,39 @@ def test_restricted_harness_does_not_globally_exclude_sandbox_execute(monkeypatc
     assert key == "phase5fake:sandbox-execute-model"
     assert profile.excluded_tools == frozenset()
     assert profile.general_purpose_subagent.enabled is False
+
+
+def test_restricted_harness_excludes_execute_without_executable_backend(monkeypatch) -> None:
+    captured: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        runtime_module,
+        "register_harness_profile",
+        lambda key, profile: captured.append((key, profile)),
+    )
+
+    DeepAgentsResearchAgentRuntime._register_restricted_harness_profile(  # noqa: SLF001
+        ScriptedDeepAgentChatModel(model_name="state-backend-model"),
+        allow_execute=False,
+    )
+
+    assert len(captured) == 1
+    assert captured[0][1].excluded_tools == frozenset({"execute"})
+
+
+def test_only_actual_project_context_tool_use_requires_grounded_answer() -> None:
+    project_message = ToolMessage(
+        content="bounded evidence",
+        tool_call_id="call-project",
+        name="search_project_chunks",
+    )
+    browser_message = ToolMessage(
+        content="page opened",
+        tool_call_id="call-browser",
+        name="playwright_browser_navigate",
+    )
+
+    assert runtime_module._used_project_context_tool([project_message]) is True  # noqa: SLF001
+    assert runtime_module._used_project_context_tool([browser_message]) is False  # noqa: SLF001
 
 
 async def test_exact_model_harness_profile_does_not_pollute_same_provider() -> None:

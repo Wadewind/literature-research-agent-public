@@ -190,3 +190,5 @@ def test_deep_agent_message_sees_controlled_manifest_but_not_file_content() -> N
     assert "notes.txt" in content
     assert "research notes" not in content
     assert "storage_key" not in content
+    assert request.context_snapshot.created_at.date().isoformat() in content
+    assert "UTC" in content

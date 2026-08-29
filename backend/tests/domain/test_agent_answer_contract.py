@@ -4,6 +4,7 @@ import pytest
 
 from literature_agent.domain.agent_answer import (
     AgentAnswerContractError,
+    canonicalize_agent_answer,
     parse_agent_answer,
 )
 from literature_agent.domain.evidence import AnswerStatus
@@ -50,6 +51,36 @@ def test_parse_agent_answer_allows_empty_lines_between_bounded_claims() -> None:
     )
 
     assert [claim.text for claim in output.claims] == ["第一条", "第二条"]
+
+
+def test_canonicalize_agent_answer_keeps_only_valid_grounded_markdown_claims() -> None:
+    content = (
+        "下面给出综合比较：\n"
+        "## 方法差异\n"
+        "- 检索增强方法依赖外部知识[evidence:e-1,e-2]\n"
+        "- 参数方法修改模型内部表示 [evidence:e-3]\n"
+        "## 尚未解决的问题\n"
+        "- 缺少直接证据[evidence:暂无直接证据]\n"
+        "这些结论仍需更多研究。"
+    )
+
+    canonical = canonicalize_agent_answer(content)
+    output, evidence_ids = parse_agent_answer(canonical)
+
+    assert canonical == (
+        "检索增强方法依赖外部知识 [evidence:e-1,e-2]\n"
+        "参数方法修改模型内部表示 [evidence:e-3]"
+    )
+    assert [claim.text for claim in output.claims] == [
+        "检索增强方法依赖外部知识",
+        "参数方法修改模型内部表示",
+    ]
+    assert evidence_ids == ("e-1", "e-2", "e-3")
+
+
+def test_canonicalize_agent_answer_rejects_when_no_valid_grounded_claim_remains() -> None:
+    with pytest.raises(AgentAnswerContractError):
+        canonicalize_agent_answer("## 结论\n没有引用的论述")
 
 
 @pytest.mark.parametrize(

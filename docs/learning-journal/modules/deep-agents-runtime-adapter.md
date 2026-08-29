@@ -56,17 +56,23 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
 - 读取并校验模型的 `ls_provider` 与 `ls_model_name`，只为精确 `provider:model` key 注册公开
   `HarnessProfile`；general-purpose subagent 设为 disabled，并显式传 `subagents=[]`，使 `task` 不进入
   当前模型且不污染同 Provider 的其他模型。重复构造只合并相同 set/scalar 配置，行为保持幂等；
-- Harness Profile 只关闭默认 general-purpose subagent，不全局排除 `execute`。StateBackend 因不支持
-  执行而只注册 `ls/read_file/write_file/edit_file/glob/grep`；Session 专属 OpenSandbox Backend 才注册
-  `execute`。Middleware 注入能力不等于本轮授权，所有 Tool 都必须同时属于 Backend 能力集合和当前
+- Harness Profile 总是关闭默认 general-purpose subagent，并按 Backend 能力处理 `execute`：StateBackend
+  的精确 Profile 排除它，Session 专属可执行 Backend 的 Profile 才保留它。Adapter 同时只为 StateBackend
+  注册 `ls/read_file/write_file/edit_file/glob/grep`，OpenSandbox Backend 才注册 `execute`。Middleware
+  注入能力不等于本轮授权，所有 Tool 都必须同时属于 Backend 能力集合和当前
   `PolicySnapshot.allowed_tool_names` 才能对模型可见；
 - 同一策略中间件在实际 Tool 调用 wrapper 再校验一次，避免模型伪造未展示的 Tool 名称绕过 schema
   可见性；空 allowlist 时文件与自定义 Tool 均不可见且不能执行；
 - 切片 5 在 Adapter 内注册 `search_project_chunks` 与 `read_review_evidence_matrix`，但实现只依赖
   SDK-neutral `ProjectResearchContext` Port。两个工具用锁定的 `ToolRuntime` 注入 `turn_run_id`：模型
   schema 只能看到 query 或空参数，不能伪造 owner/Project/Snapshot/ReviewOutput/ChunkSet ID；
-- Project Context 的 temporary/permanent/cancelled 安全错误会映射为既有 `RuntimeErrorKind`，最终回答
-  Evidence 标记解析为小型 `RuntimeTurnResult.evidence_ids`；Application 仍负责 Citation 授权与事务提交；
+- Project Context 的 temporary/permanent/cancelled 安全错误会映射为既有 `RuntimeErrorKind`。只有本轮
+  实际读取 Project Chunk/Evidence Matrix、显式产生 Evidence 标记或返回固定证据不足文案时才启用引用
+  契约；Runtime 从 SDK 富文本中确定性保留合法、带引用的 Claim，并规范化后交给产品消息，未引用标题、
+  引言和非法占位标记不进入 PostgreSQL。浏览器/文件/`execute` 等未读取项目证据的任务可自然回复；
+  Application 仍负责 Evidence 的 Run/Project 授权与事务提交；
+- 每轮 HumanMessage 在正文前附加 `ContextSnapshot.created_at` 的 UTC 时间基准，使“今年”等相对日期不依赖
+  模型训练时间；它不复制历史消息或改变 Deep Agents 的上下文/压缩职责；
 - 切片 4 当时未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，
   7.2 已在 Adapter 外围接入 LangChain MCP Adapter 的显式 session、Schema 校验和平台 interceptor。
   7.3 已接固定 Playwright/Search MCP；7.4 又把 `/skills/` 只读 route 与稳定 source 交给

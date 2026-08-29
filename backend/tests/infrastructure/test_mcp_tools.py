@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -500,7 +501,7 @@ async def test_interceptor_blocks_cancel_and_budget_before_calling_mcp() -> None
 
 
 @pytest.mark.asyncio
-async def test_interceptor_rejects_oversized_output_and_records_safe_failure() -> None:
+async def test_interceptor_bounds_oversized_text_output_without_failing_turn() -> None:
     server = _server()
     request = await _request(server)
     guard = _Guard()
@@ -511,19 +512,57 @@ async def test_interceptor_rejects_oversized_output_and_records_safe_failure() -
     async def handler(_):
         return CallToolResult(content=[TextContent(type="text", text="x" * 9_000)])
 
-    with pytest.raises(ResearchAgentRuntimeError) as caught:
-        await interceptor(
+    result = await interceptor(
+        MCPToolCallRequest(
+            name="search",
+            args={"query": "rag"},
+            server_name="fixture-search",
+            runtime=SimpleNamespace(tool_call_id="call-large", context=None),
+        ),
+        handler,
+    )
+
+    assert result.isError is False
+    assert len(result.content) == 1
+    assert isinstance(result.content[0], TextContent)
+    assert "平台已截断" in result.content[0].text
+    assert len(result.content[0].text) < 8_000
+    assert guard.failures == []
+    assert len(guard.results) == 1
+
+
+@pytest.mark.asyncio
+async def test_interceptor_closes_effect_when_outer_runtime_cancels_call() -> None:
+    server = _server()
+    request = await _request(server)
+    guard = _Guard()
+    interceptor = PlatformMcpToolInterceptor(
+        turn_run_id="turn-1", ref=request.policy_snapshot.mcp_refs[0], guard=guard
+    )
+    entered = asyncio.Event()
+
+    async def handler(_):
+        entered.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(
+        interceptor(
             MCPToolCallRequest(
                 name="search",
                 args={"query": "rag"},
                 server_name="fixture-search",
-                runtime=SimpleNamespace(tool_call_id="call-large", context=None),
+                runtime=SimpleNamespace(tool_call_id="call-cancelled", context=None),
             ),
             handler,
         )
+    )
+    await entered.wait()
+    task.cancel()
 
-    assert caught.value.code == "runtime_mcp_output_too_large"
-    assert guard.failures == ["runtime_mcp_output_too_large"]
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert guard.failures == ["runtime_mcp_interrupted"]
 
 
 @pytest.mark.asyncio

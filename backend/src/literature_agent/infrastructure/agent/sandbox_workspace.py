@@ -295,7 +295,7 @@ class SandboxWorkspaceManager:
             network_enabled = True
         elif legacy_default_deny:
             # 已经开始的 v2 Turn 继续在其冻结的 default-deny 边界恢复；
-            # v3 Turn 永远不会走到这里，也不会把旧 Lease 升格为公网环境。
+            # v3/v4 Turn 永远不会走到这里，也不会把旧 Lease 升格为公网环境。
             network_enabled = False
         else:
             raise ValueError("当前 Capability Profile 的 Network Profile 未注册")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
@@ -17,7 +17,7 @@ from langchain_mcp_adapters.interceptors import (
 )
 from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
 from mcp import ClientSession
-from mcp.types import CallToolResult, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 
 from literature_agent.application.ports.research_agent_runtime import (
     ResearchAgentRuntimeError,
@@ -39,6 +39,9 @@ from literature_agent.infrastructure.agent.sandbox_workspace import SandboxWorks
 
 _MAX_MCP_DISCOVERY_PAGES = 32
 _MAX_MCP_DISCOVERED_TOOLS = 256
+_MCP_TIMEOUT_HEADROOM_SECONDS = 1.0
+_MCP_MIN_TIMEOUT_SECONDS = 0.1
+_MCP_TRUNCATION_NOTICE = "[平台已截断过大的 MCP 文本输出；请缩小查询范围后重试。]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,16 +188,7 @@ class PlatformMcpToolInterceptor:
                 result = await handler(request)
             if not isinstance(result, CallToolResult):
                 raise _error("runtime_mcp_result_invalid", "MCP Tool 返回类型非法")
-            payload = cast(dict[str, Any], result.model_dump(mode="json", exclude_none=True))
-            serialized = json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-            if len(serialized) > TOOL_RESULT_MAX_CHARS:
-                raise _error("runtime_mcp_output_too_large", "MCP Tool 输出超过安全上限")
+            result, payload = _bounded_mcp_result(result)
             await self._assert_execution_active(runtime_context)
             await self._guard.assert_active(self._turn_run_id)
             await self._guard.succeed(
@@ -205,6 +199,20 @@ class PlatformMcpToolInterceptor:
                 invocation_id=invocation_id,
             )
             return result
+        except asyncio.CancelledError:
+            # 外层 Runtime 超时会先取消 MCP handler；先收口 Effect，避免永久停在 RUNNING。
+            with suppress(Exception):
+                await self._fail_if_owned(
+                    runtime_context,
+                    prefixed_name,
+                    request.args,
+                    invocation_id=invocation_id,
+                    kind=ToolErrorKind.TEMPORARY,
+                    code="runtime_mcp_interrupted",
+                    safe_message="MCP Tool 调用被中断",
+                )
+            # 取消语义优先；失败收口异常由后续 reconcile 继续处理。
+            raise
         except TimeoutError:
             await self._fail_if_owned(
                 runtime_context,
@@ -357,6 +365,11 @@ class LangchainMcpToolLoader:
                     ref=ref,
                     guard=self._guard,
                     execution_control=self._execution_control,
+                    timeout_seconds=max(
+                        _MCP_MIN_TIMEOUT_SECONDS,
+                        request.policy_snapshot.tool_timeout_seconds
+                        - _MCP_TIMEOUT_HEADROOM_SECONDS,
+                    ),
                 )
                 await self._guard.assert_active(request.turn_run_id)
                 tools = _convert_allowed_tools(
@@ -451,6 +464,59 @@ def _convert_allowed_tools(
             "MCP 能力暂时不可用",
             RuntimeErrorKind.TEMPORARY,
         ) from None
+
+
+def _bounded_mcp_result(
+    result: CallToolResult,
+) -> tuple[CallToolResult, dict[str, Any]]:
+    """只把有界文本结果交给模型和 Effect Store，不持久化超大原文。"""
+    payload, serialized = _serialize_mcp_result(result)
+    if len(serialized) <= TOOL_RESULT_MAX_CHARS:
+        return result, payload
+
+    text = "\n".join(
+        item.text for item in result.content if isinstance(item, TextContent)
+    )
+    if not text:
+        bounded = CallToolResult(
+            content=[TextContent(type="text", text=_MCP_TRUNCATION_NOTICE)],
+            isError=True,
+        )
+        bounded_payload, _ = _serialize_mcp_result(bounded)
+        return bounded, bounded_payload
+
+    prefix = f"{_MCP_TRUNCATION_NOTICE}\n原始序列化长度：{len(serialized)} 字符。\n"
+    low = 0
+    high = len(text)
+    bounded = CallToolResult(
+        content=[TextContent(type="text", text=prefix)], isError=result.isError
+    )
+    bounded_payload, _ = _serialize_mcp_result(bounded)
+    while low <= high:
+        midpoint = (low + high) // 2
+        candidate = CallToolResult(
+            content=[TextContent(type="text", text=prefix + text[:midpoint])],
+            isError=result.isError,
+        )
+        candidate_payload, candidate_serialized = _serialize_mcp_result(candidate)
+        if len(candidate_serialized) <= TOOL_RESULT_MAX_CHARS:
+            bounded = candidate
+            bounded_payload = candidate_payload
+            low = midpoint + 1
+        else:
+            high = midpoint - 1
+    return bounded, bounded_payload
+
+
+def _serialize_mcp_result(result: CallToolResult) -> tuple[dict[str, Any], str]:
+    payload = cast(dict[str, Any], result.model_dump(mode="json", exclude_none=True))
+    return payload, json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 async def _external_boundary[T](operation: Callable[[], Awaitable[T]]) -> T:

@@ -82,8 +82,14 @@ authority；因此不能直接把 Server Proxy URL 的 authority 加入 allowlis
 ## 事务、取消与副作用
 
 endpoint 解析、Server 启动、MCP discovery 与实际调用均位于数据库事务外。MCP interceptor 继续复用
-7.2 的 RuntimeExecution fence、业务取消、统一 Tool 预算、30 秒调用超时、8,000 字符输出上限和
-`ToolExecution` invocation 账本；Runtime/MCP 成功不等于业务 Turn 或 Artifact 已提交。
+7.2 的 RuntimeExecution fence、业务取消、统一 Tool 预算、60 秒外层调用超时、8,000 字符 MCP 持久化
+边界和 `ToolExecution` invocation 账本；Runtime/MCP 成功不等于业务 Turn 或 Artifact 已提交。MCP
+interceptor 使用比外层少 1 秒的内部超时，确保先保存可重试的 MCP-specific 失败；外层取消 handler 时也
+先尝试把已认领 Effect 收口为 temporary failure，避免已销毁 Sandbox 对应的记录永久停在 `RUNNING`。
+
+超过 8,000 字符的纯文本结果不再直接令整个 Turn 永久失败：平台丢弃未持久化的超大原文，只把带明确
+截断提示的最大有界文本交给模型和 Effect Store。非文本超大结果降级为有界 Tool error，仍不把图片、
+二进制或大型 structured content 塞入 Checkpoint/Event。通用 ToolMessage 的 64 KiB 后置上限保持不变。
 
 Loader 在 resolver/session/discovery/conversion 边界检查取消；Tool 调用前后再检查业务 Run 与 execution
 permit。Provider、recipe 与连接异常统一转换为不含原始 cause 的安全 temporary Runtime 错误。endpoint、
