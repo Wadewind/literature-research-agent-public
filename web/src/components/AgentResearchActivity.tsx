@@ -1,5 +1,8 @@
 import type { AgentToolExecutionsResponse } from "../api/types";
-import { formatCandidateSize } from "../agent/presentation";
+import {
+  formatCandidateSize,
+  type AgentTurnFailureSummary,
+} from "../agent/presentation";
 
 export interface ResearchActivityEvent {
   sequence: number;
@@ -12,6 +15,7 @@ interface AgentResearchActivityProps {
   toolExecutions: AgentToolExecutionsResponse | undefined;
   loading: boolean;
   error: boolean;
+  failure?: AgentTurnFailureSummary | null;
 }
 
 export default function AgentResearchActivity({
@@ -19,10 +23,11 @@ export default function AgentResearchActivity({
   toolExecutions,
   loading,
   error,
+  failure,
 }: AgentResearchActivityProps) {
   const usage = toolExecutions?.usage;
   const tools = toolExecutions?.items ?? [];
-  if (events.length === 0 && !loading && !error && tools.length === 0) return null;
+  if (events.length === 0 && !loading && !error && tools.length === 0 && !failure) return null;
 
   return (
     <details className="agent-research-ledger">
@@ -31,6 +36,13 @@ export default function AgentResearchActivity({
         <small>{events.length} 步 · {tools.length} 次工具执行</small>
       </summary>
       <div className="agent-research-content">
+        {failure && (
+          <section className="agent-research-failure" aria-label="本轮失败摘要">
+            <strong>{failure.title}</strong>
+            <p>{failure.detail}</p>
+            <small className="mono">{failure.code}</small>
+          </section>
+        )}
         {usage && (
           <dl className="agent-budget-summary" aria-label="本轮用量与预算">
             <div><dt>模型调用</dt><dd>{usage.model_calls_reserved} / {usage.max_model_calls}</dd></div>

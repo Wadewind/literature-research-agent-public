@@ -221,6 +221,14 @@ async def test_acquire_reuses_one_session_lease_and_renews_sliding_ttl() -> None
         provider.created[0]["network_profile_hash"]
         == RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash
     )
+    assert provider.created[0]["metadata"] == {
+        "session_id": request.session_id,
+        "generation": "1",
+        "network_profile": (
+            f"{RESEARCH_PUBLIC_EGRESS_PROFILE.profile_id}."
+            f"{RESEARCH_PUBLIC_EGRESS_PROFILE.version}"
+        ),
+    }
     assert provider.created[0]["cpu"] == 1
     assert provider.created[0]["memory_mib"] == 2048
     assert provider.renewed == [(first.record.sandbox_id, 600)]

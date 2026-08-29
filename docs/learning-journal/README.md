@@ -110,6 +110,8 @@ Slice 8 已按 [`Web UI 应用壳与视觉重设计`](../spec/web-ui-app-shell-r
 Browser/Artifact/Manifest 整合与视觉刷新。最终固定评测、升级门禁和已知限制见
 [`Research Agent 固定评测与升级门禁`](modules/agent-evaluation.md)及
 [`Phase 6 完成报告`](reports/phase-06-research-agent-extension-completion.md)。
+阶段完成后的显式 Real 模式问题持续记录在
+[`Phase 6 Real 模式体验缺陷台账`](reports/phase-06-real-mode-defect-log.md)。
 
 Phase 6 完成后的一次 Real Review 排查进一步暴露了“业务审计事实较完整，故障诊断语义仍分散”的
 横切问题。已确认事实、排查方法、统一 Failure 契约和 Run Diagnostic 的渐进方案记录在

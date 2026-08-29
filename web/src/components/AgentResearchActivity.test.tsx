@@ -50,6 +50,11 @@ describe("AgentResearchActivity", () => {
       toolExecutions,
       loading: false,
       error: false,
+      failure: {
+        title: "研究环境未能启动",
+        detail: "Sandbox 配置未通过校验，本轮未进入模型或工具执行。",
+        code: "runtime_sandbox_metadata_invalid",
+      },
     }));
 
     expect(html).toContain("模型调用");
@@ -59,7 +64,26 @@ describe("AgentResearchActivity", () => {
     expect(html).toContain("search_project_evidence");
     expect(html).toContain("返回 3 条证据摘要");
     expect(html).toContain("研究任务已开始");
+    expect(html).toContain("研究环境未能启动");
+    expect(html).toContain("runtime_sandbox_metadata_invalid");
     expect(html).not.toContain("SECRET_PROMPT_SHOULD_NOT_RENDER");
     expect(html).not.toContain("FULL_WEBPAGE_SHOULD_NOT_RENDER");
+  });
+
+  it("即使没有 Tool 或可见事件也展示安全失败摘要", () => {
+    const html = renderToStaticMarkup(createElement(AgentResearchActivity, {
+      events: [],
+      toolExecutions: undefined,
+      loading: false,
+      error: false,
+      failure: {
+        title: "本轮研究未能完成",
+        detail: "本轮没有生成研究助手回复。",
+        code: "agent_turn_failed",
+      },
+    }));
+
+    expect(html).toContain("本轮研究未能完成");
+    expect(html).toContain("agent_turn_failed");
   });
 });

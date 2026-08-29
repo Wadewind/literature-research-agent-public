@@ -25,6 +25,10 @@ from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import DirectoryListEntry, WriteEntry
 from opensandbox.models.sandboxes import NetworkPolicy, NetworkRule
 
+from literature_agent.application.ports.research_agent_runtime import (
+    ResearchAgentRuntimeError,
+    RuntimeErrorKind,
+)
 from literature_agent.domain.agent_network import RESEARCH_PUBLIC_EGRESS_PROFILE
 from literature_agent.domain.workspace_snapshot import is_workspace_file_path
 
@@ -32,9 +36,54 @@ _PLATFORM_MCP_SERVICES = frozenset({"playwright", "arxiv-search"})
 _PLATFORM_MCP_PORTS = frozenset({8931, 8932})
 _PLATFORM_BROWSER_PROXY_PORT = 6080
 _MCP_ALLOWED_HOST = re.compile(r"^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
+_DNS_LABEL = r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
+_DNS_SUBDOMAIN = re.compile(rf"^(?:{_DNS_LABEL}\.)*{_DNS_LABEL}$")
+_METADATA_LABEL_NAME = re.compile(
+    r"^[A-Za-z0-9](?:[-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+)
+_METADATA_LABEL_VALUE = re.compile(
+    r"^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]*[A-Za-z0-9])?)?$"
+)
+_RESERVED_METADATA_PREFIX = "opensandbox.io/"
+_INVALID_METADATA_CODES = frozenset(
+    {"INVALID_METADATA_LABEL", "SANDBOX::INVALID_METADATA_LABEL"}
+)
 # OpenSandbox API 以十进制整数承载 chmod 的八进制数字，而不是 Python 位掩码值。
 _WORKSPACE_DIRECTORY_MODE = 700
 _WORKSPACE_FILE_MODE = 600
+
+
+def _sandbox_metadata_error() -> ResearchAgentRuntimeError:
+    return ResearchAgentRuntimeError(
+        kind=RuntimeErrorKind.PERMANENT,
+        code="runtime_sandbox_metadata_invalid",
+        safe_message="Sandbox 元数据不符合固定运行环境契约，请修正配置后重新发起。",
+    )
+
+
+def _validate_metadata_label_key(key: str) -> bool:
+    if key.startswith(_RESERVED_METADATA_PREFIX):
+        return False
+    if "/" not in key:
+        name = key
+    else:
+        prefix, name = key.split("/", 1)
+        if not prefix or not name or len(prefix) > 253 or not _DNS_SUBDOMAIN.fullmatch(prefix):
+            return False
+    return len(name) <= 63 and _METADATA_LABEL_NAME.fullmatch(name) is not None
+
+
+def _validate_opensandbox_metadata(metadata: dict[str, str]) -> None:
+    """在 SDK I/O 前执行 OpenSandbox 0.1.15 Server 的 label 子集契约。"""
+    for key, value in metadata.items():
+        if (
+            not isinstance(key, str)
+            or not isinstance(value, str)
+            or not _validate_metadata_label_key(key)
+            or len(value) > 63
+            or _METADATA_LABEL_VALUE.fullmatch(value) is None
+        ):
+            raise _sandbox_metadata_error()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -315,6 +364,7 @@ class OpenSandboxProvider:
         network_profile_hash: str | None = None,
     ) -> OpenSandboxBackend:
         """仅把固定 public-egress 档案翻译为 OpenSandbox SDK DTO。"""
+        _validate_opensandbox_metadata(metadata)
         requested_profile = (
             network_profile_id,
             network_profile_version,
@@ -337,18 +387,23 @@ class OpenSandboxProvider:
             )
         else:
             raise ValueError("OpenSandbox Network Profile 未在平台固定档案中注册")
-        sandbox = await asyncio.to_thread(
-            self.sandbox_cls.create,
-            image_ref,
-            timeout=timedelta(seconds=ttl_seconds),
-            env={},
-            entrypoint=["/entrypoint"],
-            metadata=dict(metadata),
-            resource={"cpu": str(cpu), "memory": f"{memory_mib}Mi"},
-            network_policy=network_policy,
-            volumes=[],
-            connection_config=self._connection(),
-        )
+        try:
+            sandbox = await asyncio.to_thread(
+                self.sandbox_cls.create,
+                image_ref,
+                timeout=timedelta(seconds=ttl_seconds),
+                env={},
+                entrypoint=["/entrypoint"],
+                metadata=dict(metadata),
+                resource={"cpu": str(cpu), "memory": f"{memory_mib}Mi"},
+                network_policy=network_policy,
+                volumes=[],
+                connection_config=self._connection(),
+            )
+        except SandboxApiException as exc:
+            if getattr(exc.error, "code", None) in _INVALID_METADATA_CODES:
+                raise _sandbox_metadata_error() from exc
+            raise
         return OpenSandboxBackend(
             sandbox,
             direct_endpoint_getter=lambda port: self._get_direct_endpoint(sandbox.id, port),

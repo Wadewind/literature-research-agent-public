@@ -16,6 +16,48 @@ const AGENT_EVENT_LABELS: Readonly<Record<string, string>> = {
   run_cancelled: "本轮研究已取消",
 };
 
+export interface AgentTurnFailureSummary {
+  title: string;
+  detail: string;
+  code: string;
+}
+
+interface AgentFailureEvent {
+  event_type: string;
+  payload: Record<string, unknown>;
+}
+
+export function agentTurnFailureSummary(
+  event: AgentFailureEvent | undefined,
+): AgentTurnFailureSummary {
+  const error = event?.payload.error;
+  const errorType = error && typeof error === "object" && "type" in error
+    ? (error as { type?: unknown }).type
+    : undefined;
+  const errorMessage = error && typeof error === "object" && "message" in error
+    ? (error as { message?: unknown }).message
+    : undefined;
+  if (
+    errorType === "runtime_sandbox_metadata_invalid" ||
+    (
+      errorType === "SandboxApiException" &&
+      typeof errorMessage === "string" &&
+      errorMessage.includes("INVALID_METADATA_LABEL")
+    )
+  ) {
+    return {
+      title: "研究环境未能启动",
+      detail: "Sandbox 配置未通过校验，本轮未进入模型或工具执行。修正配置后可以重新发起。",
+      code: "runtime_sandbox_metadata_invalid",
+    };
+  }
+  return {
+    title: "本轮研究未能完成",
+    detail: "本轮没有生成研究助手回复。可以调整问题后重新发起，并在研究活动中核对失败阶段。",
+    code: "agent_turn_failed",
+  };
+}
+
 export function agentEventLabel(eventType: string): string | null {
   return AGENT_EVENT_LABELS[eventType] ?? null;
 }

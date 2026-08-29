@@ -368,7 +368,6 @@ class SandboxWorkspaceManager:
             | (
                 {
                     "network_profile": f"{profile_id}.{profile_version}",
-                    "network_profile_hash": profile_hash,
                 }
                 if network_enabled
                 else {"network_profile": "legacy-default-deny"}

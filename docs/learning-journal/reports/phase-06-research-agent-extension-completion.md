@@ -91,3 +91,6 @@ Phase 6 的本地个人项目精简交付已完成。系统在 Phase 5 的 `Rese
 - `5150229`：Slice 7 Sandbox 公网能力；
 - `d95905b`、`5140aac`、`dcd6df6`、`8418b13`：Slice 8.1–8.4 应用壳、轻页头、工作区整合与视觉刷新；
 - Slice 8.5：本报告、真实 noVNC、固定评测、升级门禁和最终复盘所在提交。
+
+阶段完成后的显式 Real 模式集成缺陷与修复证据另见
+[Phase 6 Real 模式体验缺陷台账](phase-06-real-mode-defect-log.md)。

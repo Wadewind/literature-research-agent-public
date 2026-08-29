@@ -5,10 +5,14 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 import pytest
-from opensandbox.exceptions import SandboxApiException
+from opensandbox.exceptions import SandboxApiException, SandboxError
 from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import WriteEntry
 
+from literature_agent.application.ports.research_agent_runtime import (
+    ResearchAgentRuntimeError,
+    RuntimeErrorKind,
+)
 from literature_agent.domain.agent_network import RESEARCH_PUBLIC_EGRESS_PROFILE
 from literature_agent.infrastructure.agent.opensandbox_backend import (
     OpenSandboxBackend,
@@ -336,6 +340,92 @@ async def test_provider_creation_uses_fixed_public_egress_and_is_secret_free(
     assert calls[0]["env"] == {}
     assert calls[0]["entrypoint"] == ["/entrypoint"]
     assert "provider-secret" not in repr(provider)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"network_profile_hash": "a" * 64},
+        {"bad key": "value"},
+        {"opensandbox.io/system": "value"},
+        {"key": "-invalid"},
+    ],
+)
+async def test_provider_rejects_invalid_metadata_before_sdk_call(
+    monkeypatch,
+    metadata: dict[str, str],
+) -> None:
+    async def immediate_to_thread(call, *args, **kwargs):
+        return call(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+    calls = 0
+
+    class _SandboxFactory:
+        @classmethod
+        def create(cls, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return _Sandbox()
+
+    provider = OpenSandboxProvider(
+        domain="sandbox.internal:8080",
+        protocol="http",
+        sandbox_cls=_SandboxFactory,
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as exc_info:
+        await provider.create(
+            image_ref="research@sha256:pinned",
+            ttl_seconds=600,
+            cpu=1,
+            memory_mib=2048,
+            network_enabled=False,
+            metadata=metadata,
+        )
+
+    assert exc_info.value.kind is RuntimeErrorKind.PERMANENT
+    assert exc_info.value.code == "runtime_sandbox_metadata_invalid"
+    assert calls == 0
+
+
+async def test_provider_normalizes_sdk_invalid_metadata_as_permanent(monkeypatch) -> None:
+    async def immediate_to_thread(call, *args, **kwargs):
+        return call(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+
+    class _SandboxFactory:
+        @classmethod
+        def create(cls, *_args, **_kwargs):
+            raise SandboxApiException(
+                "metadata rejected",
+                status_code=400,
+                error=SandboxError(
+                    "SANDBOX::INVALID_METADATA_LABEL",
+                    "internal provider detail",
+                ),
+            )
+
+    provider = OpenSandboxProvider(
+        domain="sandbox.internal:8080",
+        protocol="http",
+        sandbox_cls=_SandboxFactory,
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as exc_info:
+        await provider.create(
+            image_ref="research@sha256:pinned",
+            ttl_seconds=600,
+            cpu=1,
+            memory_mib=2048,
+            network_enabled=False,
+            metadata={"session_id": "session-1"},
+        )
+
+    assert exc_info.value.kind is RuntimeErrorKind.PERMANENT
+    assert exc_info.value.code == "runtime_sandbox_metadata_invalid"
+    assert "internal provider detail" not in exc_info.value.safe_message
 
 
 async def test_provider_rejects_unknown_or_drifted_network_profile(monkeypatch) -> None:

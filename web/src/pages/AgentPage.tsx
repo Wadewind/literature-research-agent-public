@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -38,6 +45,7 @@ import { agentWorkspaceKey } from "../agent/interactionIdentity";
 import { eligibleEvidenceMatrices } from "../agent/matrixEligibility";
 import {
   agentEventLabel,
+  agentTurnFailureSummary,
   canInteractWithAgentSession,
   canSendAgentMessage,
   isSkillProfileLocked,
@@ -58,6 +66,7 @@ import AgentResearchActivity from "../components/AgentResearchActivity";
 import AgentResizeSeparator from "../components/AgentResizeSeparator";
 import AgentSessionRail from "../components/AgentSessionRail";
 import AgentTurnOutputs from "../components/AgentTurnOutputs";
+import AgentTurnFailure from "../components/AgentTurnFailure";
 import PageBar from "../components/PageBar";
 import { isCancellable, isTerminal, statusLabel } from "../runs/runStatus";
 import { useRunEvents } from "../runs/useRunEvents";
@@ -250,7 +259,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const activeTurnRunId = candidateTurnRunId && !isTerminal(runQuery.data?.status ?? "")
     ? candidateTurnRunId
     : null;
-  const eventStream = useRunEvents(activeTurnRunId ?? undefined);
+  const eventStream = useRunEvents(candidateTurnRunId);
 
   useEffect(() => {
     const terminal = runQuery.data ? isTerminal(runQuery.data.status) : eventStream.closed;
@@ -465,6 +474,12 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   }
 
   const project = projectQuery.data;
+  const failedEvent = [...eventStream.events]
+    .reverse()
+    .find((event) => event.event_type === "run_failed");
+  const turnFailure = runQuery.data?.status === "failed"
+    ? agentTurnFailureSummary(failedEvent)
+    : null;
   const skillLocked = isSkillProfileLocked(messages.length);
   const researchEvents = eventStream.events.flatMap((event) => {
     const label = agentEventLabel(event.event_type);
@@ -533,8 +548,18 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
             <>
               <header className="agent-chat-heading">
                 <div><p className="eyebrow">CONTINUOUS RESEARCH</p><h2>{sessionQuery.data?.title || "未命名研究会话"}</h2></div>
-                <span className={activeTurnRunId ? "badge badge-pending" : "badge badge-ok"}>
-                  {activeTurnRunId ? statusLabel(runQuery.data?.status ?? "queued") : "可继续"}
+                <span className={
+                  activeTurnRunId
+                    ? "badge badge-pending"
+                    : turnFailure
+                      ? "badge badge-error"
+                      : "badge badge-ok"
+                }>
+                  {activeTurnRunId
+                    ? statusLabel(runQuery.data?.status ?? "queued")
+                    : turnFailure
+                      ? "上一轮失败 · 可重新发起"
+                      : "可继续"}
                 </span>
               </header>
 
@@ -563,20 +588,25 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
                   <div className="agent-empty-turn"><h3>准备第一轮研究</h3><p>选择 Evidence Matrix，然后提出一个需要比较、综合或验证的研究问题。</p></div>
                 )}
                 {messages.map((message) => (
-                  <article className={`message message-${message.role}`} key={message.message_id}>
-                    <header><strong>{message.role === "user" ? "你" : "研究助手"}</strong><time>{new Date(message.created_at).toLocaleTimeString()}</time></header>
-                    <p>{message.content}</p>
-                    {message.claims?.map((claim, claimIndex) => (
-                      <div className="agent-inline-claim" key={`${message.message_id}:${claimIndex}`}>
-                        <span className="mono">E{String(claimIndex + 1).padStart(2, "0")}</span>
-                        {claim.citations.map((citation) => (
-                          <button key={citation.evidence_id} type="button" className="citation-marker" onClick={() => setSelectedEvidence(citation)}>
-                            p.{citation.page_start ?? "?"}
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </article>
+                  <Fragment key={message.message_id}>
+                    <article className={`message message-${message.role}`}>
+                      <header><strong>{message.role === "user" ? "你" : "研究助手"}</strong><time>{new Date(message.created_at).toLocaleTimeString()}</time></header>
+                      <p>{message.content}</p>
+                      {message.claims?.map((claim, claimIndex) => (
+                        <div className="agent-inline-claim" key={`${message.message_id}:${claimIndex}`}>
+                          <span className="mono">E{String(claimIndex + 1).padStart(2, "0")}</span>
+                          {claim.citations.map((citation) => (
+                            <button key={citation.evidence_id} type="button" className="citation-marker" onClick={() => setSelectedEvidence(citation)}>
+                              p.{citation.page_start ?? "?"}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </article>
+                    {turnFailure && candidateTurnRunId === message.turn_run_id && message.role === "user" && (
+                      <AgentTurnFailure runId={candidateTurnRunId} summary={turnFailure} />
+                    )}
+                  </Fragment>
                 ))}
               </div>
 
@@ -585,6 +615,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
                 toolExecutions={toolExecutionsQuery.data}
                 loading={toolExecutionsQuery.isPending && Boolean(candidateTurnRunId)}
                 error={toolExecutionsQuery.isError}
+                failure={turnFailure}
               />
 
               <form className="agent-composer" onSubmit={submitMessage}>

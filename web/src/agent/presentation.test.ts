@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentEventLabel,
+  agentTurnFailureSummary,
   canSendAgentMessage,
   canInteractWithAgentSession,
   isSkillProfileLocked,
@@ -53,5 +54,34 @@ describe("Agent UI 投影", () => {
       canInteractWithAgentSession(project, { project_id: "project-2" }, "project-1"),
     ).toBe(false);
     expect(canInteractWithAgentSession(project, session, "project-1")).toBe(true);
+  });
+
+  it("将 Sandbox metadata 失败投影为稳定安全说明且不回显 SDK 明细", () => {
+    const summary = agentTurnFailureSummary({
+      event_type: "run_failed",
+      payload: {
+        error: {
+          type: "SandboxApiException",
+          message: "secret endpoint and INVALID_METADATA_LABEL provider detail",
+        },
+      },
+    });
+
+    expect(summary.code).toBe("runtime_sandbox_metadata_invalid");
+    expect(summary.title).toBe("研究环境未能启动");
+    expect(summary.detail).toContain("未进入模型或工具执行");
+    expect(JSON.stringify(summary)).not.toContain("secret endpoint");
+    expect(JSON.stringify(summary)).not.toContain("provider detail");
+  });
+
+  it("未知失败只返回通用稳定错误码，不回显事件 payload", () => {
+    const summary = agentTurnFailureSummary({
+      event_type: "run_failed",
+      payload: { error: { type: "UnexpectedThing", message: "raw private detail" } },
+    });
+
+    expect(summary.code).toBe("agent_turn_failed");
+    expect(summary.title).toBe("本轮研究未能完成");
+    expect(JSON.stringify(summary)).not.toContain("raw private detail");
   });
 });
