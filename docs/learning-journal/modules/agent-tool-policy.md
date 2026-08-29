@@ -44,14 +44,15 @@ Project Context Tool、`submit_artifact` 和 `mcp_refs.tools`。它们也只有�
 | Tool 安全输出 | 64 KiB / 次 | 通用后置上限；MCP 原文先裁剪到 8,000 字符的持久化边界 |
 | 相同 Tool + args hash | 2 次 / Turn | 第 3 个不同 invocation 在执行前拒绝 |
 | 模型输入 | 约 60,000 Token / 次 | `count_tokens_approximately`，包含 system 与 Tool schemas |
-| 模型输出 | 2,048 Token / 次 | Provider `max_tokens` 硬限制 |
+| 模型输出 | 4,096 Token / 次 | Provider `max_tokens` 与不可变 PolicySnapshot 双重限制 |
 
 输入 Token 是近似安全上限，不是 Provider 精确计费。Provider 返回 `usage_metadata` 时以可空字段渐进记录；
 同一字段只允许 `NULL → value` 或同值重放。响应丢失时 usage 可能缺失，总 Token 和费用不可得时不做虚假
 硬拒绝。Workspace 50 MiB、单文件/Artifact 10 MiB 沿用既有契约；下载次数与总量属于 Slice 7。
 
-三种 Project Research Policy 已随上述行为从 v3 提升到 v4；旧 Turn 继续使用冻结的 v3 数值，新 Turn
-才获得 60 秒 Tool 预算和 MCP 超时分层。
+三种 Project Research Policy 曾随上述行为从 v3 提升到 v4；旧 Turn 继续使用冻结的 v3 数值，新 Turn
+才获得 60 秒 Tool 预算和 MCP 超时分层。2026-08-30 又因单次模型输出预算从 2,048 提升到 4,096，
+三种 Policy 进一步提升到 v5；已有 v4 Turn 仍按其不可变快照恢复。
 
 ## 安全与公开投影
 

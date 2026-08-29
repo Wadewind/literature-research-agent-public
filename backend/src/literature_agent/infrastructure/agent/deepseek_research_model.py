@@ -7,7 +7,9 @@ from langchain_deepseek import ChatDeepSeek
 from pydantic import SecretStr
 
 _FIXED_MODEL = "deepseek-v4-flash"
-_FIXED_MAX_OUTPUT_TOKENS = 2_048
+_FIXED_MAX_OUTPUT_TOKENS = 4_096
+_THINKING_MODES = frozenset({"disabled", "enabled"})
+_REASONING_EFFORTS = frozenset({"low", "high", "max"})
 
 
 def build_deepseek_research_model(
@@ -16,16 +18,22 @@ def build_deepseek_research_model(
     api_key: str,
     model: str,
     max_output_tokens: int,
+    thinking_mode: str,
+    reasoning_effort: str,
     timeout_seconds: float,
     max_retries: int,
 ) -> BaseChatModel:
-    """构造固定关闭 thinking、具有输出与重试上限的 Agent 模型。"""
+    """构造 thinking 受控、具有输出与重试上限的 Agent 模型。"""
     if model != _FIXED_MODEL:
         raise ValueError("AGENT_RESEARCH_MODEL 当前只允许 deepseek-v4-flash")
     if not api_key:
         raise ValueError("deep_agents 模式必须设置 AGENT_RESEARCH_MODEL_API_KEY")
     if not 0 < max_output_tokens <= _FIXED_MAX_OUTPUT_TOKENS:
-        raise ValueError("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须在 1..2048 范围内")
+        raise ValueError("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须在 1..4096 范围内")
+    if thinking_mode not in _THINKING_MODES:
+        raise ValueError("AGENT_RESEARCH_MODEL_THINKING_MODE 未在平台注册")
+    if reasoning_effort not in _REASONING_EFFORTS:
+        raise ValueError("AGENT_RESEARCH_MODEL_REASONING_EFFORT 未在平台注册")
     if timeout_seconds <= 0:
         raise ValueError("AGENT_MODEL_TIMEOUT_SECONDS 必须为正数")
     if max_retries < 0:
@@ -39,7 +47,8 @@ def build_deepseek_research_model(
             max_tokens=max_output_tokens,
             timeout=timeout_seconds,
             max_retries=max_retries,
-            extra_body={"thinking": {"type": "disabled"}},
+            extra_body={"thinking": {"type": thinking_mode}},
+            reasoning_effort=reasoning_effort if thinking_mode == "enabled" else None,
         ),
     )
 

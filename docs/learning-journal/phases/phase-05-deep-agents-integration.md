@@ -790,7 +790,8 @@ Fake 只使用本地哈希和内存状态，不导入 `deepagents`/LangGraph，�
 
 - 精确新增 `langchain-deepseek==1.1.0`；锁文件新增 `langchain-openai==1.6.0` 与 `openai==3.3.1`，
   既有依赖没有版本升级。`ChatDeepSeek` 固定使用 `deepseek-v4-flash`、
-  `extra_body={"thinking":{"type":"disabled"}}`、Provider 输出 token 上限及通用 timeout/retry；
+  默认 `extra_body={"thinking":{"type":"disabled"}}`、Provider 输出 token 上限及通用 timeout/retry；
+  2026-08-30 起仅允许在 `AGENT_DEBUG=true` 的开发诊断中以受控枚举开启 thinking；
 - `AGENT_RESEARCH_RUNTIME_BACKEND` 默认 `fake`。Fake 模式不读取 Agent Provider Key，也不构造模型或打开
   Checkpointer；显式 `deep_agents` 模式缺少专用 Key、模型漂移、输出上限非法或 backend 未知时启动前
   fail-closed，Secret 字段 `repr=False`；缺 Key 校验位于 Worker composition，使启动脚本可在 Worker fork

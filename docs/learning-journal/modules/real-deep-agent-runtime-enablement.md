@@ -24,8 +24,9 @@ Settings.from_env
 ```
 
 Agent Provider 配置与 RAG/Review Chat 配置分离。真实模式固定
-`langchain-deepseek==1.1.0`、`deepseek-v4-flash` 与
-`extra_body={"thinking":{"type":"disabled"}}`，并设置 Provider 输出 token 上限、timeout 和 retry。
+`langchain-deepseek==1.1.0` 与 `deepseek-v4-flash`；thinking 默认 `disabled`，只允许在
+`AGENT_DEBUG=true` 的开发诊断中切换为 `enabled` 和受限 effort。Provider/PolicySnapshot 的单次输出上限
+于 2026-08-30 同步调整为 4096，并继续设置 timeout 和 retry。
 Domain、公开 API、业务数据库和 `ResearchAgentRuntime` Port 均没有新增 Deep Agents 或 ChatDeepSeek 类型。
 
 ## 状态、数据与事务
@@ -105,6 +106,9 @@ correctness 上安全；但锁会串行化该实例的 checkpoint I/O。7.0 按�
 - 主智能体独立执行 `ruff check src tests` 通过，`pyright src` 为
   `0 errors, 0 warnings`，`uv lock --check` 输出 `Resolved 228 packages`，
   `bash -n scripts/dev.sh web/e2e/run.sh` 与 `git diff --check` 均通过。
+- 2026-08-30 thinking 调试配置与 4096 输出预算回归：最终定向测试 `122 passed`，排除
+  Testcontainers 的完整后端回归 `1193 passed, 10 skipped`，Agent 两轮流程与 Usage PostgreSQL 集成
+  `2 passed`；Ruff/Pyright 通过，未调用真实 Provider。
 
 ## 代码入口
 
@@ -130,7 +134,7 @@ correctness 上安全；但锁会串行化该实例的 checkpoint I/O。7.0 按�
 ## 60 秒面试说明
 
 “我把真实 Deep Agents 模式放在 Worker 的 infrastructure composition root，而不是修改业务 Port。默认
-配置仍返回完全离线 Fake；只有显式 deep_agents 才创建固定关闭 thinking 的 ChatDeepSeek、持久
+配置仍返回完全离线 Fake；只有显式 deep_agents 才创建 thinking 受控且默认关闭的 ChatDeepSeek、持久
 PostgreSQL Checkpointer、Project-scoped Context 和 RuntimeExecution lease 控制，Secret 不进入 repr、
 Event 或业务状态。每轮主 Agent model call 在调用前把额度预留进同步 checkpoint，所以 Tool 失败恢复不
 会重获额度；但 Deep Agents 的内部 summarization 会绕过这层且最多自行重试三次，我明确记录它不是完整

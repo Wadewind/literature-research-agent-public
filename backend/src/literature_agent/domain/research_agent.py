@@ -31,9 +31,9 @@ _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
 _AGENT_CANDIDATE_MAX_SIZE_BYTES = 10 * 1024 * 1024
 AGENT_MESSAGE_MAX_ATTACHMENTS = 5
 
-PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v4"
-PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = "agent-policy.project-research-workspace-mcp.v4"
-PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = "agent-policy.project-research-capabilities.v4"
+PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v5"
+PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = "agent-policy.project-research-workspace-mcp.v5"
+PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = "agent-policy.project-research-capabilities.v5"
 PROJECT_RESEARCH_WORKSPACE_TOOLS = (
     "search_project_chunks",
     "read_review_evidence_matrix",

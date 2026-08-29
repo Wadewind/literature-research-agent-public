@@ -687,7 +687,7 @@ ADR-0007/0008 本身当作测试结果：
    可重试上传意图 Chat UI 均已落地；不开放任意 Browser 文件上传，Storage GC 延期；
 5. **固定能力、Project Context 与硬预算（已完成）**：复用 Phase 5 Catalog/Profile，全部允许 Tool 的
    version/schema hash 与 8 次模型、12 次 Tool、300 秒墙钟、60/60 秒单调用、64 KiB 通用安全输出、同签名
-   最多 2 次、约 60,000 输入 Token/2,048 输出 Token 均由不可变 PolicySnapshot 冻结；MCP 内层提前
+   最多 2 次、约 60,000 输入 Token/4,096 输出 Token 均由不可变 PolicySnapshot 冻结；MCP 内层提前
    1 秒超时，纯文本另裁剪到 8,000 字符的持久化边界；PostgreSQL Usage
    与稳定 reservation 承担并发/重放事实，公开 API 只投影脱敏摘要。Project/MCP/Artifact 仅通过既有
    effect cache 对账，文件/`execute` 未知 effect fail closed；不建设完整 Registry、Approval 或精确计费；

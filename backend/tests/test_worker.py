@@ -125,21 +125,65 @@ def test_fake_model_stack_uses_offline_tokenizer() -> None:
 
 
 @pytest.mark.parametrize(
-    ("base_url", "model", "expected_thinking_mode"),
+    (
+        "base_url",
+        "model",
+        "thinking_mode",
+        "reasoning_effort",
+        "debug",
+        "expected_thinking_mode",
+        "expected_reasoning_effort",
+    ),
     [
-        ("https://api.deepseek.com", "deepseek-v4-flash", "disabled"),
-        ("https://api.deepseek.com/v1", "deepseek-v4-pro", "disabled"),
-        ("https://gateway.example/v1", "deepseek-v4-flash", None),
-        ("https://api.deepseek.com", "other-model", None),
+        (
+            "https://api.deepseek.com",
+            "deepseek-v4-flash",
+            "disabled",
+            "low",
+            False,
+            "disabled",
+            None,
+        ),
+        (
+            "https://api.deepseek.com/v1",
+            "deepseek-v4-pro",
+            "enabled",
+            "high",
+            True,
+            "enabled",
+            "high",
+        ),
+        (
+            "https://gateway.example/v1",
+            "deepseek-v4-flash",
+            "disabled",
+            "low",
+            False,
+            None,
+            None,
+        ),
+        (
+            "https://api.deepseek.com",
+            "other-model",
+            "disabled",
+            "low",
+            False,
+            None,
+            None,
+        ),
     ],
 )
-def test_real_chat_model_stack_scopes_deepseek_non_thinking_mode(
+def test_real_chat_model_stack_scopes_deepseek_thinking_configuration(
     monkeypatch,
     base_url: str,
     model: str,
+    thinking_mode: str,
+    reasoning_effort: str,
+    debug: bool,
     expected_thinking_mode: str | None,
+    expected_reasoning_effort: str | None,
 ) -> None:
-    """只有官方 DeepSeek V4 文本模型获得固定 non-thinking Provider 参数。"""
+    """只有官方 DeepSeek V4 文本模型获得已校验的 thinking 参数。"""
     captured: dict[str, object] = {}
 
     class StubChat:
@@ -152,16 +196,35 @@ def test_real_chat_model_stack_scopes_deepseek_non_thinking_mode(
 
     _gateway, _profile, closables = _build_model_stack(
         Settings(
+            debug=debug,
             chat_backend="openai_compatible",
             chat_base_url=base_url,
             chat_model=model,
+            chat_thinking_mode=thinking_mode,
+            chat_reasoning_effort=reasoning_effort,
         ),
         lambda: None,  # type: ignore[arg-type]
     )
 
     assert captured["thinking_mode"] == expected_thinking_mode
+    assert captured["reasoning_effort"] == expected_reasoning_effort
     assert len(closables) == 1
     assert isinstance(closables[0], StubChat)
+
+
+def test_real_chat_model_stack_rejects_thinking_for_unregistered_provider() -> None:
+    """Provider 专属调试字段不能发送到任意兼容端点。"""
+    with pytest.raises(ValueError, match="官方 DeepSeek V4"):
+        _build_model_stack(
+            Settings(
+                debug=True,
+                chat_backend="openai_compatible",
+                chat_base_url="https://gateway.example/v1",
+                chat_model="deepseek-v4-flash",
+                chat_thinking_mode="enabled",
+            ),
+            lambda: None,  # type: ignore[arg-type]
+        )
 
 
 def test_fake_research_runtime_does_not_construct_provider(monkeypatch) -> None:
@@ -286,7 +349,9 @@ def test_deep_research_runtime_uses_production_context_and_control(monkeypatch) 
         "base_url": "https://api.deepseek.com",
         "api_key": "agent-secret",
         "model": "deepseek-v4-flash",
-        "max_output_tokens": 2048,
+        "max_output_tokens": 4096,
+        "thinking_mode": "disabled",
+        "reasoning_effort": "low",
         "timeout_seconds": 60.0,
         "max_retries": 2,
     }

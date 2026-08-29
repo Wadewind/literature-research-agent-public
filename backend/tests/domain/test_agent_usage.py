@@ -43,7 +43,7 @@ def test_turn_usage_freezes_lean_profile_and_starts_deadline_once() -> None:
     assert usage.max_tool_output_bytes == AGENT_MAX_TOOL_OUTPUT_BYTES == 64 * 1024
     assert usage.max_repeated_tool_calls == AGENT_MAX_REPEATED_TOOL_CALLS == 2
     assert usage.max_input_tokens_per_model_call == AGENT_MAX_INPUT_TOKENS_PER_MODEL_CALL == 60_000
-    assert usage.max_output_tokens_per_model_call == AGENT_MAX_OUTPUT_TOKENS_PER_MODEL_CALL == 2_048
+    assert usage.max_output_tokens_per_model_call == AGENT_MAX_OUTPUT_TOKENS_PER_MODEL_CALL == 4_096
 
     started = usage.start(now=_NOW + timedelta(seconds=10))
     replayed = started.start(now=_NOW + timedelta(seconds=20))

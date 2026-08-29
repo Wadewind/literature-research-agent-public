@@ -142,7 +142,7 @@ class RagAnswerExecutor[TSession: Session]:
         retriever: Retriever[TSession],
         evidence_service: EvidenceService[TSession],
         model_gateway: ModelGateway[TSession],
-        answer_max_output_tokens: int = 2048,
+        answer_max_output_tokens: int = 4096,
         context_token_budget: int = 3000,
         max_run_attempts: int = 3,
         event_notifier: EventNotifier | None = None,

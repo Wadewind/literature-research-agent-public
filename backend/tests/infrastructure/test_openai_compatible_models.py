@@ -236,9 +236,7 @@ async def test_embedding_missing_data_field(httpx2_mock: respx.Router) -> None:
 
 async def test_chat_success_with_json_schema(httpx2_mock: respx.Router) -> None:
     """Chat 成功：content、usage 与 response_format 请求形状正确。"""
-    route = httpx2_mock.post(_CHAT_URL).mock(
-        return_value=httpx.Response(200, json=_chat_payload())
-    )
+    route = httpx2_mock.post(_CHAT_URL).mock(return_value=httpx.Response(200, json=_chat_payload()))
     adapter = _chat_adapter()
     schema = {"type": "object", "properties": {"answer_status": {"type": "string"}}}
 
@@ -268,7 +266,9 @@ async def test_chat_explicitly_disables_thinking_for_registered_provider(
     httpx2_mock: respx.Router,
 ) -> None:
     """已注册 Provider 可以固定关闭 thinking，避免推理耗尽结构化输出预算。"""
-    route = httpx2_mock.post(_CHAT_URL).mock(return_value=httpx.Response(200, json=_chat_payload()))
+    route = httpx2_mock.post(_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_chat_payload())
+    )
     adapter = _chat_adapter(thinking_mode="disabled")
 
     await adapter.generate([ChatMessage(role="user", content="问题")], max_tokens=512)
@@ -280,7 +280,34 @@ async def test_chat_explicitly_disables_thinking_for_registered_provider(
 def test_chat_rejects_unregistered_thinking_mode() -> None:
     """通用 Adapter 不接受调用方借 thinking 参数扩大 Provider 行为。"""
     with pytest.raises(ValueError, match="thinking_mode"):
-        _chat_adapter(thinking_mode="enabled")
+        _chat_adapter(thinking_mode="auto")
+
+
+async def test_chat_enables_registered_thinking_with_bounded_effort(
+    httpx2_mock: respx.Router,
+) -> None:
+    """开发诊断可显式开启 thinking，并发送受限 reasoning effort。"""
+    route = httpx2_mock.post(_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_chat_payload())
+    )
+    adapter = _chat_adapter(thinking_mode="enabled", reasoning_effort="low")
+
+    await adapter.generate([ChatMessage(role="user", content="问题")], max_tokens=512)
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["thinking"] == {"type": "enabled"}
+    assert body["reasoning_effort"] == "low"
+
+
+@pytest.mark.parametrize("reasoning_effort", ["medium", "xhigh"])
+def test_chat_rejects_unregistered_reasoning_effort(reasoning_effort: str) -> None:
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        _chat_adapter(thinking_mode="enabled", reasoning_effort=reasoning_effort)
+
+
+def test_chat_rejects_reasoning_effort_when_thinking_is_disabled() -> None:
+    with pytest.raises(ValueError, match="仅可用于"):
+        _chat_adapter(thinking_mode="disabled", reasoning_effort="low")
 
 
 async def test_chat_unknown_finish_reason_is_safely_normalized(

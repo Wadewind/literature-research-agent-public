@@ -1632,7 +1632,7 @@ ContextSnapshot 精确下推 PaperVersion/ChunkSet，验证指定 Matrix 的 Out
 
 切片 6 当时只通过显式依赖注入构造真实 Deep Adapter。切片 7.0 随后已完成 Real Deep Agent Runtime
 Enablement 的实现：生产 Worker 默认保持 Fake，只有显式 `deep_agents` 才使用
-`langchain-deepseek==1.1.0` 构造固定关闭 thinking 的 `deepseek-v4-flash`，并装配既有持久
+`langchain-deepseek==1.1.0` 构造 thinking 受控且默认关闭的 `deepseek-v4-flash`，并装配既有持久
 Checkpointer、Project Context 与 RuntimeExecution control；真实模式缺少专用 Key 时启动前失败。
 本切片尚未执行真实 Provider Smoke。切片 7.1 随后已实现 OpenSandbox/Lease/WorkspaceSnapshot 的
 SDK-neutral 边界、统一 Tool 预算与每 operation Saver/graph。ADR-0008 已将后续调整为 MCP 配置基础、

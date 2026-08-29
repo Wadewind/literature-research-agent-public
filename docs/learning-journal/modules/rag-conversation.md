@@ -49,7 +49,7 @@ Route 只做 HTTP 与身份上下文；Domain 保存状态机与不变量；模�
 - **busy 语义双层**：服务层预检（active_run_id 指向非终态 Run → 409；指向终态/已消失 → 自愈清理，覆盖 QUEUED 被直接取消等未经执行器的路径）+ SQL 条件更新并发兜底；执行器在**任何终态**（SUCCEEDED/FAILED/CANCELLED）同事务清认领，`RETRY_WAIT` 保留（Run 未结束，会话仍忙）；
 - **幂等复用既有 IdempotencyRecord**，不改表结构：`request_hash = sha256(conversation_id:key:sha256(content))`，重放经 `run_id` 回读 User Message，不新建记录；
 - **修复重试只有一次**：解析失败或引用校验失败时把失败原因（reason code）追加为反馈消息重新生成一次；不做多轮自我修正；
-- **Context Token Budget（2026-08-21 定稿）**：证据上下文沿用检索预算截断结果；模板+证据超 `context_token_budget`（默认 3000，tiktoken 精确计数）按 rank 从低到高丢弃一次，不循环压缩；输出上限 `AGENT_ANSWER_MAX_OUTPUT_TOKENS`（默认 2048）；
+- **Context Token Budget（2026-08-21 定稿，2026-08-30 调整输出）**：证据上下文沿用检索预算截断结果；模板+证据超 `context_token_budget`（默认 3000，tiktoken 精确计数）按 rank 从低到高丢弃一次，不循环压缩；输出上限 `AGENT_ANSWER_MAX_OUTPUT_TOKENS` 默认 4096；
 - **FakeChatModel 证据 ID 驱动**：Prompt 含 `evidence_id=` 标记则确定性返回引用这些 ID 的合法 answered JSON，否则 insufficient——本地闭环与端到端测试不触网。
 
 ## 失败、重试、重复和取消行为

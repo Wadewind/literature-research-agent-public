@@ -50,12 +50,16 @@ _DEFAULT_RETRIEVAL_TOKEN_BUDGET = 3000
 # 上限约束 ChatModel 结构化回答长度
 _DEFAULT_CHAT_BACKEND = "fake"
 _DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED = True
-_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS = 2048
+_DEFAULT_CHAT_THINKING_MODE = "disabled"
+_DEFAULT_CHAT_REASONING_EFFORT = "low"
+_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS = 4096
 # Research Agent Provider 与 RAG/Review Chat 独立；默认 Fake 保持离线零费用。
 _DEFAULT_RESEARCH_RUNTIME_BACKEND = "fake"
 _DEFAULT_RESEARCH_MODEL_BASE_URL = "https://api.deepseek.com"
 _DEFAULT_RESEARCH_MODEL = "deepseek-v4-flash"
-_DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS = 2048
+_DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS = 4096
+_DEFAULT_RESEARCH_MODEL_THINKING_MODE = "disabled"
+_DEFAULT_RESEARCH_MODEL_REASONING_EFFORT = "low"
 _DEFAULT_RESEARCH_SANDBOX_DOMAIN = "127.0.0.1:8080"
 _DEFAULT_RESEARCH_SANDBOX_PROTOCOL = "http"
 _DEFAULT_RESEARCH_SANDBOX_IMAGE = (
@@ -73,6 +77,8 @@ _LOG_LEVELS = {
     "ERROR": logging.ERROR,
     "CRITICAL": logging.CRITICAL,
 }
+_THINKING_MODES = frozenset({"disabled", "enabled"})
+_REASONING_EFFORTS = frozenset({"low", "high", "max"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +131,8 @@ class Settings:
     chat_json_schema_supported: bool = field(
         default=_DEFAULT_CHAT_JSON_SCHEMA_SUPPORTED
     )
+    chat_thinking_mode: str = field(default=_DEFAULT_CHAT_THINKING_MODE)
+    chat_reasoning_effort: str = field(default=_DEFAULT_CHAT_REASONING_EFFORT)
     answer_max_output_tokens: int = field(default=_DEFAULT_ANSWER_MAX_OUTPUT_TOKENS)
     research_runtime_backend: str = field(default=_DEFAULT_RESEARCH_RUNTIME_BACKEND)
     research_model_base_url: str = field(default=_DEFAULT_RESEARCH_MODEL_BASE_URL)
@@ -132,6 +140,12 @@ class Settings:
     research_model: str = field(default=_DEFAULT_RESEARCH_MODEL)
     research_model_max_output_tokens: int = field(
         default=_DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS
+    )
+    research_model_thinking_mode: str = field(
+        default=_DEFAULT_RESEARCH_MODEL_THINKING_MODE
+    )
+    research_model_reasoning_effort: str = field(
+        default=_DEFAULT_RESEARCH_MODEL_REASONING_EFFORT
     )
     research_sandbox_domain: str = field(default=_DEFAULT_RESEARCH_SANDBOX_DOMAIN)
     research_sandbox_protocol: str = field(default=_DEFAULT_RESEARCH_SANDBOX_PROTOCOL)
@@ -155,11 +169,38 @@ class Settings:
             raise ValueError(
                 "AGENT_JOB_TIMEOUT_SECONDS 必须大于 AGENT_PARSER_TIMEOUT_SECONDS"
             )
+        thinking_settings = (
+            ("AGENT_CHAT_THINKING_MODE", self.chat_thinking_mode, _THINKING_MODES),
+            (
+                "AGENT_CHAT_REASONING_EFFORT",
+                self.chat_reasoning_effort,
+                _REASONING_EFFORTS,
+            ),
+            (
+                "AGENT_RESEARCH_MODEL_THINKING_MODE",
+                self.research_model_thinking_mode,
+                _THINKING_MODES,
+            ),
+            (
+                "AGENT_RESEARCH_MODEL_REASONING_EFFORT",
+                self.research_model_reasoning_effort,
+                _REASONING_EFFORTS,
+            ),
+        )
+        for name, value, allowed in thinking_settings:
+            if value not in allowed:
+                raise ValueError(f"{name} 必须为 {'、'.join(sorted(allowed))}")
+        if not self.debug and (
+            self.chat_thinking_mode == "enabled"
+            or self.research_model_thinking_mode == "enabled"
+        ):
+            raise ValueError("启用模型 thinking 必须同时设置 AGENT_DEBUG=true")
 
     @classmethod
     def from_env(cls) -> "Settings":
         """根据环境变量创建设置对象。"""
         raw_log_level = os.getenv("AGENT_LOG_LEVEL", "INFO").strip().upper()
+        debug = os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"}
         try:
             log_level = _LOG_LEVELS[raw_log_level]
         except KeyError as exc:
@@ -262,6 +303,16 @@ class Settings:
             if raw_answer_max_tokens
             else _DEFAULT_ANSWER_MAX_OUTPUT_TOKENS
         )
+        chat_thinking_mode = (
+            os.getenv("AGENT_CHAT_THINKING_MODE", _DEFAULT_CHAT_THINKING_MODE)
+            .strip()
+            .lower()
+        )
+        chat_reasoning_effort = (
+            os.getenv("AGENT_CHAT_REASONING_EFFORT", _DEFAULT_CHAT_REASONING_EFFORT)
+            .strip()
+            .lower()
+        )
         raw_metrics_port = os.getenv("AGENT_WORKER_METRICS_PORT")
         try:
             worker_metrics_port = (
@@ -282,6 +333,22 @@ class Settings:
         research_model_api_key: str | None = None
         research_model = _DEFAULT_RESEARCH_MODEL
         research_model_max_output_tokens = _DEFAULT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS
+        research_model_thinking_mode = (
+            os.getenv(
+                "AGENT_RESEARCH_MODEL_THINKING_MODE",
+                _DEFAULT_RESEARCH_MODEL_THINKING_MODE,
+            )
+            .strip()
+            .lower()
+        )
+        research_model_reasoning_effort = (
+            os.getenv(
+                "AGENT_RESEARCH_MODEL_REASONING_EFFORT",
+                _DEFAULT_RESEARCH_MODEL_REASONING_EFFORT,
+            )
+            .strip()
+            .lower()
+        )
         research_sandbox_domain = _DEFAULT_RESEARCH_SANDBOX_DOMAIN
         research_sandbox_protocol = _DEFAULT_RESEARCH_SANDBOX_PROTOCOL
         research_sandbox_api_key: str | None = None
@@ -311,9 +378,9 @@ class Settings:
                 raise ValueError(
                     "AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须为正整数"
                 ) from exc
-            if research_model_max_output_tokens <= 0:
+            if not 0 < research_model_max_output_tokens <= 4_096:
                 raise ValueError(
-                    "AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须为正整数"
+                    "AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS 必须在 1..4096 范围内"
                 )
             research_sandbox_domain = os.getenv(
                 "AGENT_RESEARCH_SANDBOX_DOMAIN", _DEFAULT_RESEARCH_SANDBOX_DOMAIN
@@ -333,7 +400,7 @@ class Settings:
                 raise ValueError("Research Sandbox domain/image 不能为空")
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
-            debug=os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"},
+            debug=debug,
             database_url=os.getenv("AGENT_DATABASE_URL", _DEFAULT_DATABASE_URL),
             redis_url=os.getenv("AGENT_REDIS_URL", _DEFAULT_REDIS_URL),
             dev_actor_id=os.getenv("AGENT_DEV_ACTOR_ID", _DEFAULT_DEV_ACTOR_ID),
@@ -372,12 +439,16 @@ class Settings:
                 "AGENT_CHAT_JSON_SCHEMA_SUPPORTED", "true"
             ).lower()
             in {"1", "true", "yes"},
+            chat_thinking_mode=chat_thinking_mode,
+            chat_reasoning_effort=chat_reasoning_effort,
             answer_max_output_tokens=answer_max_output_tokens,
             research_runtime_backend=research_runtime_backend,
             research_model_base_url=research_model_base_url,
             research_model_api_key=research_model_api_key,
             research_model=research_model,
             research_model_max_output_tokens=research_model_max_output_tokens,
+            research_model_thinking_mode=research_model_thinking_mode,
+            research_model_reasoning_effort=research_model_reasoning_effort,
             research_sandbox_domain=research_sandbox_domain,
             research_sandbox_protocol=research_sandbox_protocol,
             research_sandbox_api_key=research_sandbox_api_key,

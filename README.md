@@ -127,7 +127,7 @@ AGENT_RESEARCH_RUNTIME_BACKEND=deep_agents
 AGENT_RESEARCH_MODEL_BASE_URL=https://api.deepseek.com
 AGENT_RESEARCH_MODEL_API_KEY=...
 AGENT_RESEARCH_MODEL=deepseek-v4-flash
-AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048
+AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=4096
 
 AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080
 AGENT_RESEARCH_SANDBOX_PROTOCOL=http
@@ -200,6 +200,9 @@ AGENT_CHAT_BASE_URL=https://api.deepseek.com
 AGENT_CHAT_API_KEY=...
 AGENT_CHAT_MODEL=deepseek-v4-flash
 AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false
+AGENT_CHAT_THINKING_MODE=disabled
+AGENT_CHAT_REASONING_EFFORT=low
+AGENT_ANSWER_MAX_OUTPUT_TOKENS=4096
 
 AGENT_ARXIV_BACKEND=httpx
 
@@ -208,7 +211,9 @@ AGENT_RESEARCH_RUNTIME_BACKEND=deep_agents
 AGENT_RESEARCH_MODEL_BASE_URL=https://api.deepseek.com
 AGENT_RESEARCH_MODEL_API_KEY=...
 AGENT_RESEARCH_MODEL=deepseek-v4-flash
-AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048
+AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=4096
+AGENT_RESEARCH_MODEL_THINKING_MODE=disabled
+AGENT_RESEARCH_MODEL_REASONING_EFFORT=low
 
 AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080
 AGENT_RESEARCH_SANDBOX_PROTOCOL=http
@@ -218,15 +223,17 @@ AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3
 
 - Embedding Base URL 是 API 根路径；Adapter 会自行追加 `/embeddings`。
 - 不支持 `response_format=json_schema` 的 Chat Provider 必须设置 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false`，业务输出仍会经过 Pydantic Schema 和 Citation Validator。
-- RAG/Review 使用官方 `api.deepseek.com` 的 `deepseek-v4-flash`/`deepseek-v4-pro` 时固定关闭
-  thinking，避免推理 token 消耗结构化输出预算；其他 OpenAI-compatible Provider 不会收到 DeepSeek
-  专属字段，也不开放任意 `extra_body` 配置。
+- RAG/Review 使用官方 `api.deepseek.com` 的 `deepseek-v4-flash`/`deepseek-v4-pro` 时默认关闭
+  thinking。开发诊断可同时设置 `AGENT_DEBUG=true`、`AGENT_CHAT_THINKING_MODE=enabled` 与受限的
+  `AGENT_CHAT_REASONING_EFFORT=low|high|max`；其他 OpenAI-compatible Provider 不会收到 DeepSeek
+  专属字段，也不开放任意 `extra_body` 配置。Review 调试切换后应新建 Run，不要用它证明旧 Run 可复现。
 - Docling 主路径失败时只对结构性 PDF 错误降级到 pypdf；OCR 默认关闭。
 - Docling 首次运行需要下载模型。缓存准备后可在 `.env` 设置 `HF_HUB_OFFLINE=1`；缓存缺失时不要设置。
 - 若真实模式检测到 SOCKS 代理但虚拟环境未安装 `socksio`，一键脚本会明确告警，并仅为本次启动清除无法使用的 SOCKS 代理变量；不会修改系统设置。若网络必须经过 SOCKS，需要显式安装并锁定 `socksio`。手动启动 Worker 时则需自行处理代理环境。
-- Research Agent Provider 与 RAG/Review Chat 配置分离；模型固定为 `deepseek-v4-flash` 且 thinking 固定
-  关闭。`scripts/dev.sh --real` 不会自动启用真实 Agent，只有配置文件显式选择 `deep_agents` 才会产生
-  Agent 模型调用；专用 Key 只保留在 Worker 环境中。
+- Research Agent Provider 与 RAG/Review Chat 配置分离；模型固定为 `deepseek-v4-flash`，输出上限默认
+  4096，thinking 默认关闭。开发诊断可在 `AGENT_DEBUG=true` 时通过独立的
+  `AGENT_RESEARCH_MODEL_THINKING_MODE`/`AGENT_RESEARCH_MODEL_REASONING_EFFORT` 开启；
+  `scripts/dev.sh --real` 不会自动启用真实 Agent，只有显式选择 `deep_agents` 才会产生模型调用。
 - `OPENSANDBOX_SERVER_API_KEY` 只供独立 Server 进程启动时使用；Worker 通过
   `AGENT_RESEARCH_SANDBOX_API_KEY` 连接 Server。两者环境变量名不同、取值必须相同，且都不得提交。
 

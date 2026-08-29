@@ -105,7 +105,7 @@ Exactly Once。
 | `AGENT_RETRIEVAL_TOP_K` | `20` | 语义/全文两路候选上限 |
 | `AGENT_RETRIEVAL_PER_PAPER_LIMIT` | `8` | 最终结果中单篇论文上限 |
 | `AGENT_RETRIEVAL_TOKEN_BUDGET` | `3000` | Evidence 上下文总预算 |
-| `AGENT_ANSWER_MAX_OUTPUT_TOKENS` | `2048` | RAG 回答输出上限 |
+| `AGENT_ANSWER_MAX_OUTPUT_TOKENS` | `4096` | RAG 回答输出上限 |
 
 Chunk 参数与 Parser/Embedding 身份共同参与 profile hash。修改后会产生新的 ParseRevision/ChunkSet，
 不会原地重写既有成功索引。上述值是工程调优参数，不建议直接暴露给普通用户。
@@ -117,12 +117,20 @@ Research Agent Provider 与 RAG/Review Chat 独立：
 - `AGENT_RESEARCH_RUNTIME_BACKEND=fake|deep_agents`；
 - `AGENT_RESEARCH_MODEL_BASE_URL`；
 - `AGENT_RESEARCH_MODEL_API_KEY`；
-- `AGENT_RESEARCH_MODEL=deepseek-v4-flash`，当前固定且 thinking 关闭；
-- `AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=2048`。
+- `AGENT_RESEARCH_MODEL=deepseek-v4-flash`，当前固定；
+- `AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS=4096`，允许范围为 1..4096；
+- `AGENT_RESEARCH_MODEL_THINKING_MODE=disabled|enabled`，默认 `disabled`；
+- `AGENT_RESEARCH_MODEL_REASONING_EFFORT=low|high|max`，默认 `low`。
 
-Research Policy 不是 `.env`：当前 Workspace、MCP 和完整能力档案均为 v4，新 Turn 固定 8 次模型步骤、
+RAG/Review 对官方 DeepSeek V4 另提供 `AGENT_CHAT_THINKING_MODE` 和
+`AGENT_CHAT_REASONING_EFFORT`，取值与 Research Agent 相同。任一 thinking 设置为 `enabled` 时都必须同时
+设置 `AGENT_DEBUG=true`；这是进程级开发诊断配置，不是用户输入或持久业务策略。Review 切换后应新建 Run，
+不得把跨重启、跨配置恢复结果当作同一 Profile 的可复现证据。
+
+Research Policy 不是 `.env`：当前 Workspace、MCP 和完整能力档案均为 v5，新 Turn 固定 8 次模型步骤、
 12 次 Tool、300 秒墙钟、60 秒普通 Tool/`execute` 超时、64 KiB 通用 ToolMessage 上限；MCP 文本另在
-8,000 字符处确定性裁剪。用户不能提高这些预算，旧 Turn 继续使用其不可变 v3 快照。
+8,000 字符处确定性裁剪，并冻结每次模型调用 4,096 输出 Token。用户不能提高这些预算，旧 Turn 继续
+使用其不可变 v4 或更早快照。
 
 Sandbox 部署配置：
 
@@ -187,8 +195,9 @@ Run 快照和创建请求指纹：
 如果后续需要不同规模，优先新增“快速/标准”等版本化 Profile，而不是开放任意数字。
 
 RAG/Review 的 Chat Adapter 在官方 `api.deepseek.com` 且模型为 `deepseek-v4-flash` 或
-`deepseek-v4-pro` 时固定发送 `thinking.type=disabled`，让上述预算只约束可见结构化输出。其他
-OpenAI-compatible Provider 保持通用请求形状；不提供任意 `extra_body` 环境配置。
+`deepseek-v4-pro` 时发送已校验的 thinking 配置，默认 `disabled`；开启时只允许
+`reasoning_effort=low|high|max`。其他 OpenAI-compatible Provider 保持通用请求形状，开启 thinking
+会在 Worker 装配阶段失败；不提供任意 `extra_body` 环境配置。
 
 ## 4. Agent MCP Catalog 与用户选择
 

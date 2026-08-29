@@ -12,8 +12,8 @@ from literature_agent.infrastructure.agent.deepseek_research_model import (
 )
 
 
-def test_factory_builds_fixed_non_thinking_bounded_model(monkeypatch) -> None:
-    """Factory 只传入已确认的 Provider 参数并固定关闭 thinking。"""
+def test_factory_builds_configured_non_thinking_bounded_model(monkeypatch) -> None:
+    """Factory 只传入已确认的 Provider 参数并按配置关闭 thinking。"""
     captured: dict[str, object] = {}
 
     class StubChatDeepSeek:
@@ -30,6 +30,8 @@ def test_factory_builds_fixed_non_thinking_bounded_model(monkeypatch) -> None:
         api_key="provider-secret",
         model="deepseek-v4-flash",
         max_output_tokens=1536,
+        thinking_mode="disabled",
+        reasoning_effort="low",
         timeout_seconds=12.5,
         max_retries=1,
     )
@@ -44,6 +46,7 @@ def test_factory_builds_fixed_non_thinking_bounded_model(monkeypatch) -> None:
         "timeout": 12.5,
         "max_retries": 1,
         "extra_body": {"thinking": {"type": "disabled"}},
+        "reasoning_effort": None,
     }
 
 
@@ -57,6 +60,8 @@ def test_factory_rejects_model_drift_and_does_not_echo_secret() -> None:
             api_key=secret,
             model="another-model",
             max_output_tokens=1536,
+            thinking_mode="disabled",
+            reasoning_effort="low",
             timeout_seconds=12.5,
             max_retries=1,
         )
@@ -67,7 +72,7 @@ def test_factory_rejects_model_drift_and_does_not_echo_secret() -> None:
         raise AssertionError("未拒绝非固定 Research Agent 模型")
 
 
-@pytest.mark.parametrize("value", [0, 2049])
+@pytest.mark.parametrize("value", [0, 4097])
 def test_factory_rejects_output_budget_outside_policy(value: int) -> None:
     with pytest.raises(ValueError, match="MAX_OUTPUT_TOKENS"):
         build_deepseek_research_model(
@@ -75,6 +80,8 @@ def test_factory_rejects_output_budget_outside_policy(value: int) -> None:
             api_key="offline-secret",
             model="deepseek-v4-flash",
             max_output_tokens=value,
+            thinking_mode="disabled",
+            reasoning_effort="low",
             timeout_seconds=12.5,
             max_retries=1,
         )
@@ -125,6 +132,8 @@ async def test_factory_constructs_locked_chatdeepseek_without_network(monkeypatc
         api_key="offline-dummy-key",
         model="deepseek-v4-flash",
         max_output_tokens=123,
+        thinking_mode="disabled",
+        reasoning_effort="low",
         timeout_seconds=1,
         max_retries=0,
     )
@@ -133,5 +142,34 @@ async def test_factory_constructs_locked_chatdeepseek_without_network(monkeypatc
         assert model.model_name == "deepseek-v4-flash"
         assert model.max_tokens == 123
         assert model.extra_body == {"thinking": {"type": "disabled"}}
+        assert model.reasoning_effort is None
     finally:
         await aclose_deepseek_research_model(model)
+
+
+def test_factory_enables_thinking_with_configured_effort(monkeypatch) -> None:
+    """Research Agent 调试模式显式传递 thinking 与 reasoning effort。"""
+    captured: dict[str, object] = {}
+
+    class StubChatDeepSeek:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "literature_agent.infrastructure.agent.deepseek_research_model.ChatDeepSeek",
+        StubChatDeepSeek,
+    )
+
+    build_deepseek_research_model(
+        base_url="https://api.deepseek.com",
+        api_key="provider-secret",
+        model="deepseek-v4-flash",
+        max_output_tokens=4_096,
+        thinking_mode="enabled",
+        reasoning_effort="high",
+        timeout_seconds=12.5,
+        max_retries=1,
+    )
+
+    assert captured["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert captured["reasoning_effort"] == "high"

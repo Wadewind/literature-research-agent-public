@@ -241,7 +241,7 @@ from literature_agent.observability import (
 logger = logging.getLogger(__name__)
 
 _DEEPSEEK_API_HOST = "api.deepseek.com"
-_DEEPSEEK_NON_THINKING_CHAT_MODELS = frozenset({"deepseek-v4-flash", "deepseek-v4-pro"})
+_DEEPSEEK_V4_CHAT_MODELS = frozenset({"deepseek-v4-flash", "deepseek-v4-pro"})
 
 
 def _build_parser_and_profile(settings: Settings) -> tuple[DocumentParser, ParseProfile]:
@@ -286,15 +286,23 @@ def _build_chunk_profile(settings: Settings) -> ChunkProfile:
     )
 
 
-def _chat_thinking_mode(settings: Settings) -> str | None:
-    """只为官方 DeepSeek V4 文本模型固定关闭默认 thinking。"""
+def _chat_thinking_options(settings: Settings) -> tuple[str | None, str | None]:
+    """只为官方 DeepSeek V4 文本模型解析受控 thinking 调试参数。"""
     parsed = urlparse(settings.chat_base_url)
-    if (
+    registered = (
         parsed.hostname == _DEEPSEEK_API_HOST
-        and settings.chat_model in _DEEPSEEK_NON_THINKING_CHAT_MODELS
-    ):
-        return "disabled"
-    return None
+        and settings.chat_model in _DEEPSEEK_V4_CHAT_MODELS
+    )
+    if not registered:
+        if settings.chat_thinking_mode == "enabled":
+            raise ValueError("thinking 仅允许官方 DeepSeek V4 文本模型")
+        return None, None
+    return (
+        settings.chat_thinking_mode,
+        settings.chat_reasoning_effort
+        if settings.chat_thinking_mode == "enabled"
+        else None,
+    )
 
 
 def _build_model_stack(
@@ -343,6 +351,7 @@ def _build_model_stack(
     if settings.chat_backend == "fake":
         chat_model: ChatModel = FakeChatModel()
     elif settings.chat_backend == "openai_compatible":
+        thinking_mode, reasoning_effort = _chat_thinking_options(settings)
         chat_adapter = OpenAiCompatibleChat(
             provider=urlparse(settings.chat_base_url).netloc or settings.chat_base_url,
             base_url=settings.chat_base_url,
@@ -351,7 +360,8 @@ def _build_model_stack(
             timeout_seconds=settings.model_timeout_seconds,
             max_retries=settings.model_max_retries,
             json_schema_supported=settings.chat_json_schema_supported,
-            thinking_mode=_chat_thinking_mode(settings),
+            thinking_mode=thinking_mode,
+            reasoning_effort=reasoning_effort,
         )
         chat_model = chat_adapter
         closables.append(chat_adapter)
@@ -404,6 +414,8 @@ def _build_research_agent_runtime(
             api_key=settings.research_model_api_key,
             model=settings.research_model,
             max_output_tokens=settings.research_model_max_output_tokens,
+            thinking_mode=settings.research_model_thinking_mode,
+            reasoning_effort=settings.research_model_reasoning_effort,
             timeout_seconds=settings.model_timeout_seconds,
             max_retries=settings.model_max_retries,
         )
@@ -578,6 +590,8 @@ async def _open_research_agent_runtime(
         api_key=settings.research_model_api_key,
         model=settings.research_model,
         max_output_tokens=settings.research_model_max_output_tokens,
+        thinking_mode=settings.research_model_thinking_mode,
+        reasoning_effort=settings.research_model_reasoning_effort,
         timeout_seconds=settings.model_timeout_seconds,
         max_retries=settings.model_max_retries,
     )

@@ -397,7 +397,7 @@ Artifact 或业务成功。
 
 - `PolicySnapshot` 冻结全部允许 Tool 的 version/input schema hash，以及模型 8 次、Tool 12 次、首次 Runtime
   后 300 秒墙钟、固定 Tool/MCP 60 秒、`execute` 60 秒、单次 64 KiB 通用安全输出、同 Tool+args hash 最多
-  2 个 invocation、每次约 60,000 输入 Token 与 Provider 2,048 输出 Token；MCP interceptor 在外层之前
+  2 个 invocation、每次约 60,000 输入 Token 与 Provider 4,096 输出 Token；MCP interceptor 在外层之前
   1 秒结束，并把纯文本裁剪到 8,000 字符的持久化边界；snapshot hash 覆盖这些字段；
 - 每个 Turn 同事务创建 `AgentTurnUsage`，模型使用稳定 ordinal reservation，Tool 使用稳定 tool_call ID；
   PostgreSQL 行锁、唯一约束和条件更新保证重放不重复计数/认领。Provider Usage 允许可空字段逐步

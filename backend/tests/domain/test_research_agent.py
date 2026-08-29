@@ -263,7 +263,7 @@ def test_workspace_policy_version_only_changes_for_the_added_capability() -> Non
     assert workspace.max_tool_output_bytes == 64 * 1024
     assert workspace.max_repeated_tool_calls == 2
     assert workspace.max_input_tokens_per_model_call == 60_000
-    assert workspace.max_output_tokens_per_model_call == 2_048
+    assert workspace.max_output_tokens_per_model_call == 4_096
     assert workspace.network_enabled is True
     assert workspace.network_profile_id == "research-public-egress"
     assert workspace.network_profile_version == "v1"

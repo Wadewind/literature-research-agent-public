@@ -690,7 +690,7 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 
 #### Context Token Budget（2026-08-21 定稿）
 
-证据上下文沿用检索预算截断结果（≤ `retrieval_token_budget`）；模板 + 证据总 token 超过 `context_token_budget`（默认同检索预算 3000，tiktoken cl100k_base 精确计数）时按 rank 从低到高丢弃 Evidence，缩减一次，不循环压缩。Chat 输出上限 `AGENT_ANSWER_MAX_OUTPUT_TOKENS`（默认 2048）。
+证据上下文沿用检索预算截断结果（≤ `retrieval_token_budget`）；模板 + 证据总 token 超过 `context_token_budget`（默认同检索预算 3000，tiktoken cl100k_base 精确计数）时按 rank 从低到高丢弃 Evidence，缩减一次，不循环压缩。Chat 输出上限 `AGENT_ANSWER_MAX_OUTPUT_TOKENS`（2026-08-30 从 2048 调整为 4096）。
 
 #### Worker 接线与 Fake Chat
 
@@ -814,7 +814,7 @@ ClaimDraft: { text: str, evidence_ids: list[str] }
 
 仍在对应切片确定，不阻塞当前阶段边界：
 
-~~1. Context Token Budget 细节（切片 8）。~~ 已定稿（2026-08-21，见「切片 8」小节）：证据上下文沿用检索预算截断，超预算按 rank 从低到高丢弃一次，`AGENT_ANSWER_MAX_OUTPUT_TOKENS` 默认 2048。
+~~1. Context Token Budget 细节（切片 8）。~~ 已定稿（2026-08-21，见「切片 8」小节）：证据上下文沿用检索预算截断，超预算按 rank 从低到高丢弃一次；`AGENT_ANSWER_MAX_OUTPUT_TOKENS` 于 2026-08-30 调整为默认 4096。
 
 ## 已确定事项
 

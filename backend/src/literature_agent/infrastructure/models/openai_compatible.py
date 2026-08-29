@@ -262,6 +262,7 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
         *,
         json_schema_supported: bool = True,
         thinking_mode: str | None = None,
+        reasoning_effort: str | None = None,
         **kwargs: Any,
     ) -> None:
         """初始化 Chat Adapter。
@@ -269,15 +270,21 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
         参数:
             json_schema_supported: Provider 是否支持 ``json_schema`` 形态的
                 ``response_format``；不支持时降级为 ``json_object``。
-            thinking_mode: 已注册 Provider 可固定为 ``disabled``；通用路径不发送
-                Provider 专属字段，也不允许开启 thinking。
+            thinking_mode: 已注册 Provider 可显式选择 ``disabled``/``enabled``；
+                通用路径不发送 Provider 专属字段。
+            reasoning_effort: thinking 开启时允许 ``low``/``high``/``max``。
             **kwargs: 见 ``_OpenAiCompatibleBase``。
         """
-        if thinking_mode not in {None, "disabled"}:
+        if thinking_mode not in {None, "disabled", "enabled"}:
             raise ValueError("thinking_mode 未在平台注册")
+        if reasoning_effort not in {None, "low", "high", "max"}:
+            raise ValueError("reasoning_effort 未在平台注册")
+        if thinking_mode != "enabled" and reasoning_effort is not None:
+            raise ValueError("reasoning_effort 仅可用于 enabled thinking_mode")
         super().__init__(**kwargs)
         self._json_schema_supported = json_schema_supported
         self._thinking_mode = thinking_mode
+        self._reasoning_effort = reasoning_effort
 
     async def generate(
         self,
@@ -294,6 +301,8 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
         }
         if self._thinking_mode is not None:
             payload["thinking"] = {"type": self._thinking_mode}
+        if self._reasoning_effort is not None:
+            payload["reasoning_effort"] = self._reasoning_effort
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if json_schema is not None:

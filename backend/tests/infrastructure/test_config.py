@@ -78,6 +78,71 @@ def test_chat_json_schema_supported_can_fallback_to_json_object(monkeypatch) -> 
     assert Settings.from_env().chat_json_schema_supported is False
 
 
+def test_model_thinking_defaults_disabled_with_low_debug_effort(monkeypatch) -> None:
+    """默认关闭 thinking；低 effort 只作为显式调试开启时的安全起点。"""
+    for name in (
+        "AGENT_CHAT_THINKING_MODE",
+        "AGENT_CHAT_REASONING_EFFORT",
+        "AGENT_RESEARCH_MODEL_THINKING_MODE",
+        "AGENT_RESEARCH_MODEL_REASONING_EFFORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.chat_thinking_mode == "disabled"
+    assert settings.chat_reasoning_effort == "low"
+    assert settings.research_model_thinking_mode == "disabled"
+    assert settings.research_model_reasoning_effort == "low"
+    assert settings.answer_max_output_tokens == 4_096
+    assert settings.research_model_max_output_tokens == 4_096
+
+
+def test_model_thinking_can_be_enabled_only_in_debug_mode(monkeypatch) -> None:
+    """thinking 是开发诊断开关，不得在非 debug 进程意外启用。"""
+    monkeypatch.setenv("AGENT_DEBUG", "true")
+    monkeypatch.setenv("AGENT_CHAT_THINKING_MODE", "enabled")
+    monkeypatch.setenv("AGENT_CHAT_REASONING_EFFORT", "high")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_THINKING_MODE", "enabled")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_REASONING_EFFORT", "max")
+
+    settings = Settings.from_env()
+
+    assert settings.chat_thinking_mode == "enabled"
+    assert settings.chat_reasoning_effort == "high"
+    assert settings.research_model_thinking_mode == "enabled"
+    assert settings.research_model_reasoning_effort == "max"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("AGENT_CHAT_THINKING_MODE", "auto"),
+        ("AGENT_CHAT_REASONING_EFFORT", "medium"),
+        ("AGENT_RESEARCH_MODEL_THINKING_MODE", "auto"),
+        ("AGENT_RESEARCH_MODEL_REASONING_EFFORT", "xhigh"),
+    ],
+)
+def test_model_thinking_rejects_unregistered_values(
+    monkeypatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=name):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize(
+    "name", ["AGENT_CHAT_THINKING_MODE", "AGENT_RESEARCH_MODEL_THINKING_MODE"]
+)
+def test_model_thinking_rejects_enabled_outside_debug(monkeypatch, name: str) -> None:
+    monkeypatch.delenv("AGENT_DEBUG", raising=False)
+    monkeypatch.setenv(name, "enabled")
+
+    with pytest.raises(ValueError, match="AGENT_DEBUG"):
+        Settings.from_env()
+
+
 def test_arxiv_backend_defaults_offline_and_requires_explicit_real(monkeypatch) -> None:
     """未设置开关时必须 fail closed 到 Fake，真实 HTTP 需显式选择。"""
     monkeypatch.delenv("AGENT_ARXIV_BACKEND", raising=False)
@@ -116,7 +181,7 @@ def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypa
     monkeypatch.setenv("AGENT_RESEARCH_MODEL_BASE_URL", "https://agent.example/v1")
     monkeypatch.setenv("AGENT_RESEARCH_MODEL_API_KEY", "agent-secret-value")
     monkeypatch.setenv("AGENT_RESEARCH_MODEL", "deepseek-v4-flash")
-    monkeypatch.setenv("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "1536")
+    monkeypatch.setenv("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "3072")
     monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_DOMAIN", "sandbox.example:443")
     monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_PROTOCOL", "https")
     monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_API_KEY", "sandbox-secret-value")
@@ -129,7 +194,7 @@ def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypa
     assert settings.research_model_base_url == "https://agent.example/v1"
     assert settings.research_model_api_key == "agent-secret-value"
     assert settings.research_model == "deepseek-v4-flash"
-    assert settings.research_model_max_output_tokens == 1536
+    assert settings.research_model_max_output_tokens == 3072
     assert settings.research_sandbox_domain == "sandbox.example:443"
     assert settings.research_sandbox_protocol == "https"
     assert settings.research_sandbox_api_key == "sandbox-secret-value"
@@ -165,6 +230,7 @@ def test_research_agent_real_mode_does_not_borrow_chat_key(monkeypatch) -> None:
     [
         ("AGENT_RESEARCH_MODEL", "deepseek-chat"),
         ("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "0"),
+        ("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "4097"),
         ("AGENT_RESEARCH_MODEL_MAX_OUTPUT_TOKENS", "invalid"),
         ("AGENT_RESEARCH_SANDBOX_PROTOCOL", "ftp"),
     ],
