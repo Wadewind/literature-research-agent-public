@@ -40,6 +40,7 @@ from literature_agent.domain.run import RunStatus, RunType
 TSession = TypeVar("TSession", bound=Session)
 PROMPT_VERSION = "search_strategy.v1"
 SCHEMA_VERSION = "search-strategy.v1"
+SEARCH_STRATEGY_MAX_OUTPUT_TOKENS = 8_000
 SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
     {"review-default.v1", "review-default.v2"}
 )
@@ -111,7 +112,7 @@ class ReviewSearchStrategyService[TSession: Session]:
                 ),
             ],
             json_schema=SEARCH_STRATEGY_JSON_SCHEMA,
-            max_tokens=2_000,
+            max_tokens=SEARCH_STRATEGY_MAX_OUTPUT_TOKENS,
             run_id=run_id,
         )
         try:

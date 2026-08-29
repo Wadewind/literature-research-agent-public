@@ -4,7 +4,8 @@
 - 状态：Proposed / Deferred
 - 触发事件：Real Review 在 `formulate_search_strategy` 阶段发生结构化输出校验失败
 - 相关缺陷：[`P4-REAL-004`](../reports/phase-04-real-mode-defect-log.md#p4-real-004search-strategy-输出疑似触及-token-上限后-schema-校验失败)
-- 当前决定：记录问题、方法和候选方案；暂不修改实现，不纳入已经完成的 Phase 6 范围
+- 当前决定：Search Strategy 输出预算已作最小缓解；通用 Failure 契约和 Run
+  Diagnostic 方案继续延期，不纳入已经完成的 Phase 6 范围
 
 ## 为什么记录这次过程
 
@@ -49,7 +50,7 @@ Real Review 的模型请求日志显示 `model_request_completed`，紧接着 Wo
 - `formulate_search_strategy` Step 失败，Attempt 保存
   `SearchStrategyValidationError / search_strategy_schema_invalid`；
 - 模型调用记录为 `prompt_tokens=410`、`completion_tokens=2000`；
-- `ReviewSearchStrategyService` 对这一请求固定传入 `max_tokens=2000`；
+- `ReviewSearchStrategyService` 对这一失败请求当时固定传入 `max_tokens=2000`；
 - 研究问题只有 18 个字符，不是超长输入；
 - 错误发生在 Pydantic JSON Schema 解析阶段，尚未进入维度数量、维度字段或 arXiv query 业务校验；
 - 本次没有生成 Search Strategy ReviewOutput，也没有执行受限 repair；
@@ -59,6 +60,16 @@ Real Review 的模型请求日志显示 `model_request_completed`，紧接着 Wo
 
 `completion_tokens` 恰好等于请求上限，并随后出现 JSON Schema 解析失败，因此当前最高概率解释是输出触及
 上限后被截断。由于没有 `finish_reason` 或原始响应，这仍不能写成已经确认的 Provider 根因。
+
+### 2026-08-29 最小预算缓解
+
+- Search Strategy 的固定输出预算从 2000 提高到 8000，与 `review-default.v2` 的章节输出
+  预算对齐；
+- 保留 64 KiB 结构化输出字节上限、严格 Pydantic 校验和“校验失败不 repair”行为；
+- 本次只是让 Real 测试先继续运行的低风险缓解，没有补齐 `finish_reason`、统一 Failure
+  契约或 Run Diagnostic；
+- 定向 Application 测试已锁定 `max_tokens=8000`，但尚未执行新的 Real Provider 回归，因此不改变
+  上述根因推断边界。
 
 ### 尚未确认
 

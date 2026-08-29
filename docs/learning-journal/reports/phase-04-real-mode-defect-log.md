@@ -175,7 +175,7 @@ completion 恰好达到 4000 token，且第二章节 Prompt 明显大于第一�
 ## P4-REAL-004：Search Strategy 输出疑似触及 token 上限后 Schema 校验失败
 
 - 发现日期：2026-08-28
-- 状态：调查中；高概率截断，未修复
+- 状态：已做预算缓解，根因与 Real 回归仍待确认
 - 影响 Project：`117f946c-bef8-4f27-86d3-f0d282ab7490`
 - 影响 Review/Run：`b84fda4f-33cf-44b7-99e7-3d451fd49a27`
 - 影响 Attempt：`6c779328-8d2a-4b92-aafe-4b511f581f79`
@@ -218,14 +218,24 @@ completion token 恰好达到该 Step 的 2000 上限，随后发生 JSON Schema
 - P4-REAL-003 同样表现为“Provider 成功 + completion token 触顶 + 本地结构校验失败”，
   共同暴露了缺少 `finish_reason` 和细分校验类别的诊断缺口；
 - `review-default.v2` 把章节输出上限提高到 8000，但 Search Strategy 仍在 Service 中固定为
-  2000，因此上一次章节预算缓解不影响本 Step。
+  2000，因此上一次章节预算缓解当时不影响本 Step。
+
+### 2026-08-29 缓解记录
+
+- `ReviewSearchStrategyService` 新增固定平台常量，将 Search Strategy 的 `max_tokens` 从 2000
+  提高到 8000；
+- 没有新增环境变量或用户配置，避免为一次缓解扩大配置面；
+- 保留 64 KiB 输出上限、严格 Schema/业务校验和失败后不 repair 的既有契约；
+- Application 回归增加对 8000 token 请求预算的明确断言；
+- 该变化只降低“输出预算不足”的概率，没有证明 P4-REAL-004 根因，也尚未经新的 Real
+  Provider 旅程验证。
 
 ### 候选修复（待决策，当前延期）
 
 - 安全保留 allowlist 内的 `finish_reason`、请求输出上限、响应字节数、内容 hash 和结构校验类别，
   不保存完整 Prompt 或模型响应；
 - 区分 `structured_output.truncated`、`structured_output.schema_invalid` 和后续业务校验错误；
-- 评估 Search Strategy 的独立输出预算、更精简 Prompt 或非思考模式；
+- 继续评估 8000 token 预算的真实效果、更精简 Prompt 或非思考模式；
 - 如增加 repair，最多一次，必须同时固定费用、幂等和失败终止语义；
 - 更普遍的错误契约和 Run Diagnostic 方案见
   [错误可观测性与 Run 诊断反思](../reflections/error-observability-and-run-diagnostics.md)。

@@ -109,6 +109,7 @@ async def test_valid_strategy_is_persisted_and_replay_skips_model() -> None:
     assert (first.model_invocations, second.model_invocations) == (1, 0)
     assert model.calls == 1
     assert model.last_kwargs["json_schema"] == SEARCH_STRATEGY_JSON_SCHEMA
+    assert model.last_kwargs["max_tokens"] == 8_000
     assert repo.steps[0].status.value == "succeeded"
     assert repo.review_runs["review-1"].current_stage is ReviewStage.SEARCH_ARXIV
     assert [item.event_type for item in await events.list_by_run("review-1")] == [
