@@ -39,7 +39,11 @@ from literature_agent.worker import (
 
 def test_make_worker_settings_registers_execute_run() -> None:
     """WorkerSettings 应注册 execute_run 并禁用 ARQ 自动重试。"""
-    settings = Settings(redis_url="redis://example.internal:6380/2")
+    settings = Settings(
+        redis_url="redis://example.internal:6380/2",
+        parser_timeout_seconds=120,
+        job_timeout_seconds=900,
+    )
 
     worker_settings = make_worker_settings(settings)
 
@@ -48,6 +52,7 @@ def test_make_worker_settings_registers_execute_run() -> None:
     assert registered.keep_result_s == 0
     assert worker_settings.keep_result == 0
     assert worker_settings.max_tries == 1
+    assert worker_settings.job_timeout == 900
     assert worker_settings.on_startup is not None
     assert worker_settings.on_shutdown is not None
     assert worker_settings.redis_settings.host == "example.internal"

@@ -1,6 +1,7 @@
 """应用配置。"""
 
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -11,6 +12,7 @@ _DEFAULT_DEV_ACTOR_ID = "dev-user"
 _DEFAULT_STORAGE_ROOT = "data/storage"
 _DEFAULT_MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024  # 50 MiB（2026-08-20 定稿）
 _DEFAULT_PARSER_TIMEOUT_SECONDS = 300.0  # 2026-08-20 定稿
+_DEFAULT_JOB_TIMEOUT_SECONDS = 1800.0  # 2026-08-29：完整 Run 独立预算
 _DEFAULT_WORKER_LEASE_SECONDS = 600.0  # 2026-08-20 定稿
 _DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS = 30.0  # 2026-08-20 定稿
 _DEFAULT_WORKER_RECONCILE_INTERVAL_SECONDS = 30.0
@@ -90,6 +92,7 @@ class Settings:
     storage_root: str = field(default=_DEFAULT_STORAGE_ROOT)
     max_upload_size_bytes: int = field(default=_DEFAULT_MAX_UPLOAD_SIZE_BYTES)
     parser_timeout_seconds: float = field(default=_DEFAULT_PARSER_TIMEOUT_SECONDS)
+    job_timeout_seconds: float = field(default=_DEFAULT_JOB_TIMEOUT_SECONDS)
     parser_backend: str = field(default="docling")
     worker_lease_seconds: float = field(default=_DEFAULT_WORKER_LEASE_SECONDS)
     worker_heartbeat_interval_seconds: float = field(
@@ -138,6 +141,21 @@ class Settings:
     worker_metrics_port: int = field(default=_DEFAULT_WORKER_METRICS_PORT)
     log_level: int = field(default=_DEFAULT_LOG_LEVEL)
 
+    def __post_init__(self) -> None:
+        """校验完整 Job 与单次 Parser 的分层超时契约。"""
+        if (
+            not math.isfinite(self.parser_timeout_seconds)
+            or self.parser_timeout_seconds <= 0
+        ):
+            raise ValueError("AGENT_PARSER_TIMEOUT_SECONDS 必须为正数")
+        if (
+            not math.isfinite(self.job_timeout_seconds)
+            or self.job_timeout_seconds <= self.parser_timeout_seconds
+        ):
+            raise ValueError(
+                "AGENT_JOB_TIMEOUT_SECONDS 必须大于 AGENT_PARSER_TIMEOUT_SECONDS"
+            )
+
     @classmethod
     def from_env(cls) -> "Settings":
         """根据环境变量创建设置对象。"""
@@ -151,11 +169,25 @@ class Settings:
         raw_max_upload = os.getenv("AGENT_MAX_UPLOAD_SIZE_BYTES")
         max_upload_size = int(raw_max_upload) if raw_max_upload else _DEFAULT_MAX_UPLOAD_SIZE_BYTES
         raw_parser_timeout = os.getenv("AGENT_PARSER_TIMEOUT_SECONDS")
-        parser_timeout = (
-            float(raw_parser_timeout)
-            if raw_parser_timeout
-            else _DEFAULT_PARSER_TIMEOUT_SECONDS
-        )
+        try:
+            parser_timeout = (
+                float(raw_parser_timeout)
+                if raw_parser_timeout
+                else _DEFAULT_PARSER_TIMEOUT_SECONDS
+            )
+        except ValueError as exc:
+            raise ValueError("AGENT_PARSER_TIMEOUT_SECONDS 必须为正数") from exc
+        raw_job_timeout = os.getenv("AGENT_JOB_TIMEOUT_SECONDS")
+        try:
+            job_timeout = (
+                float(raw_job_timeout)
+                if raw_job_timeout
+                else _DEFAULT_JOB_TIMEOUT_SECONDS
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "AGENT_JOB_TIMEOUT_SECONDS 必须大于 AGENT_PARSER_TIMEOUT_SECONDS"
+            ) from exc
         raw_poll_interval = os.getenv("AGENT_OUTBOX_POLL_INTERVAL_SECONDS")
         poll_interval = (
             float(raw_poll_interval)
@@ -308,6 +340,7 @@ class Settings:
             storage_root=os.getenv("AGENT_STORAGE_ROOT", _DEFAULT_STORAGE_ROOT),
             max_upload_size_bytes=max_upload_size,
             parser_timeout_seconds=parser_timeout,
+            job_timeout_seconds=job_timeout,
             parser_backend=os.getenv("AGENT_PARSER_BACKEND", "docling"),
             worker_lease_seconds=worker_lease,
             worker_heartbeat_interval_seconds=heartbeat_interval,

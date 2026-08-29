@@ -1090,8 +1090,8 @@ def make_worker_settings(settings: Settings) -> type:
         # ARQ 的 max-tries/反序列化等提前失败路径不会读取函数级配置；
         # Worker 级也禁用 Result，避免旧失败 key 阻塞合法的同 ID 重投。
         keep_result = 0
-        # ARQ Job 超时必须大于 Parser 超时，给状态提交留出余量
-        job_timeout = int(settings.parser_timeout_seconds) + 60
+        # 完整 Run 可能编排多次 Parser/模型/外部调用，不能复用单次 Parser 预算。
+        job_timeout = settings.job_timeout_seconds
 
     return WorkerSettings
 

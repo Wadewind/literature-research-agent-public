@@ -61,6 +61,7 @@ chmod 600 .env
 |---|---:|---|
 | `AGENT_MAX_UPLOAD_SIZE_BYTES` | `52428800` | 单文件 50 MiB |
 | `AGENT_PARSER_TIMEOUT_SECONDS` | `300` | PDF 解析超时 |
+| `AGENT_JOB_TIMEOUT_SECONDS` | `1800` | 完整 ARQ Run 的执行上限；必须严格大于 Parser 超时 |
 | `AGENT_WORKER_LEASE_SECONDS` | `600` | Worker Attempt lease |
 | `AGENT_WORKER_HEARTBEAT_INTERVAL_SECONDS` | `30` | lease 心跳间隔 |
 | `AGENT_WORKER_RECONCILE_INTERVAL_SECONDS` | `30` | 崩溃/孤儿任务对账间隔 |
@@ -69,8 +70,10 @@ chmod 600 .env
 | `AGENT_OUTBOX_MAX_ATTEMPTS` | `10` | Outbox 派发尝试预算 |
 | `AGENT_OUTBOX_DISPATCH_BATCH_SIZE` | `20` | 单轮派发批量 |
 
-这些参数影响吞吐、恢复时间和重复执行窗口，只应由部署者调整。Provider Adapter 的 HTTP 重试与
-`AGENT_MAX_RUN_ATTEMPTS` 是两个不同层级，不能相加后宣称 Exactly Once。
+这些参数影响吞吐、恢复时间和重复执行窗口，只应由部署者调整。Parser 的 300 秒限制约束单次 PDF
+解析；Job 的 1800 秒限制约束包含检索、顺序导入、解析、索引和模型调用的完整 Run，两者不得互相
+推导。Provider Adapter 的 HTTP 重试与 `AGENT_MAX_RUN_ATTEMPTS` 是两个不同层级，不能相加后宣称
+Exactly Once。
 
 ### 2.3 Parser、Embedding、RAG/Review Chat
 

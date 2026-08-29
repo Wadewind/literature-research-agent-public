@@ -363,3 +363,45 @@ Consistency 业务规则拒绝，而是 Provider 在产生可见结构化 JSON �
 - 最小实现后的 Review 领域、Application、LangGraph、Executor、Export 和 OpenAI-compatible HTTP
   Mock 定向回归为 `77 passed`；Ruff、Pyright 和 diff check 通过；
 - 普通测试没有访问真实 Provider。必须创建新的 Real Review 才能验证 8000 一致性预算的实际效果。
+
+## P4-REAL-007：完整 Review Job 复用 Parser 超时预算导致导入阶段被取消
+
+- 发现日期：2026-08-29
+- 状态：最小修复已完成，Real 回归待执行
+- 影响 Project：`117f946c-bef8-4f27-86d3-f0d282ab7490`
+- 影响 Review/Run：`917cd73e-0909-4ed6-9b0a-c5b46b443b6c`
+- 首次受影响 Attempt：对应 2026-08-29 07:04:22 UTC 开始的执行
+
+### 已确认事实与根因
+
+该 Review 已完成检索，并在 `review_source_import_started` 后成功创建和执行首篇论文的 Ingestion；子
+Run `22837d80-a5ae-4c4d-baa6-979465f55d70` 完成 227 个解析元素及索引。约六分钟后 ARQ 记录裸
+`TimeoutError`，父 Review 未正常提交失败状态，最终由 lease Reconciler 以 `worker_crashed` 收回并
+重投。第二次 Attempt 复用首篇结果、继续导入其余论文，随后正常进入 `waiting_dependency`。
+
+代码审查确认 Worker 的 ARQ `job_timeout` 原为 `parser_timeout_seconds + 60`，即默认 360 秒。该上限
+实际作用于包含检索、多个顺序下载/导入、依赖等待和模型调用的完整 Review Run，而不是单次 Parser；
+因此一次合法的长 Review 会在 Parser 本身尚未超时的情况下被 ARQ 取消。
+
+### 最小修复
+
+- 新增部署级 `AGENT_JOB_TIMEOUT_SECONDS`，默认 1800 秒，独立约束完整 ARQ Run；
+- `AGENT_PARSER_TIMEOUT_SECONDS` 保持默认 300 秒，继续只约束单次 PDF 解析；
+- 配置加载及直接构造均要求两个值有限、Parser 为正且 Job 严格大于 Parser；
+- Worker 直接使用独立 Job 预算，不再从 Parser 预算加 60 秒推导；不增加短期缓存、数据库迁移或
+  UI 设置。
+
+### 已知限制
+
+- 本次只修正超时预算分层，没有改变 ARQ 取消时 `CancelledError` 的业务收尾；若完整 Job 再次触及
+  1800 秒上限，Run 仍可能等待 lease Reconciler 收回。该可靠性缺口需独立切片处理；
+- 1800 秒适用于当前本地单 Worker 演示规模，不是生产 SLA；增加论文数、并发或更慢 Provider 时应基于
+  实测重新校准；
+- 原 Attempt 已由对账恢复，配置变化不改写历史 Event。必须重启 Worker，并用新的 Real Review 验证。
+
+### 验证记录
+
+- 先补独立默认值、自定义值、非法边界与 Worker 装配契约，旧实现得到 `6 failed, 18 passed`；
+- 最小实现后配置、Worker 与 Ingestion timeout 定向回归为 `49 passed`；
+- Ruff 和按 `backend/pyproject.toml` 执行的 Pyright 均通过，diff check 通过；普通测试未访问实时 arXiv、
+  PDF 或模型 Provider。

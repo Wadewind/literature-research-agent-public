@@ -73,6 +73,9 @@ Worker 进程（python -m literature_agent.worker）│
   路径，使等待恢复或失败恢复后的合法新 Attempt 能复用同一稳定 Job ID。
 - **Worker 端幂等执行**：`RunExecutionService` 只认领 `QUEUED` 的 Run（条件更新），重复 Job、已终态、已取消一律跳过。
 - **`max_tries = 1`**：ARQ 不叠加自动重试，重试只有 Outbox 退避一层主导，避免多层重试相乘。
+- **Job 与 Parser 分层超时**（2026-08-29）：`AGENT_JOB_TIMEOUT_SECONDS` 默认 1800 秒，约束完整
+  ARQ Run；`AGENT_PARSER_TIMEOUT_SECONDS` 继续默认 300 秒，只约束单次 PDF 解析。配置要求前者
+  严格大于后者，避免包含多篇顺序导入的 Review 被 Parser 预算提前取消。
 - **派发器在 Worker 进程内**：首版不单建 Dispatcher 部署单元；多实例并发派发时由 Job ID 去重和条件更新兜底。
 - **API 侧队列连接惰性建立**：lifespan 注入 `ArqRunQueue`，连接池首次投递时才创建，API 启动不强依赖 Valkey 可用。
 - Phase 4 切片 5 后，Outbox 成功/失败和 Worker 三个周期循环使用固定 JSON event。ARQ Job 仍只携带

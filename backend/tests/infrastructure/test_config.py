@@ -7,6 +7,43 @@ import pytest
 from literature_agent.infrastructure.config import Settings
 
 
+def test_job_timeout_defaults_to_independent_run_budget(monkeypatch) -> None:
+    """完整 Job 默认有独立预算，不能再由单次 Parser 超时推导。"""
+    monkeypatch.delenv("AGENT_PARSER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("AGENT_JOB_TIMEOUT_SECONDS", raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.parser_timeout_seconds == 300
+    assert settings.job_timeout_seconds == 1800
+
+
+def test_job_timeout_accepts_explicit_budget_larger_than_parser(monkeypatch) -> None:
+    """部署者可分别调整完整 Job 与单次 Parser 预算。"""
+    monkeypatch.setenv("AGENT_PARSER_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("AGENT_JOB_TIMEOUT_SECONDS", "2400")
+
+    settings = Settings.from_env()
+
+    assert settings.parser_timeout_seconds == 600
+    assert settings.job_timeout_seconds == 2400
+
+
+@pytest.mark.parametrize(
+    ("parser_timeout", "job_timeout"),
+    [("300", "300"), ("300", "299"), ("300", "invalid")],
+)
+def test_job_timeout_rejects_invalid_or_insufficient_budget(
+    monkeypatch, parser_timeout: str, job_timeout: str
+) -> None:
+    """Job 必须给 Parser 之外的完整 Run 编排留下时间。"""
+    monkeypatch.setenv("AGENT_PARSER_TIMEOUT_SECONDS", parser_timeout)
+    monkeypatch.setenv("AGENT_JOB_TIMEOUT_SECONDS", job_timeout)
+
+    with pytest.raises(ValueError, match="AGENT_JOB_TIMEOUT_SECONDS"):
+        Settings.from_env()
+
+
 def test_log_level_defaults_to_info_and_accepts_case_insensitive_name(monkeypatch) -> None:
     """API 与 Worker 默认保留 INFO，显式等级名允许常见的小写写法。"""
     monkeypatch.delenv("AGENT_LOG_LEVEL", raising=False)
