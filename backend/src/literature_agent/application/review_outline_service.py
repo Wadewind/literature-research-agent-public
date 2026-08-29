@@ -64,7 +64,7 @@ SEARCH_STRATEGY_SCHEMA_VERSION = "search-strategy.v1"
 EVIDENCE_MATRIX_SCHEMA_VERSION = "evidence-matrix.v1"
 WORKFLOW_VERSION = "review.v1"
 SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
-    {"review-default.v1", "review-default.v2"}
+    {"review-default.v1", "review-default.v2", "review-default.v3"}
 )
 
 OUTLINE_JSON_SCHEMA = {

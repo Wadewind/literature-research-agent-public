@@ -639,6 +639,73 @@ async def test_consistency_schema_invalid_fails_step_without_output():
         x for x in data["review_repo"].steps if x.step_key is ReviewStepKey.CONSISTENCY_CHECK
     )
     assert step.status is ReviewStepStatus.FAILED
+    assert step.error_code == "consistency_report_invalid"
+    assert not any(
+        x.output_type is ReviewOutputType.CONSISTENCY_REPORT
+        for x in data["review_repo"].outputs
+    )
+
+
+async def test_consistency_length_finish_reason_is_classified_without_output():
+    data = await _seed()
+    evidence_id = data["evidence"].evidence_id
+    gateway = _Gateway(
+        [
+            {
+                "section_key": "methods",
+                "title": "方法",
+                "status": "answered",
+                "summary": "方法摘要",
+                "claims": [{"text": "方法 A。", "evidence_ids": [evidence_id]}],
+                "terminology": [],
+            },
+            {
+                "section_key": "limitations",
+                "title": "限制",
+                "status": "insufficient_evidence",
+                "summary": "证据不足",
+                "claims": [],
+                "terminology": [],
+            },
+            {"status": "consistent", "issues": []},
+        ],
+        finish_reasons=[None, None, ChatFinishReason.LENGTH],
+    )
+    service = _service(data, gateway)
+    drafted = await service.draft_sections(
+        run_id="review-1",
+        project_id="project-1",
+        owner_id="user-1",
+        approved_outline_output_id=data["outline"].output_id,
+        evidence_matrix_output_id=data["matrix"].output_id,
+        correlation_id="draft",
+    )
+    validated = await service.validate_sections(
+        run_id="review-1",
+        project_id="project-1",
+        owner_id="user-1",
+        approved_outline_output_id=data["outline"].output_id,
+        evidence_matrix_output_id=data["matrix"].output_id,
+        section_output_ids=[x.output_id for x in drafted.outputs],
+        correlation_id="validate",
+    )
+
+    with pytest.raises(ReviewSectionInvalidError, match="consistency_output_truncated"):
+        await service.consistency_check(
+            run_id="review-1",
+            project_id="project-1",
+            owner_id="user-1",
+            approved_outline_output_id=data["outline"].output_id,
+            evidence_matrix_output_id=data["matrix"].output_id,
+            section_output_ids=[x.output_id for x in drafted.outputs],
+            claim_set_id=validated.claim_set.claim_set_id,
+        )
+
+    step = next(
+        x for x in data["review_repo"].steps if x.step_key is ReviewStepKey.CONSISTENCY_CHECK
+    )
+    assert step.status is ReviewStepStatus.FAILED
+    assert step.error_code == "consistency_output_truncated"
     assert not any(
         x.output_type is ReviewOutputType.CONSISTENCY_REPORT
         for x in data["review_repo"].outputs

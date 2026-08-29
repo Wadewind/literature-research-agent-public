@@ -40,7 +40,7 @@ from literature_agent.domain.run import RunType, create_run
 TSession = TypeVar("TSession", bound=Session)
 
 WORKFLOW_VERSION = "review.v1"
-MODEL_PROFILE_VERSION = "review-default.v2"
+MODEL_PROFILE_VERSION = "review-default.v3"
 PROMPT_VERSIONS = {
     "search_strategy": "search_strategy.v1",
     "evidence_extract": "review-evidence-extraction.v1",
@@ -55,7 +55,7 @@ DEFAULT_CONFIG_SNAPSHOT = {
     "retrieval_top_k_per_dimension": 5,
     "evidence_context_token_limit": 16_000,
     "section_output_token_limit": 8_000,
-    "consistency_output_token_limit": 2_000,
+    "consistency_output_token_limit": 8_000,
 }
 _IDEMPOTENCY_KEY_MAX_LENGTH = 255
 

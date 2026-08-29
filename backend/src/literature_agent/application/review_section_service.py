@@ -67,7 +67,7 @@ from literature_agent.domain.run import RunStatus, RunType
 
 WORKFLOW_VERSION = "review.v1"
 SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
-    {"review-default.v1", "review-default.v2"}
+    {"review-default.v1", "review-default.v2", "review-default.v3"}
 )
 SECTION_PROMPT_VERSION = "section_draft.v1"
 CONSISTENCY_PROMPT_VERSION = "consistency_check.v1"
@@ -397,6 +397,16 @@ class ReviewSectionService[TSession: Session]:
                 max_tokens=context.consistency_output_token_limit,
                 run_id=run_id,
             )
+            if result.finish_reason is ChatFinishReason.LENGTH:
+                error_code = "consistency_output_truncated"
+                await self._fail_step(
+                    run_id,
+                    project_id,
+                    owner_id,
+                    ReviewStepKey.CONSISTENCY_CHECK,
+                    error_code,
+                )
+                raise ReviewSectionInvalidError(error_code)
             try:
                 report = validate_consistency_report(
                     parse_consistency_report_json(result.content),

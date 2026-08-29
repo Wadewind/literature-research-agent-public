@@ -1007,14 +1007,16 @@ Matrix Paper、READY Source、PaperVersion、ParseRevision、Project/Run Evidenc
 Claim 和 Citation 使用数据库唯一约束上的原子 get-or-add，并在回读后比较完整稳定语义。
 
 章节与一致性输出 token 预算分别由 Review Profile 快照的 `section_output_token_limit` 和
-`consistency_output_token_limit` 控制。新建 Run 使用 `review-default.v2`，默认来源数为 3，预算为
-8,000/2,000，并进入创建请求指纹；历史 `review-default.v1` Run 保留其持久化的 10 篇与
-4,000/2,000 配置，缺字段的早期 v1 开发 Run 仍回退到 v1 默认值。原始模型 JSON 在 Schema 解析前
-分别限制为 192/64 KiB。
+`consistency_output_token_limit` 控制。新建 Run 使用 `review-default.v3`，默认来源数为 3，预算为
+8,000/8,000，并进入创建请求指纹；历史 `review-default.v1` Run 保留其持久化的 10 篇与
+4,000/2,000 配置，`review-default.v2` Run 保留其 8,000/2,000 快照，缺字段的早期 v1 开发 Run
+仍回退到 v1 默认值。原始模型 JSON 在 Schema 解析前分别限制为 192/64 KiB。
 章节节点还必须反查成功的 Matrix/Outline/Draft/Validate 业务 Step 闭包并固化新 Step input refs；
 所有副作用提交前持锁复核 Run 仍为 RUNNING Review，取消后不得新增 Output/Event 或推进 Stage。
 
-`consistency_check.v1` 产生小型版本化报告。术语、章节矛盾和冗余 issue 仅用于披露，不阻断导出且不
+`consistency_check.v1` 产生小型版本化报告。Provider 明确返回 `finish_reason=length` 时在解析前以
+`consistency_output_truncated` 稳定失败，不与普通 Schema 错误混合。术语、章节矛盾和冗余 issue
+仅用于披露，不阻断导出且不
 触发自动重写；调用失败、范围错误或 Schema 非法都会阻断当前执行，只有合法报告可以继续，其中
 Schema 失败稳定结束 Step，模型调用和范围错误交给既有 Worker 错误分类/重试。第一版因此不把
 一致性模型当作事实正确性的通用 LLM Judge。

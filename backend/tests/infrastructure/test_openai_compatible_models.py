@@ -279,6 +279,23 @@ async def test_chat_unknown_finish_reason_is_safely_normalized(
     assert result.finish_reason is ChatFinishReason.OTHER
 
 
+async def test_chat_length_finish_reason_is_preserved_with_empty_content(
+    httpx2_mock: respx.Router,
+) -> None:
+    """Provider 触顶且未产生可见正文时必须保留 ``length`` 供业务层分类。"""
+    httpx2_mock.post(_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_chat_payload(content="", finish_reason="length"),
+        )
+    )
+
+    result = await _chat_adapter().generate([ChatMessage(role="user", content="问题")])
+
+    assert result.content == ""
+    assert result.finish_reason is ChatFinishReason.LENGTH
+
+
 async def test_chat_json_object_fallback(httpx2_mock: respx.Router) -> None:
     """json_object 降级把完整 Schema 确定性注入请求且不修改调用方消息。"""
     route = httpx2_mock.post(_CHAT_URL).mock(

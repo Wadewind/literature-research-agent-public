@@ -161,10 +161,10 @@ HTTP 200/206、Content-Type、`%PDF` magic 和 SHA-256 检查。第三轮显式�
 
 ## 3. 版本化 Review Profile
 
-新建 Review Run 使用 `review-default.v2`，并把以下配置连同 Profile/Prompt/Workflow 版本保存到不可变
+新建 Review Run 使用 `review-default.v3`，并把以下配置连同 Profile/Prompt/Workflow 版本保存到不可变
 Run 快照和创建请求指纹：
 
-| 字段 | v2 值 | 用途 |
+| 字段 | v3 值 | 用途 |
 |---|---:|---|
 | `source_limit` | `3` | 最多选择的 arXiv 来源，便于低成本 Real 验证 |
 | `minimum_ready_papers` | `1` | 允许继续构建 Matrix 的最少 READY 来源 |
@@ -172,9 +172,10 @@ Run 快照和创建请求指纹：
 | `retrieval_top_k_per_dimension` | `5` | 每个分析维度检索候选数 |
 | `evidence_context_token_limit` | `16000` | 单篇 Evidence 提取上下文预算 |
 | `section_output_token_limit` | `8000` | 单章节结构化输出预算 |
-| `consistency_output_token_limit` | `2000` | 一致性报告输出预算 |
+| `consistency_output_token_limit` | `8000` | 一致性报告结构化输出预算 |
 
-历史 `review-default.v1` Run 继续使用已经持久化的 10/4000/2000 等原配置，执行服务同时支持 v1/v2，
+历史 `review-default.v1` Run 继续使用已经持久化的 10/4000/2000 等原配置，`review-default.v2` Run
+也保留其 3/8000/2000 快照；执行服务同时支持 v1/v2/v3，
 不会迁移或静默改写历史 Run。当前 UI 只收集研究问题和 Outline 决策，不让用户提交上述原始参数。
 如果后续需要不同规模，优先新增“快速/标准”等版本化 Profile，而不是开放任意数字。
 

@@ -77,6 +77,15 @@ ParseRevision 和 Evidence 的闭包。
   继续按其 10/4000/2000 快照恢复；
 - 本次只调整预算，不引入模型 repair 或额外付费调用，也不把 P4-REAL-003 标记为根因已修复。
 
+### 2026-08-29 一致性输出预算校准补充
+
+- Real Run `874cb914-1a44-4d28-bb86-a1d00ff404d4` 的一致性调用确认
+  `requested_max_tokens=2000`、`completion_tokens=2000`、`finish_reason=length` 且可见内容为空；
+- 新建 Run 升级到 `review-default.v3`，固定 `source_limit=3`、章节/一致性预算 8000/8000；历史 v1
+  和 v2 Run 保留不可变快照，不迁移、不改写；
+- 一致性节点在 Schema 解析前将 `finish_reason=length` 映射为
+  `consistency_output_truncated`；仍不执行自动 repair 或额外模型重试。
+
 编号按最终 Markdown 中论文的首次引用顺序分配，同一论文复用同一编号。导出同时持久化完整映射，
 包含 Paper/PaperVersion、ReviewSource、arXiv ID/version、Claim、Evidence 及页码/章节定位；不能只把
 不可回查的 References 文本写进 Markdown。

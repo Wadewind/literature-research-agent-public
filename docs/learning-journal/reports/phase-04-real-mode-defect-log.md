@@ -314,3 +314,52 @@ HTTP 429，因此本次失败不是模型输出验证问题，也不是 Vite 启
   显式运行，并观察新 Event 的错误码、状态和调度时间；
 - 当前节流锁只覆盖一个 Worker 进程。未来若部署多个 Worker 进程，需要跨进程全局限流；本地单 Worker
   演示不引入该复杂度。
+
+## P4-REAL-006：一致性报告触及 2000 token 上限后被误报为 Schema 非法
+
+- 发现日期：2026-08-29
+- 状态：最小修复已完成，Real 回归待执行
+- 影响 Project：`117f946c-bef8-4f27-86d3-f0d282ab7490`
+- 影响 Review/Run：`874cb914-1a44-4d28-bb86-a1d00ff404d4`
+- 影响 Attempt：`28ac68d8-a42d-446d-8d61-8914abc992d0`
+- 影响 Step：`consistency_check`
+- 原稳定错误消息：`consistency_report_invalid`
+- 新截断错误消息：`consistency_output_truncated`
+
+### 已确认事实与根因
+
+该 Run 的 arXiv 检索、3 篇导入、Evidence Matrix、6 个 Section 和 40 个 Claim 的引用校验均成功；
+失败只发生在第 12 步一致性报告。对应 ModelInvocation 明确记录
+`requested_max_tokens=2000`、`prompt_tokens=3856`、`completion_tokens=2000`、
+`finish_reason=length`、`response_bytes=0`，响应 SHA-256 也是空内容摘要。因此本次不是普通
+Consistency 业务规则拒绝，而是 Provider 在产生可见结构化 JSON 前耗尽输出预算。
+
+`review-default.v2` 此前只把章节预算提高到 8000，一致性预算仍为 2000；一致性节点又没有复用章节节点
+已有的 `finish_reason=length` 前置分类，空内容进入 Pydantic 后统一降级为
+`consistency_report_invalid`。安全诊断字段使这次根因从推断变成已确认事实。
+
+### 最小修复
+
+- 新建 Run 升级为 `review-default.v3`，将 `consistency_output_token_limit` 从 v2 的 2000 提高到
+  8000；历史 v1/v2 Run 的不可变快照不迁移、不改写；
+- 一致性节点在 Schema 解析与 Output 持久化前检查 `finish_reason=length`，以
+  `consistency_output_truncated` 失败；普通 Schema/业务规则错误仍保留
+  `consistency_report_invalid`；
+- 补充 Application Fake 与 OpenAI-compatible HTTP Mock 回归；不增加自动 repair、额外模型调用、
+  数据库迁移或用户可调预算。
+
+### 已知限制
+
+- 提高预算降低触顶概率，不保证任何 Provider 都会稳定生成合法 `consistency-report.v1`；确定性 Schema
+  与章节范围校验保持不变；
+- 原失败 Run 已是终态，不会因 Profile 默认值变化自动恢复；需要新的 Real Run 验证 8000 预算和新错误
+  分类，不能把离线测试写成 Real Provider 已通过；
+- 如果 8000 仍触顶，继续加大预算或增加 repair 都会改变费用与执行语义，必须另行决策。
+
+### 验证记录
+
+- 先以新 Profile 预算和一致性截断分类契约得到 `2 failed`，再以 `review-default.v3` 版本边界契约得到
+  `1 failed`，确认测试确实覆盖旧行为；
+- 最小实现后的 Review 领域、Application、LangGraph、Executor、Export 和 OpenAI-compatible HTTP
+  Mock 定向回归为 `77 passed`；Ruff、Pyright 和 diff check 通过；
+- 普通测试没有访问真实 Provider。必须创建新的 Real Review 才能验证 8000 一致性预算的实际效果。

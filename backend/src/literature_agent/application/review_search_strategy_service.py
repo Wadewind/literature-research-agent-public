@@ -42,7 +42,7 @@ PROMPT_VERSION = "search_strategy.v1"
 SCHEMA_VERSION = "search-strategy.v1"
 SEARCH_STRATEGY_MAX_OUTPUT_TOKENS = 8_000
 SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
-    {"review-default.v1", "review-default.v2"}
+    {"review-default.v1", "review-default.v2", "review-default.v3"}
 )
 
 

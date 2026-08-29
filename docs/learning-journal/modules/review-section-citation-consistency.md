@@ -39,10 +39,10 @@ Schema、引用规则和 Profile 快照中的 token 输出预算。它不包含�
 论文全文或前文章节全文。术语字典以最早持久定义作为后续 Prompt 的统一输入；不同 Section 输出中的
 定义冲突仍完整保留，交给一致性报告披露。
 
-2026-08-28 起，新 Review Run 使用 `review-default.v2`，快照固定保存
-`section_output_token_limit=8000` 与 `consistency_output_token_limit=2000`，并进入创建请求指纹；
-同时将 `source_limit` 调整为 3，便于个人项目的低成本 Real 验证。历史 `review-default.v1` Run 继续
-使用已持久化的 10/4000/2000 配置；切片 8 之前缺少字段的 v1 开发 Run 仍回退到 v1 的 4000/2000。
+新 Review Run 使用 `review-default.v3`，快照固定保存 `section_output_token_limit=8000` 与
+`consistency_output_token_limit=8000`，并进入创建请求指纹；`source_limit=3` 便于个人项目的低成本
+Real 验证。历史 `review-default.v1` Run 继续使用已持久化的 10/4000/2000 配置，v2 Run 保留其
+3/8000/2000 快照；切片 8 之前缺字段的 v1 开发 Run 仍回退到 v1 的 4000/2000。
 显式字段必须是整数，范围分别为 256–16,000 和 256–8,000。模型原始 JSON
 在 Pydantic 解析前先按 UTF-8 字节限制：Section 192 KiB、Consistency 64 KiB，给 ReviewOutput 的
 256 KiB 总上限保留空间。
@@ -52,6 +52,10 @@ Schema、引用规则和 Profile 快照中的 token 输出预算。它不包含�
 Section 通过稳定 Output key 在重投时复用。2026-08-29 起，Provider 明确返回
 `finish_reason=length` 时在持久化前归类为 `section_output_truncated`；其他失败按输出大小、Schema、
 章节身份、字段边界、状态/Claim 冲突和 Evidence 绑定保存稳定错误码。仍不自动 repair。
+一致性报告同样在 Schema 解析前把 `finish_reason=length` 归类为
+`consistency_output_truncated`；普通非法 JSON 或一致性业务规则仍使用 `consistency_report_invalid`。
+2026-08-29 最小修复的 Review 领域、Application、LangGraph、Executor、Export 与
+OpenAI-compatible HTTP Mock 定向回归为 `77 passed`；普通测试未访问真实 Provider。
 
 ## ClaimSet 复用与幂等事务
 
