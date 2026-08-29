@@ -30,3 +30,15 @@ def test_dev_script_disables_duplicate_uvicorn_access_log() -> None:
     script = (Path(__file__).parents[2] / "scripts" / "dev.sh").read_text()
 
     assert "--no-access-log" in script
+
+
+def test_dev_script_waits_for_api_readiness_before_starting_web() -> None:
+    """Web 只能在 API ready 后启动，避免首屏代理请求撞上连接拒绝。"""
+    script = (Path(__file__).parents[2] / "scripts" / "dev.sh").read_text()
+
+    assert "for command_name in docker npm setsid curl" in script
+    assert "wait_for_api_ready()" in script
+    assert "http://127.0.0.1:8000/health/ready" in script
+    wait_call = 'wait_for_api_ready "${api_pid}"'
+    assert wait_call in script
+    assert script.index(wait_call) < script.index("启动 Web: http://localhost:5173")

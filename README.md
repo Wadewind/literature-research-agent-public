@@ -88,7 +88,10 @@ chmod 600 .env
 ./scripts/dev.sh --real
 ```
 
-脚本会启动 PostgreSQL/Valkey、执行 Alembic 迁移，再并行启动 API、Worker 和 Web。按 `Ctrl-C` 停止 API、Worker、npm 及其 Vite 子进程；数据库和 Valkey 容器继续运行。脚本不会安装依赖、删除数据卷或打印 API Key；Fake 模式也不会读取 `.env`。
+脚本会启动 PostgreSQL/Valkey、执行 Alembic 迁移，再启动 Worker 和 API；只有 API 的
+`/health/ready` 通过后才启动 Web，避免首屏代理请求撞上尚未监听的 API。按 `Ctrl-C` 停止 API、Worker、
+npm 及其 Vite 子进程；数据库和 Valkey 容器继续运行。脚本不会安装依赖、删除数据卷或打印 API Key；
+Fake 模式也不会读取 `.env`。
 
 ### 启动组合
 

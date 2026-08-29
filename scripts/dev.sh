@@ -58,7 +58,7 @@ case "${1:-}" in
         ;;
 esac
 
-for command_name in docker npm setsid; do
+for command_name in docker npm setsid curl; do
     if ! command -v "${command_name}" >/dev/null 2>&1; then
         printf '缺少命令: %s\n' "${command_name}" >&2
         exit 1
@@ -132,6 +132,25 @@ printf '执行数据库迁移...\n'
 
 child_pids=()
 
+wait_for_api_ready() {
+    local api_pid="$1"
+    local attempt
+    for attempt in {1..80}; do
+        if ! kill -0 "${api_pid}" 2>/dev/null; then
+            printf 'API 进程在就绪前退出。\n' >&2
+            return 1
+        fi
+        if curl --noproxy '*' --fail --silent --max-time 1 \
+            http://127.0.0.1:8000/health/ready >/dev/null 2>&1; then
+            printf 'API 已就绪。\n'
+            return 0
+        fi
+        sleep 0.25
+    done
+    printf 'API 在 20 秒内未就绪，停止其余本地服务。\n' >&2
+    return 1
+}
+
 cleanup() {
     local process_id
     trap - EXIT INT TERM
@@ -168,7 +187,11 @@ printf 'API Metrics: http://127.0.0.1:8000/metrics\n'
     exec setsid .venv/bin/uvicorn literature_agent.main:create_app \
         --factory --host 127.0.0.1 --port 8000 --no-access-log
 ) &
-child_pids+=("$!")
+api_pid="$!"
+child_pids+=("${api_pid}")
+
+printf '等待 API 就绪...\n'
+wait_for_api_ready "${api_pid}"
 
 printf '启动 Web: http://localhost:5173\n'
 (
