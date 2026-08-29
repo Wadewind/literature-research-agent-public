@@ -7,6 +7,7 @@
 本切片只交付 Gateway 与记录能力；执行器接线（传入 run_id）在切片 5/8。
 """
 
+import hashlib
 import logging
 import time
 from collections.abc import Callable
@@ -25,6 +26,7 @@ from literature_agent.domain.model_invocation import (
     create_model_invocation,
 )
 from literature_agent.domain.model_types import (
+    ChatFinishReason,
     ChatMessage,
     ChatResult,
     EmbeddingResult,
@@ -152,6 +154,7 @@ class ModelGateway[TSession: Session]:
                 status=InvocationStatus.FAILED,
                 latency_ms=latency_ms,
                 error_type=type(exc).__name__,
+                requested_max_tokens=max_tokens,
             )
             self._log_request(
                 capability=ModelCapability.CHAT,
@@ -162,6 +165,7 @@ class ModelGateway[TSession: Session]:
             )
             raise
         latency_ms = self._elapsed_ms(started)
+        response_content = result.content.encode("utf-8")
         await self._record(
             run_id=run_id,
             capability=ModelCapability.CHAT,
@@ -171,6 +175,10 @@ class ModelGateway[TSession: Session]:
             model=result.model,
             prompt_tokens=result.usage.prompt_tokens,
             completion_tokens=result.usage.completion_tokens,
+            requested_max_tokens=max_tokens,
+            finish_reason=result.finish_reason,
+            response_bytes=len(response_content),
+            response_sha256=hashlib.sha256(response_content).hexdigest(),
         )
         self._log_request(
             capability=ModelCapability.CHAT,
@@ -228,6 +236,10 @@ class ModelGateway[TSession: Session]:
         model: str | None = None,
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
+        requested_max_tokens: int | None = None,
+        finish_reason: ChatFinishReason | None = None,
+        response_bytes: int | None = None,
+        response_sha256: str | None = None,
     ) -> None:
         """在独立短事务中持久化调用记录；失败只记日志。"""
         invocation = create_model_invocation(
@@ -240,6 +252,10 @@ class ModelGateway[TSession: Session]:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             error_type=error_type,
+            requested_max_tokens=requested_max_tokens,
+            finish_reason=finish_reason,
+            response_bytes=response_bytes,
+            response_sha256=response_sha256,
         )
         try:
             async with self._session_factory() as session:

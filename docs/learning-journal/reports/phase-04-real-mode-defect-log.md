@@ -119,7 +119,7 @@ Review 检索到 10 篇论文，其中 5 篇进入 `ready`，另 5 篇长期停�
 ## P4-REAL-003：章节输出触及 token 上限后结构校验失败
 
 - 发现日期：2026-08-24
-- 状态：已做预算缓解，根因与 Real 回归仍待确认
+- 状态：已补安全诊断契约，原始失败根因与新 Real 回归仍待确认
 - 影响 Project：`a8a53cf8-32d6-48f2-b5f5-d915220394d0`
 - 影响 Review：`57439d97-115b-4191-8c01-1fab4eaab98e`
 - 影响 Step：`draft_sections` 的第二章节 `solution_frameworks`
@@ -165,9 +165,35 @@ completion 恰好达到 4000 token，且第二章节 Prompt 明显大于第一�
 - 尚未增加 `finish_reason=length` 的持久化/分类，也未增加一次 repair。结构非法仍稳定失败，避免隐式
   增加费用；Provider 临时失败仍使用既有 Run Attempt 重试，已持久化章节在重投时复用。
 
-### 所需回归测试
+### 2026-08-29 Real 复现与结论修正
 
-- 覆盖达到上限的截断 JSON，并与合法 JSON 但 Evidence/业务校验失败区分稳定错误码。
+- 影响 Project：`117f946c-bef8-4f27-86d3-f0d282ab7490`；影响 Review：
+  `9b828e44-36ab-44b1-a6f1-5b862acf2d57`；失败 Attempt：
+  `49a0f7e0-788e-4723-b6b5-244b9ffbb458`；
+- `review-default.v2` 已实际生效，第三章节 `benchmarks_and_datasets` 请求为
+  `prompt_tokens=3938`、`completion_tokens=4905`，低于冻结的
+  `section_output_token_limit=8000`；前两章节分别成功持久化，第三章节 Provider 请求成功后仍以
+  `section_draft_invalid` 失败；
+- 第三章节授权范围包含 9 个不重复 Evidence，不是“完全没有 Evidence”导致的必然失败；
+- 这次证据不支持“触及平台 8000 token 上限”作为解释，说明单纯提高预算不足以解决结构化输出不稳定；
+  旧 Run 没有 `finish_reason`、响应指纹或细分校验码，仍无法事后区分 Schema、章节身份、状态/Claim、
+  Evidence 绑定或字段边界错误。
+
+### 2026-08-29 安全诊断实现
+
+- `model_invocations` 增加可空的 `requested_max_tokens`、allowlist 化 `finish_reason`、
+  `response_bytes` 和 `response_sha256`；未知 Provider 终止原因统一保存为 `other`，不保存 Prompt、
+  模型正文、论文正文或 Provider 原始负载；
+- 新迁移 `d9e5a1c7b4f2` 对请求上限、终止原因和响应指纹增加数据库约束，历史记录保持 NULL；
+- `finish_reason=length` 在章节持久化前稳定映射为 `section_output_truncated`；其余章节验证按安全类别细分为
+  `section_output_too_large`、`section_schema_invalid`、`section_identity_invalid`、
+  `section_field_limit_invalid`、`section_status_claim_conflict` 和 `section_claim_evidence_invalid`；
+- 仍不保存模型原始响应，也不增加自动 repair/retry；因此新失败可定位到安全类别，但不能回放模型正文。
+
+### 剩余回归测试
+
+- 已用 HTTP Mock/Fake 覆盖 `finish_reason=length`、未知原因 allowlist、Schema/身份/Evidence/状态分类及
+  PostgreSQL 往返；仍需显式 Real Review 验证 Provider 实际返回的 `finish_reason` 和新错误码；
 - 若引入 repair，断言最多执行一次，失败后稳定终止，不形成无限重试或重复费用。
 - 恢复执行时不得重写已成功持久化的第一章节。
 - 普通自动测试只用 Fake/HTTP Mock，不访问真实 Provider；显式 Real 回归另行记录 token、阶段与结果。

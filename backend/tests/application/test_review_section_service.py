@@ -14,7 +14,7 @@ from literature_agent.domain.exceptions import (
     RunConcurrentModificationError,
     RunNotFoundError,
 )
-from literature_agent.domain.model_types import ChatResult, ModelUsage
+from literature_agent.domain.model_types import ChatFinishReason, ChatResult, ModelUsage
 from literature_agent.domain.paper_version import PaperVersion
 from literature_agent.domain.parse_revision import (
     DocumentParseRevision,
@@ -42,10 +42,16 @@ from tests.fakes.fake_run_repository import FakeRunRepository
 
 
 class _Gateway:
-    def __init__(self, responses: list[dict], on_call=None) -> None:
+    def __init__(
+        self,
+        responses: list[dict],
+        on_call=None,
+        finish_reasons: list[ChatFinishReason | None] | None = None,
+    ) -> None:
         self.responses = responses
         self.calls = []
         self.on_call = on_call
+        self.finish_reasons = finish_reasons or [None] * len(responses)
 
     async def generate(self, messages, **kwargs):
         self.calls.append((messages, kwargs))
@@ -55,6 +61,7 @@ class _Gateway:
             content=json.dumps(self.responses[len(self.calls) - 1], ensure_ascii=False),
             model="fake",
             usage=ModelUsage(),
+            finish_reason=self.finish_reasons[len(self.calls) - 1],
         )
 
 
@@ -477,7 +484,7 @@ async def test_section_schema_invalid_fails_step_without_output():
         ]
     )
 
-    with pytest.raises(ReviewSectionInvalidError):
+    with pytest.raises(ReviewSectionInvalidError, match="section_status_claim_conflict"):
         await _service(data, gateway).draft_sections(
             run_id="review-1",
             project_id="project-1",
@@ -489,6 +496,41 @@ async def test_section_schema_invalid_fails_step_without_output():
 
     step = next(x for x in data["review_repo"].steps if x.step_key is ReviewStepKey.DRAFT_SECTIONS)
     assert step.status is ReviewStepStatus.FAILED
+    assert step.error_code == "section_status_claim_conflict"
+    assert not any(x.output_type is ReviewOutputType.SECTION for x in data["review_repo"].outputs)
+
+
+async def test_section_length_finish_reason_is_classified_without_output():
+    data = await _seed()
+    gateway = _Gateway(
+        [
+            {
+                "section_key": "methods",
+                "title": "方法",
+                "status": "answered",
+                "summary": "看似完整但 Provider 明确报告截断",
+                "claims": [
+                    {"text": "方法 A。", "evidence_ids": [data["evidence"].evidence_id]}
+                ],
+                "terminology": [],
+            }
+        ],
+        finish_reasons=[ChatFinishReason.LENGTH],
+    )
+
+    with pytest.raises(ReviewSectionInvalidError, match="section_output_truncated"):
+        await _service(data, gateway).draft_sections(
+            run_id="review-1",
+            project_id="project-1",
+            owner_id="user-1",
+            approved_outline_output_id=data["outline"].output_id,
+            evidence_matrix_output_id=data["matrix"].output_id,
+            correlation_id="truncated-section",
+        )
+
+    step = next(x for x in data["review_repo"].steps if x.step_key is ReviewStepKey.DRAFT_SECTIONS)
+    assert step.status is ReviewStepStatus.FAILED
+    assert step.error_code == "section_output_truncated"
     assert not any(x.output_type is ReviewOutputType.SECTION for x in data["review_repo"].outputs)
 
 

@@ -78,6 +78,20 @@ Real Review 的模型请求日志显示 `model_request_completed`，紧接着 Wo
 - Provider 的推理 token 是否占用了该接口报告的 completion token 预算；
 - 提高上限、切换模型行为或增加一次 repair，哪一种在质量、费用和稳定性之间更合适。
 
+### 2026-08-29 专项诊断落地
+
+后续 Real Review `9b828e44-36ab-44b1-a6f1-5b862acf2d57` 在章节预算已提高到 8000 后，第三章节仍于
+4905 completion tokens 后结构校验失败。这推翻了“提高上限即可解决”的隐含假设，但旧记录仍无法定位
+具体 Validator 分支。
+
+本次因此只落地模型结构化输出专项诊断，不提前实施下文的平台级 `FailureRecord`：
+
+- ModelInvocation 保存请求上限、allowlist 化 finish reason、响应 UTF-8 字节数和 SHA-256；
+- 章节 Step 使用截断、Schema、身份、字段、状态/Claim 和 Evidence 绑定稳定 `error_code`；Attempt 与
+  `run_failed` Event 仍由既有异常信封记录类型，并在安全 message 中携带该分类；
+- 不保存 Prompt、模型正文、论文正文或 Provider 原始负载；不增加自动 repair/retry；
+- 历史记录不会被反向推断；新字段只能改善后续失败的诊断证据。
+
 ## 当前错误处理与保存方式
 
 ### 已经形成的统一部分

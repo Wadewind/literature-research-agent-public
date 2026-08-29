@@ -1,5 +1,6 @@
 """ModelGateway 应用服务测试（切片 3）。"""
 
+import hashlib
 import logging
 from unittest.mock import Mock
 
@@ -12,7 +13,7 @@ from literature_agent.domain.model_invocation import (
     InvocationStatus,
     ModelCapability,
 )
-from literature_agent.domain.model_types import ChatMessage
+from literature_agent.domain.model_types import ChatFinishReason, ChatMessage
 from tests.fakes.fake_chat_model import FakeChatModel
 from tests.fakes.fake_embedding_model import FakeEmbeddingModel
 from tests.fakes.fake_model_invocation_repository import (
@@ -76,6 +77,7 @@ async def test_generate_records_invocation() -> None:
     result = await gateway.generate(
         [ChatMessage(role="user", content="问题")],
         json_schema={"type": "object"},
+        max_tokens=512,
         run_id="run-2",
     )
 
@@ -86,6 +88,10 @@ async def test_generate_records_invocation() -> None:
     assert record.status == InvocationStatus.SUCCEEDED
     assert record.prompt_tokens == 10
     assert record.completion_tokens == 5
+    assert record.requested_max_tokens == 512
+    assert record.finish_reason is ChatFinishReason.STOP
+    assert record.response_bytes == len(result.content.encode("utf-8"))
+    assert record.response_sha256 == hashlib.sha256(result.content.encode("utf-8")).hexdigest()
 
 
 async def test_failure_recorded_and_reraised(monkeypatch) -> None:
@@ -104,6 +110,10 @@ async def test_failure_recorded_and_reraised(monkeypatch) -> None:
     assert record.status == InvocationStatus.FAILED
     assert record.error_type == "ModelRateLimitError"
     assert record.prompt_tokens is None
+    assert record.requested_max_tokens is None
+    assert record.finish_reason is None
+    assert record.response_bytes is None
+    assert record.response_sha256 is None
     recorder.record_model.assert_called_once()
     assert len(recorder.record_model.call_args.args) == 3
     assert recorder.record_model.call_args.args[:2] == (

@@ -8,6 +8,7 @@ from literature_agent.domain.model_invocation import (
     ModelCapability,
     create_model_invocation,
 )
+from literature_agent.domain.model_types import ChatFinishReason
 from literature_agent.domain.run import create_run
 from literature_agent.infrastructure.persistence.model_invocation_repository import (
     SqlalchemyModelInvocationRepository,
@@ -48,13 +49,28 @@ async def test_add_and_list_by_run(session: AsyncSession, run_id: str) -> None:
         latency_ms=2000,
         error_type="ModelRateLimitError",
     )
+    diagnosed = create_model_invocation(
+        run_id=run_id,
+        capability=ModelCapability.CHAT,
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        status=InvocationStatus.SUCCEEDED,
+        latency_ms=900,
+        prompt_tokens=100,
+        completion_tokens=200,
+        requested_max_tokens=8000,
+        finish_reason=ChatFinishReason.LENGTH,
+        response_bytes=4096,
+        response_sha256="a" * 64,
+    )
+    await repo.add(diagnosed)
     await repo.add(failed)
     await session.flush()
 
     records = await repo.list_by_run(run_id)
 
-    assert len(records) == 2
-    first, second = records
+    assert len(records) == 3
+    first, second, third = records
     assert first.invocation_id == succeeded.invocation_id
     assert first.capability == ModelCapability.EMBEDDING
     assert first.prompt_tokens == 11
@@ -63,6 +79,10 @@ async def test_add_and_list_by_run(session: AsyncSession, run_id: str) -> None:
     assert second.status == InvocationStatus.FAILED
     assert second.error_type == "ModelRateLimitError"
     assert second.prompt_tokens is None
+    assert third.requested_max_tokens == 8000
+    assert third.finish_reason is ChatFinishReason.LENGTH
+    assert third.response_bytes == 4096
+    assert third.response_sha256 == "a" * 64
 
 
 async def test_add_without_run(session: AsyncSession) -> None:

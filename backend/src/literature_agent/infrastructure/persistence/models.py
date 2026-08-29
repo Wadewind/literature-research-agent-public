@@ -1478,6 +1478,10 @@ class ModelInvocationORM(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     prompt_tokens: Mapped[int | None] = mapped_column(nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    requested_max_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    finish_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    response_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    response_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     latency_ms: Mapped[int] = mapped_column(nullable=False)
     error_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

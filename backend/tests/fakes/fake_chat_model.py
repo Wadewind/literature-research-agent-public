@@ -5,7 +5,12 @@ JSON，供不访问真实 Provider 的测试与本地开发使用。
 """
 
 from literature_agent.application.ports.chat_model import ChatModel
-from literature_agent.domain.model_types import ChatMessage, ChatResult, ModelUsage
+from literature_agent.domain.model_types import (
+    ChatFinishReason,
+    ChatMessage,
+    ChatResult,
+    ModelUsage,
+)
 
 _DEFAULT_RESPONSE = '{"answer_status": "insufficient_evidence", "claims": []}'
 
@@ -50,4 +55,5 @@ class FakeChatModel(ChatModel):
             content=queued,
             model=self.model,
             usage=ModelUsage(prompt_tokens=10, completion_tokens=5),
+            finish_reason=ChatFinishReason.STOP,
         )

@@ -18,7 +18,7 @@ from literature_agent.domain.model_errors import (
     ModelServerError,
     ModelTimeoutError,
 )
-from literature_agent.domain.model_types import ChatMessage
+from literature_agent.domain.model_types import ChatFinishReason, ChatMessage
 from literature_agent.domain.review_search_strategy import SEARCH_STRATEGY_JSON_SCHEMA
 from literature_agent.infrastructure.models.openai_compatible import (
     OpenAiCompatibleChat,
@@ -75,11 +75,21 @@ def _embedding_payload(count: int = 2) -> dict:
     }
 
 
-def _chat_payload(content: str = '{"answer_status": "answered"}') -> dict:
+def _chat_payload(
+    content: str = '{"answer_status": "answered"}',
+    *,
+    finish_reason: str = "stop",
+) -> dict:
     """构造合法的 Chat 响应体。"""
     return {
         "model": "deepseek-v4-flash",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}}],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
         "usage": {"prompt_tokens": 7, "completion_tokens": 13, "total_tokens": 20},
     }
 
@@ -242,6 +252,7 @@ async def test_chat_success_with_json_schema(httpx2_mock: respx.Router) -> None:
     assert result.model == "deepseek-v4-flash"
     assert result.usage.prompt_tokens == 7
     assert result.usage.completion_tokens == 13
+    assert result.finish_reason is ChatFinishReason.STOP
     body = json.loads(route.calls.last.request.content)
     assert body["model"] == "deepseek-v4-flash"
     assert body["messages"] == [{"role": "user", "content": "问题"}]
@@ -250,6 +261,22 @@ async def test_chat_success_with_json_schema(httpx2_mock: respx.Router) -> None:
         "type": "json_schema",
         "json_schema": {"name": "response", "schema": schema},
     }
+
+
+async def test_chat_unknown_finish_reason_is_safely_normalized(
+    httpx2_mock: respx.Router,
+) -> None:
+    """Provider 新增未知终止原因时只保存 allowlist 内的 ``other``。"""
+    httpx2_mock.post(_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_chat_payload(finish_reason="provider-private-reason"),
+        )
+    )
+
+    result = await _chat_adapter().generate([ChatMessage(role="user", content="问题")])
+
+    assert result.finish_reason is ChatFinishReason.OTHER
 
 
 async def test_chat_json_object_fallback(httpx2_mock: respx.Router) -> None:

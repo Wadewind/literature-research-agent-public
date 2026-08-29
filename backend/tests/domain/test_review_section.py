@@ -6,6 +6,7 @@ from literature_agent.domain.review_section import (
     CONSISTENCY_MAX_MODEL_OUTPUT_BYTES,
     SECTION_MAX_MODEL_OUTPUT_BYTES,
     ConsistencyReportValidationError,
+    SectionDraftErrorCode,
     SectionDraftValidationError,
     parse_consistency_report_json,
     parse_section_draft_json,
@@ -67,13 +68,17 @@ def test_section_v1_accepts_answered_claims_and_bounded_terms() -> None:
     ],
 )
 def test_section_v1_rejects_invalid_claim_binding(payload: dict) -> None:
-    with pytest.raises(SectionDraftValidationError):
+    with pytest.raises(SectionDraftValidationError) as raised:
         validate_section_draft(
             parse_section_draft_json(json.dumps(payload)),
             expected_section_key="methods",
             expected_title="方法",
             allowed_evidence_ids={"ev-1"},
         )
+    assert raised.value.code in {
+        SectionDraftErrorCode.CLAIM_EVIDENCE_INVALID,
+        SectionDraftErrorCode.STATUS_CLAIM_CONFLICT,
+    }
 
 
 def test_consistency_report_issues_are_valid_non_blocking_results() -> None:
@@ -111,8 +116,36 @@ def test_consistency_report_rejects_unknown_section() -> None:
 def test_section_raw_model_output_has_pre_parse_size_limit() -> None:
     oversized = "{" + "x" * SECTION_MAX_MODEL_OUTPUT_BYTES
 
-    with pytest.raises(SectionDraftValidationError, match="大小上限"):
+    with pytest.raises(SectionDraftValidationError, match="大小上限") as raised:
         parse_section_draft_json(oversized)
+    assert raised.value.code is SectionDraftErrorCode.OUTPUT_TOO_LARGE
+
+
+def test_section_schema_and_identity_failures_have_stable_codes() -> None:
+    with pytest.raises(SectionDraftValidationError) as schema_error:
+        parse_section_draft_json('{"section_key":"methods"}')
+    assert schema_error.value.code is SectionDraftErrorCode.SCHEMA_INVALID
+
+    payload = parse_section_draft_json(
+        json.dumps(
+            {
+                "section_key": "methods",
+                "title": "错误标题",
+                "status": "insufficient_evidence",
+                "summary": "证据不足",
+                "claims": [],
+                "terminology": [],
+            }
+        )
+    )
+    with pytest.raises(SectionDraftValidationError) as identity_error:
+        validate_section_draft(
+            payload,
+            expected_section_key="methods",
+            expected_title="方法",
+            allowed_evidence_ids=set(),
+        )
+    assert identity_error.value.code is SectionDraftErrorCode.IDENTITY_INVALID
 
 
 def test_consistency_raw_model_output_has_pre_parse_size_limit() -> None:

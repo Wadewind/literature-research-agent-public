@@ -38,7 +38,7 @@ from literature_agent.domain.exceptions import (
     RunConcurrentModificationError,
     RunNotFoundError,
 )
-from literature_agent.domain.model_types import ChatMessage, ChatResult
+from literature_agent.domain.model_types import ChatFinishReason, ChatMessage, ChatResult
 from literature_agent.domain.parse_revision import ParseRevisionStatus
 from literature_agent.domain.review import (
     ReviewOutput,
@@ -215,6 +215,16 @@ class ReviewSectionService[TSession: Session]:
                     run_id=run_id,
                 )
                 invocations += 1
+                if result.finish_reason is ChatFinishReason.LENGTH:
+                    error_code = "section_output_truncated"
+                    await self._fail_step(
+                        run_id,
+                        project_id,
+                        owner_id,
+                        ReviewStepKey.DRAFT_SECTIONS,
+                        error_code,
+                    )
+                    raise ReviewSectionInvalidError(error_code)
                 try:
                     draft = validate_section_draft(
                         parse_section_draft_json(result.content),
@@ -223,14 +233,15 @@ class ReviewSectionService[TSession: Session]:
                         allowed_evidence_ids=allowed_ids,
                     )
                 except SectionDraftValidationError as exc:
+                    error_code = exc.code.value
                     await self._fail_step(
                         run_id,
                         project_id,
                         owner_id,
                         ReviewStepKey.DRAFT_SECTIONS,
-                        "section_draft_invalid",
+                        error_code,
                     )
-                    raise ReviewSectionInvalidError("section_draft_invalid") from exc
+                    raise ReviewSectionInvalidError(error_code) from exc
                 proposed = create_review_output(
                     review_run_id=run_id,
                     output_type=ReviewOutputType.SECTION,

@@ -11,6 +11,7 @@ from literature_agent.domain.model_invocation import (
     ModelCapability,
     ModelInvocation,
 )
+from literature_agent.domain.model_types import ChatFinishReason
 from literature_agent.infrastructure.persistence.models import ModelInvocationORM
 
 
@@ -28,6 +29,12 @@ def _to_domain(orm: ModelInvocationORM) -> ModelInvocation:
         prompt_tokens=orm.prompt_tokens,
         completion_tokens=orm.completion_tokens,
         error_type=orm.error_type,
+        requested_max_tokens=orm.requested_max_tokens,
+        finish_reason=(
+            ChatFinishReason(orm.finish_reason) if orm.finish_reason is not None else None
+        ),
+        response_bytes=orm.response_bytes,
+        response_sha256=orm.response_sha256,
     )
 
 
@@ -44,6 +51,12 @@ def _to_orm(invocation: ModelInvocation) -> ModelInvocationORM:
         completion_tokens=invocation.completion_tokens,
         latency_ms=invocation.latency_ms,
         error_type=invocation.error_type,
+        requested_max_tokens=invocation.requested_max_tokens,
+        finish_reason=(
+            invocation.finish_reason.value if invocation.finish_reason is not None else None
+        ),
+        response_bytes=invocation.response_bytes,
+        response_sha256=invocation.response_sha256,
         created_at=invocation.created_at,
     )
 

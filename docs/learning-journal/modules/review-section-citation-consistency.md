@@ -49,8 +49,9 @@ Schema、引用规则和 Profile 快照中的 token 输出预算。它不包含�
 
 证据不足是合法章节：必须保留摘要以说明边界，但不得生成 Claim。模型输出非法不触发 repair 调用，
 避免引入未讨论的额外成本和重写语义。Provider/网络临时失败可由 Run Attempt 重投；已经持久化的
-Section 通过稳定 Output key 在重投时复用，但达到输出上限后的非法 JSON 当前仍归类为
-`section_draft_invalid`，尚未根据 `finish_reason` 单独识别或自动 repair。
+Section 通过稳定 Output key 在重投时复用。2026-08-29 起，Provider 明确返回
+`finish_reason=length` 时在持久化前归类为 `section_output_truncated`；其他失败按输出大小、Schema、
+章节身份、字段边界、状态/Claim 冲突和 Evidence 绑定保存稳定错误码。仍不自动 repair。
 
 ## ClaimSet 复用与幂等事务
 
@@ -107,11 +108,14 @@ Evidence 摘录或 Prompt。失败阻止一致性检查和导出。
 - owner/Project/Run、批准 Outline、Matrix、READY Source、Version/Revision/Evidence 全链复核；
 - Graph State 只保存 Section Output IDs、ClaimSet ID 和 Consistency Output ID；
 - Event 不保存正文、完整 Prompt 或 Evidence 摘录；
+- ModelInvocation 只保存 allowlist 化 `finish_reason`、请求上限、响应字节数/hash；RunStep 保存章节稳定
+  `error_code`，Attempt 与 `run_failed` Event 继续使用既有异常类型并把该分类放入安全 message。三者尚未
+  统一为平台级 `FailureRecord`，但都不保存失败模型正文或底层 Pydantic 详情；
 - 每个副作用事务先锁定 Run 并复核仍为当前 owner/Project 的 RUNNING Review；模型返回后发生取消时
   不保存新 Output/Event、不完成 Step 或推进 Stage，取消终态留给切片 9 Executor；
 - 新增 Citation Event 只在 commit 后通知 SSE，重放不重复事件或通知；
 - Domain/Application 定向测试覆盖维度过滤、顺序摘要/术语、证据不足、伪造引用失败、逐行 Paper
-  映射、重放零模型调用和非阻断 issues；
+  映射、结构化错误分类、明确截断、重放零模型调用和非阻断 issues；
 - PostgreSQL 测试覆盖并发 ClaimSet/Claim 收敛、异义回读，并回归 Phase 2 唯一约束与 Citation FK。
 
 切片收尾时，完整非集成测试为 `575 passed, 4 skipped`，完整
@@ -137,7 +141,7 @@ PostgreSQL/Testcontainers 集成测试为 `111 passed`；`ruff check src tests` 
   在线重写。无效 `section.v1` 或 terminology 结构不会被宽松投影成部分可信结果；
 - Citation Validator 证明结构和范围闭包，不自动证明 Evidence 在语义上充分支持 Claim；
 - 一致性 issue 不自动修复，用户需在最终 Artifact/评测中审阅；
-- 默认章节 4,000、一致性 2,000 token 输出预算及 50 Claim/术语上限仍需真实小样本校准；
+- v2 默认章节 8,000、一致性 2,000 token 输出预算及 50 Claim/术语上限仍需真实小样本校准；
 - Provider 已返回但 Section Output 尚未提交时若 Worker 崩溃，重放可能再次调用模型；数据库 Output、
   Event、Claim 和 Citation 仍通过稳定键收敛，不宣称外部模型调用 Exactly Once；
 - LangGraph 的 Interrupt 节点和条件路由保持 async callable；若改回同步 callable，当前异步 Runtime 会把

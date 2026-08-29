@@ -5,6 +5,18 @@ Provider 原始负载；调用内容本身也不进入日志与 Event。
 """
 
 from dataclasses import dataclass
+from enum import StrEnum
+
+
+class ChatFinishReason(StrEnum):
+    """Chat 调用的安全终止原因；未知 Provider 值统一归为 ``other``。"""
+
+    STOP = "stop"
+    LENGTH = "length"
+    CONTENT_FILTER = "content_filter"
+    TOOL_CALLS = "tool_calls"
+    FUNCTION_CALL = "function_call"
+    OTHER = "other"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,8 +63,10 @@ class ChatResult:
         content: 原始 content 字符串；JSON 解析与业务 Schema 校验留给上层。
         model: Provider 实际使用的模型名。
         usage: token 用量。
+        finish_reason: allowlist 化的 Provider 终止原因；未知或未返回为 None。
     """
 
     content: str
     model: str
     usage: ModelUsage
+    finish_reason: ChatFinishReason | None = None

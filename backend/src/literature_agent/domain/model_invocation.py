@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from literature_agent.domain.model_types import ChatFinishReason
+
 
 class ModelCapability(StrEnum):
     """模型能力类型。"""
@@ -40,6 +42,10 @@ class ModelInvocation:
         prompt_tokens: 输入 token 数，未知为 None。
         completion_tokens: 输出 token 数，未知为 None。
         error_type: 失败时的异常类型名，成功为 None。
+        requested_max_tokens: 本次请求的输出上限，未设置为 None。
+        finish_reason: allowlist 化的 Chat 终止原因。
+        response_bytes: Chat content 的 UTF-8 字节数，不保存正文。
+        response_sha256: Chat content 的 SHA-256，不保存正文。
     """
 
     invocation_id: str
@@ -53,6 +59,10 @@ class ModelInvocation:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     error_type: str | None = None
+    requested_max_tokens: int | None = None
+    finish_reason: ChatFinishReason | None = None
+    response_bytes: int | None = None
+    response_sha256: str | None = None
 
 
 def create_model_invocation(
@@ -66,6 +76,10 @@ def create_model_invocation(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     error_type: str | None = None,
+    requested_max_tokens: int | None = None,
+    finish_reason: ChatFinishReason | None = None,
+    response_bytes: int | None = None,
+    response_sha256: str | None = None,
 ) -> ModelInvocation:
     """创建一条模型调用记录。"""
     return ModelInvocation(
@@ -80,4 +94,8 @@ def create_model_invocation(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         error_type=error_type,
+        requested_max_tokens=requested_max_tokens,
+        finish_reason=finish_reason,
+        response_bytes=response_bytes,
+        response_sha256=response_sha256,
     )

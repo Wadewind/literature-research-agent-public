@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -12,8 +13,23 @@ SECTION_MAX_MODEL_OUTPUT_BYTES = 192 * 1024
 CONSISTENCY_MAX_MODEL_OUTPUT_BYTES = 64 * 1024
 
 
+class SectionDraftErrorCode(StrEnum):
+    """不含模型正文的章节结构化输出诊断分类。"""
+
+    OUTPUT_TOO_LARGE = "section_output_too_large"
+    SCHEMA_INVALID = "section_schema_invalid"
+    IDENTITY_INVALID = "section_identity_invalid"
+    FIELD_LIMIT_INVALID = "section_field_limit_invalid"
+    STATUS_CLAIM_CONFLICT = "section_status_claim_conflict"
+    CLAIM_EVIDENCE_INVALID = "section_claim_evidence_invalid"
+
+
 class SectionDraftValidationError(ValueError):
-    """章节模型输出不满足 ``section.v1``。"""
+    """章节模型输出不满足 ``section.v1``，并携带稳定安全分类。"""
+
+    def __init__(self, code: SectionDraftErrorCode, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 class ConsistencyReportValidationError(ValueError):
@@ -125,11 +141,17 @@ class ConsistencyReport:
 
 def parse_section_draft_json(content: str) -> _SectionPayload:
     if len(content.encode("utf-8")) > SECTION_MAX_MODEL_OUTPUT_BYTES:
-        raise SectionDraftValidationError("章节模型输出超过大小上限")
+        raise SectionDraftValidationError(
+            SectionDraftErrorCode.OUTPUT_TOO_LARGE,
+            "章节模型输出超过大小上限",
+        )
     try:
         return _SectionPayload.model_validate_json(content)
     except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-        raise SectionDraftValidationError("章节输出不符合 section.v1 Schema") from exc
+        raise SectionDraftValidationError(
+            SectionDraftErrorCode.SCHEMA_INVALID,
+            "章节输出不符合 section.v1 Schema",
+        ) from exc
 
 
 def validate_section_draft(
@@ -140,26 +162,50 @@ def validate_section_draft(
     allowed_evidence_ids: set[str],
 ) -> SectionDraft:
     if payload.section_key != expected_section_key or payload.title != expected_title:
-        raise SectionDraftValidationError("章节身份与批准大纲不一致")
+        raise SectionDraftValidationError(
+            SectionDraftErrorCode.IDENTITY_INVALID,
+            "章节身份与批准大纲不一致",
+        )
     summary = payload.summary.strip()
     if not summary or len(summary) > 1_000:
-        raise SectionDraftValidationError("章节摘要不能为空且不得超过 1000 字符")
+        raise SectionDraftValidationError(
+            SectionDraftErrorCode.FIELD_LIMIT_INVALID,
+            "章节摘要不能为空且不得超过 1000 字符",
+        )
     if len(payload.claims) > 50 or len(payload.terminology) > 50:
-        raise SectionDraftValidationError("章节 Claim 或术语数量超限")
+        raise SectionDraftValidationError(
+            SectionDraftErrorCode.FIELD_LIMIT_INVALID,
+            "章节 Claim 或术语数量超限",
+        )
     if payload.status is AnswerStatus.ANSWERED and not payload.claims:
-        raise SectionDraftValidationError("answered 章节必须包含 Claim")
+        raise SectionDraftValidationError(
+            SectionDraftErrorCode.STATUS_CLAIM_CONFLICT,
+            "answered 章节必须包含 Claim",
+        )
     if payload.status is AnswerStatus.INSUFFICIENT_EVIDENCE and payload.claims:
-        raise SectionDraftValidationError("证据不足章节不得包含 Claim")
+        raise SectionDraftValidationError(
+            SectionDraftErrorCode.STATUS_CLAIM_CONFLICT,
+            "证据不足章节不得包含 Claim",
+        )
     claims: list[SectionClaimDraft] = []
     for raw in payload.claims:
         text = raw.text.strip()
         ids = tuple(raw.evidence_ids)
         if not text or len(text) > 4_000:
-            raise SectionDraftValidationError("Claim 文本不能为空且不得超过 4000 字符")
+            raise SectionDraftValidationError(
+                SectionDraftErrorCode.FIELD_LIMIT_INVALID,
+                "Claim 文本不能为空且不得超过 4000 字符",
+            )
         if not ids or len(ids) > 10 or len(set(ids)) != len(ids):
-            raise SectionDraftValidationError("Claim 必须绑定 1–10 个不重复 Evidence")
+            raise SectionDraftValidationError(
+                SectionDraftErrorCode.CLAIM_EVIDENCE_INVALID,
+                "Claim 必须绑定 1–10 个不重复 Evidence",
+            )
         if not set(ids) <= allowed_evidence_ids:
-            raise SectionDraftValidationError("Claim 引用了章节上下文外 Evidence")
+            raise SectionDraftValidationError(
+                SectionDraftErrorCode.CLAIM_EVIDENCE_INVALID,
+                "Claim 引用了章节上下文外 Evidence",
+            )
         claims.append(SectionClaimDraft(text, ids))
     terms: list[TerminologyEntry] = []
     seen_terms: set[str] = set()
@@ -172,7 +218,10 @@ def validate_section_draft(
             or len(definition) > 500
             or term in seen_terms
         ):
-            raise SectionDraftValidationError("术语为空、重复或超过长度边界")
+            raise SectionDraftValidationError(
+                SectionDraftErrorCode.FIELD_LIMIT_INVALID,
+                "术语为空、重复或超过长度边界",
+            )
         seen_terms.add(term)
         terms.append(TerminologyEntry(term, definition))
     return SectionDraft(

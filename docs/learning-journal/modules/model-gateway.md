@@ -15,7 +15,7 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
       │    └─ Adapter：OpenAiCompatibleEmbedding / OpenAiCompatibleChat
       │         （httpx2 AsyncClient；429/5xx/超时最多 2 次短重试，退避 1s/2s）
       └─ 调用后独立短事务写 model_invocations
-           （capability/provider/model/status/usage/latency_ms/error_type，含 run_id 接线位；
+           （profile/usage/latency/error + 安全响应诊断，含 run_id 接线位；
             记录失败只记日志，不影响调用结果）
 ```
 
@@ -29,7 +29,10 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 
 ## 状态、数据模型和事务
 
-- `model_invocations`：`invocation_id`、`run_id`（可空 FK → runs）、`capability`（embedding/chat）、`provider`、`model`、`status`（succeeded/failed）、`prompt_tokens`/`completion_tokens`（可空）、`latency_ms`、`error_type`（可空）、`created_at`。**不存 Prompt 与响应内容**。
+- `model_invocations`：除调用身份、状态、token、延迟和错误类型外，Chat 调用还可保存
+  `requested_max_tokens`、allowlist 化的 `finish_reason`、`response_bytes` 和 `response_sha256`。
+  未知终止原因归一化为 `other`；Embedding 和历史记录保持 NULL。**不存 Prompt、响应内容或 Provider
+  原始负载**。
 - 调用记录是独立短事务：模型调用本身不持有任何数据库事务，记录失败不反向影响业务调用结果。
 - `ModelGateway` 不接进 lifespan 的 API 侧；Worker 装配时按 `AGENT_EMBEDDING_BACKEND` 选择 Fake 或真实 Adapter（切片 5）。Phase 4 起 Fake 模型栈同时固定 `unicode-word.v1` 离线 tokenizer，Indexing 与 RAG 共享该 profile；真实模型栈仍使用 `cl100k_base`。
 
@@ -58,6 +61,8 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 
 - API Key 只来自服务端 Settings（`AGENT_EMBEDDING_API_KEY`/`AGENT_CHAT_API_KEY`），不进入日志、Event、invocation 记录；
 - 日志不记录完整 Prompt 与响应体；invocation 只记 profile/usage/延迟/错误类型；
+- Phase 4 Real 缺陷复盘后，Invocation 增加不含正文的响应指纹和终止原因。字节数/hash 用于关联重复响应，
+  不是内容恢复机制；这些字段只进入独立短事务，不加入 Event 或日志高基数 Label；
 - Phase 4 切片 5 起，Gateway 额外输出 `model_request_completed/failed` JSON 事件，只允许
   operation/provider/model/status/duration/run_id/error type；messages、texts、JSON Schema、模型结果和
   Provider 异常正文均不进入日志。日志记录失败不改变原有 ModelInvocation 独立短事务与异常传播语义。
@@ -73,6 +78,8 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
   不变和纯文本不注入；
 - Gateway `tests/application/test_model_gateway.py`（5 例）：成功/失败记录、error_type、记录失败不影响结果、不掩盖模型错误、run_id 可空；
 - PostgreSQL 集成 `tests/integration/test_model_invocation_repository.py`（3 例）；
+- 2026-08-29 结构化输出诊断回归：Adapter/ModelGateway/Section/Workflow 定向测试 `74 passed`，
+  ModelInvocation PostgreSQL 集成 `3 passed`；未访问真实 Provider；
 - 切片 3 完成时：非集成 216 passed + 4 skipped，integration 43 passed，ruff/pyright 全绿。
 - 切片 10 真实 Smoke（2026-08-21）：`embedding-3` 返回 1 个 1024 维向量且 usage 非空；真实 Chat 在 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false` 的 `json_object` 模式返回符合 `RagAnswerOutput` 的 `insufficient_evidence`，usage 非空。普通入口仍为 2 skipped，不触网。初次实跑还验证了 401 正确映射认证错误、完整端点误作 Base URL 会形成 404，以及不支持 `json_schema` 时 400 被归为永久非法请求；修正配置后通过。
 - Phase 4 发布后首次 Real Review 暴露：Provider 调用成功，但旧 `json_object` 分支丢弃传入的
@@ -88,7 +95,8 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
 - 服务：`application/model_gateway.py`
 - 适配器：`infrastructure/models/openai_compatible.py`、`fake_models.py`（生产侧 Fake，切片 5 起 fake 为 bag-of-words 向量）
 - 配置：`infrastructure/config.py`（`AGENT_EMBEDDING_*`/`AGENT_CHAT_*`/`AGENT_CHAT_JSON_SCHEMA_SUPPORTED`/`AGENT_MODEL_TIMEOUT_SECONDS`/`AGENT_MODEL_MAX_RETRIES`/`AGENT_EMBEDDING_BACKEND`）
-- 迁移：`migrations/versions/d6e1f7a3b9c2_create_model_invocations_table.py`
+- 迁移：`migrations/versions/d6e1f7a3b9c2_create_model_invocations_table.py`、
+  `migrations/versions/d9e5a1c7b4f2_add_model_invocation_diagnostics.py`
 - 测试：`tests/infrastructure/test_openai_compatible_models.py`、`test_provider_smoke.py`（显式启用）
 
 ## 已知限制

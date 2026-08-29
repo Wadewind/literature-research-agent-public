@@ -30,6 +30,7 @@ from literature_agent.domain.model_errors import (
     ModelTimeoutError,
 )
 from literature_agent.domain.model_types import (
+    ChatFinishReason,
     ChatMessage,
     ChatResult,
     EmbeddingResult,
@@ -49,6 +50,18 @@ _JSON_SCHEMA_INSTRUCTION_PREFIX = (
     "你必须输出结构化数据。只返回一个符合下方 JSON Schema 的 JSON object。"
     "不得返回 Markdown 代码块、解释文字或 Schema 未声明的额外字段。"
 )
+
+
+def _normalize_finish_reason(value: object) -> ChatFinishReason | None:
+    """把 Provider 终止原因收敛到固定 allowlist，不透传未知字符串。"""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return ChatFinishReason.OTHER
+    try:
+        return ChatFinishReason(value)
+    except ValueError:
+        return ChatFinishReason.OTHER
 
 
 class _OpenAiCompatibleBase:
@@ -290,8 +303,9 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
         choices = body.get("choices")
         if not isinstance(choices, list) or not choices:
             raise ModelResponseError(f"{self.provider} 响应缺少 choices 字段")
+        choice = choices[0]
         try:
-            content = choices[0]["message"]["content"]
+            content = choice["message"]["content"]
         except (KeyError, TypeError, IndexError) as exc:
             raise ModelResponseError(
                 f"{self.provider} 响应 choices 字段形状非法"
@@ -303,4 +317,7 @@ class OpenAiCompatibleChat(_OpenAiCompatibleBase, ChatModel):
             content=content,
             model=model if isinstance(model, str) else self.model,
             usage=_parse_usage(body),
+            finish_reason=_normalize_finish_reason(
+                choice.get("finish_reason") if isinstance(choice, dict) else None
+            ),
         )
