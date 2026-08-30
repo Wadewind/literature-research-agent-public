@@ -459,7 +459,17 @@ async def test_unified_tool_budget_counts_project_and_execute_once_each() -> Non
     assert sandbox.commands == ["python -c 'print(1)'"]
 
 
-async def test_correctable_artifact_path_error_returns_tool_error_to_model() -> None:
+@pytest.mark.parametrize(
+    ("error_code", "safe_message"),
+    [
+        ("artifact_path_invalid", "Artifact 只能来自 /workspace/outputs/"),
+        ("artifact_extension_mismatch", "Artifact 扩展名与媒体类型不匹配"),
+    ],
+)
+async def test_correctable_artifact_validation_error_returns_tool_error_to_model(
+    error_code: str,
+    safe_message: str,
+) -> None:
     usage = _UsageControl()
     persistent = _PersistentUsageMiddleware(usage)
     correctable = _CorrectableToolErrorMiddleware()
@@ -501,8 +511,8 @@ async def test_correctable_artifact_path_error_returns_tool_error_to_model() -> 
     async def reject(_: ToolCallRequest) -> ToolMessage:
         raise ResearchAgentRuntimeError(
             kind=RuntimeErrorKind.PERMANENT,
-            code="artifact_path_invalid",
-            safe_message="Artifact 只能来自 /workspace/outputs/",
+            code=error_code,
+            safe_message=safe_message,
         )
 
     result = await correctable.awrap_tool_call(
@@ -513,9 +523,43 @@ async def test_correctable_artifact_path_error_returns_tool_error_to_model() -> 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
     assert result.tool_call_id == "artifact-call-1"
-    assert "artifact_path_invalid" in result.text
+    assert error_code in result.text
+    assert "path、name、media_type 或文件内容" in result.text
     assert usage.succeeded_calls == []
-    assert usage.failed_calls == [("artifact-call-1", "artifact_path_invalid")]
+    assert usage.failed_calls == [("artifact-call-1", error_code)]
+
+
+async def test_non_correctable_artifact_error_still_fails_turn() -> None:
+    correctable = _CorrectableToolErrorMiddleware()
+
+    @tool
+    async def submit_artifact(path: str) -> str:
+        """提交正式成果。"""
+        return path
+
+    request = ToolCallRequest(
+        tool_call={
+            "name": "submit_artifact",
+            "args": {"path": "/workspace/outputs/report.txt"},
+            "id": "artifact-call-1",
+            "type": "tool_call",
+        },
+        tool=submit_artifact,
+        state={},
+        runtime=cast(Any, None),
+    )
+
+    async def reject(_: ToolCallRequest) -> ToolMessage:
+        raise ResearchAgentRuntimeError(
+            kind=RuntimeErrorKind.PERMANENT,
+            code="artifact_tool_not_allowed",
+            safe_message="当前 Turn 未授权 submit_artifact",
+        )
+
+    with pytest.raises(ResearchAgentRuntimeError) as caught:
+        await correctable.awrap_tool_call(request, reject)
+
+    assert caught.value.code == "artifact_tool_not_allowed"
 
 
 def test_artifact_tool_prompt_requires_formal_output_directory(monkeypatch) -> None:
@@ -538,6 +582,8 @@ def test_artifact_tool_prompt_requires_formal_output_directory(monkeypatch) -> N
     )
 
     assert "/workspace/outputs/" in captured["system_prompt"]
+    assert ".txt=text/plain" in captured["system_prompt"]
+    assert ".md/.markdown=text/markdown" in captured["system_prompt"]
 
 
 async def test_persistent_usage_wraps_model_and_project_tool_boundaries() -> None:

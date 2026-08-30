@@ -421,6 +421,26 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
             ) from exc
 
 
+_MODEL_CORRECTABLE_ARTIFACT_ERROR_CODES = frozenset(
+    {
+        "artifact_path_invalid",
+        "artifact_name_invalid",
+        "artifact_media_type_unsupported",
+        "artifact_extension_mismatch",
+        "artifact_file_not_found",
+        "artifact_file_not_regular",
+        "artifact_too_large",
+        "artifact_magic_mismatch",
+        "artifact_json_invalid",
+        "artifact_csv_invalid",
+        "artifact_text_invalid",
+        "artifact_svg_active_content",
+        "artifact_svg_invalid",
+        "artifact_svg_external_reference",
+    }
+)
+
+
 class _CorrectableToolErrorMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
     """把无副作用且模型可修正的参数错误返回当前 Agent Loop。"""
 
@@ -432,7 +452,10 @@ class _CorrectableToolErrorMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
         try:
             return await handler(request)
         except ResearchAgentRuntimeError as exc:
-            if exc.code != "artifact_path_invalid":
+            if (
+                request.tool_call.get("name") != "submit_artifact"
+                or exc.code not in _MODEL_CORRECTABLE_ARTIFACT_ERROR_CODES
+            ):
                 raise
             return ToolMessage(
                 content=json.dumps(
@@ -443,7 +466,8 @@ class _CorrectableToolErrorMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
                             "message": exc.safe_message,
                         },
                         "instruction": (
-                            "请先把成果写入 /workspace/outputs/，再使用新的工具调用提交。"
+                            "请根据错误修正 path、name、media_type 或文件内容；正式成果必须位于"
+                            " /workspace/outputs/，然后使用新的工具调用重试。"
                         ),
                     },
                     ensure_ascii=False,
@@ -614,6 +638,10 @@ class DeepAgentsResearchAgentRuntime:
                 + (
                     "需要提交正式成果时，必须先将文件写入 /workspace/outputs/，再调用"
                     " submit_artifact；不要提交 /workspace 根目录或 inbox 中的文件。"
+                    "name 扩展名必须与 media_type 对应：.txt=text/plain，"
+                    ".md/.markdown=text/markdown，.csv=text/csv，.json=application/json，"
+                    ".png=image/png，.jpg/.jpeg=image/jpeg，.svg=image/svg+xml，"
+                    ".pdf=application/pdf。"
                     if "submit_artifact" in names
                     else ""
                 )
