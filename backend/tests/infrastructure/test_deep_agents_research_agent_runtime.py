@@ -543,6 +543,8 @@ async def test_correctable_artifact_validation_error_returns_tool_error_to_model
     assert result.tool_call_id == "artifact-call-1"
     assert error_code in result.text
     assert "path、name、media_type 或文件内容" in result.text
+    assert '"supported_types"' in result.text
+    assert '"text/x-python"' in result.text
     assert usage.succeeded_calls == []
     assert usage.failed_calls == [("artifact-call-1", error_code)]
 
@@ -602,6 +604,7 @@ def test_artifact_tool_prompt_requires_formal_output_directory(monkeypatch) -> N
     assert "/workspace/outputs/" in captured["system_prompt"]
     assert ".txt=text/plain" in captured["system_prompt"]
     assert ".md/.markdown=text/markdown" in captured["system_prompt"]
+    assert ".py=text/x-python" in captured["system_prompt"]
 
 
 async def test_persistent_usage_wraps_model_and_project_tool_boundaries() -> None:

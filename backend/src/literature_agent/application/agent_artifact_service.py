@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -349,8 +350,10 @@ class AgentArtifactSubmissionService[TSession: Session]:
             project_id=request.context_snapshot.project_id,
             session_id=request.session_id,
             turn_run_id=request.turn_run_id,
-            name="rejected.txt",
-            media_type="text/plain",
+            name=_safe_rejected_candidate_value(name, fallback="invalid-name"),
+            media_type=_safe_rejected_candidate_value(
+                media_type, fallback="application/octet-stream"
+            ),
             content_ref="rejected://submission",
             content_hash=digest,
             size_bytes=0,
@@ -390,6 +393,17 @@ class AgentArtifactSubmissionService[TSession: Session]:
         except Exception:
             return
         await notify_run_event(self._event_notifier, request.turn_run_id)
+
+
+def _safe_rejected_candidate_value(value: str, *, fallback: str) -> str:
+    """保留可诊断尝试值，同时去除控制字符和路径分隔符。"""
+    normalized = "".join(
+        character
+        if character not in {"/", "\\"} and unicodedata.category(character)[0] != "C"
+        else "�"
+        for character in value
+    ).strip()
+    return (normalized or fallback)[:255]
 
 
 class AgentArtifactQueryService[TSession: Session]:

@@ -31,9 +31,9 @@ _AGENT_CANDIDATE_CONTENT_REF_MAX_LENGTH = 500
 _AGENT_CANDIDATE_MAX_SIZE_BYTES = 10 * 1024 * 1024
 AGENT_MESSAGE_MAX_ATTACHMENTS = 5
 
-PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v5"
-PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = "agent-policy.project-research-workspace-mcp.v5"
-PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = "agent-policy.project-research-capabilities.v5"
+PROJECT_RESEARCH_WORKSPACE_POLICY_VERSION = "agent-policy.project-research-workspace.v6"
+PROJECT_RESEARCH_WORKSPACE_MCP_POLICY_VERSION = "agent-policy.project-research-workspace-mcp.v6"
+PROJECT_RESEARCH_CAPABILITIES_POLICY_VERSION = "agent-policy.project-research-capabilities.v6"
 PROJECT_RESEARCH_WORKSPACE_TOOLS = (
     "search_project_chunks",
     "read_review_evidence_matrix",
@@ -478,8 +478,8 @@ _FIXED_TOOL_POLICY_REFS = (
     ),
     ToolPolicyRef(
         "submit_artifact",
-        "artifact-tool.v2",
-        "6a5743a89fbc77ecf546be43e89be6dd14031f8fdf96b2dfc555f78c78728cf2",
+        "artifact-tool.v3",
+        "0fe23961332e8bf29efb7920f9ef561840bb8587eb61dfaad3e5f3bdb042c8aa",
     ),
 )
 
@@ -960,8 +960,8 @@ def create_project_research_workspace_policy_snapshot(
         network_profile_hash=RESEARCH_PUBLIC_EGRESS_PROFILE.profile_hash,
         sandbox_enabled=True,
         approval_required=False,
-        max_model_calls=8,
-        max_tool_calls=12,
+        max_model_calls=20,
+        max_tool_calls=30,
     )
 
 

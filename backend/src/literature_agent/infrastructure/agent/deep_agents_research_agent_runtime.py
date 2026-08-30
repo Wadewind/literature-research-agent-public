@@ -76,6 +76,10 @@ from literature_agent.domain.agent_answer import (
     INSUFFICIENT_AGENT_EVIDENCE_TEXT,
     extract_agent_evidence_claims,
 )
+from literature_agent.domain.agent_artifact import (
+    agent_artifact_supported_type_hint,
+    agent_artifact_supported_types,
+)
 from literature_agent.domain.agent_usage import (
     AGENT_TOOL_INPUT_PREVIEW_BYTES,
     AGENT_TOOL_OUTPUT_PREVIEW_BYTES,
@@ -493,6 +497,7 @@ class _CorrectableToolErrorMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
                             "code": exc.code,
                             "message": exc.safe_message,
                         },
+                        "supported_types": agent_artifact_supported_types(),
                         "instruction": (
                             "请根据错误修正 path、name、media_type 或文件内容；正式成果必须位于"
                             " /workspace/outputs/，然后使用新的工具调用重试。"
@@ -666,10 +671,8 @@ class DeepAgentsResearchAgentRuntime:
                 + (
                     "需要提交正式成果时，必须先将文件写入 /workspace/outputs/，再调用"
                     " submit_artifact；不要提交 /workspace 根目录或 inbox 中的文件。"
-                    "name 扩展名必须与 media_type 对应：.txt=text/plain，"
-                    ".md/.markdown=text/markdown，.csv=text/csv，.json=application/json，"
-                    ".png=image/png，.jpg/.jpeg=image/jpeg，.svg=image/svg+xml，"
-                    ".pdf=application/pdf。"
+                    "name 扩展名必须与 media_type 对应："
+                    f"{agent_artifact_supported_type_hint()}。"
                     if "submit_artifact" in names
                     else ""
                 )

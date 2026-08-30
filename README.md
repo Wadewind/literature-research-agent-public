@@ -12,10 +12,12 @@ Agent UI 均已形成离线或显式真实验证。生产默认仍使用 Fake Ru
 这不代表公网多租户、通用认证、secure runtime、精确计费或真实模型质量已完成。
 
 Phase 6 Slice 2 已完成受限 Agent 文件交付：真实 Sandbox Turn 可显式提交
-`/workspace/outputs/` 中的 PNG/JPEG/SVG/PDF/CSV/Markdown/text/JSON，平台在数据库事务外校验普通文件、
+`/workspace/outputs/` 中的 PNG/JPEG/SVG/PDF/CSV/Markdown/text/JSON/Python 源码，平台在数据库事务外校验
+普通文件、
 10 MiB 上限、声明 MIME、magic/结构与 hash，并在 Turn 业务成功事务中发布独立 AgentArtifact。Research
-Agent 成果区只预览 PNG/JPEG，其余类型安全下载；Fake Runtime 的候选描述符与未提交 Candidate 都不是
-可下载资源。该实现不代表生产级恶意文件扫描；孤儿 staging GC 与总量配额是完成后的已知限制。
+Agent 成果区只预览 PNG/JPEG，其余类型（包括 `.py`）均以 `attachment` + `nosniff` 安全下载；Fake Runtime
+的候选描述符与未提交 Candidate 都不是可下载资源。该实现不代表生产级恶意文件扫描；孤儿 staging GC 与
+总量配额是完成后的已知限制。
 
 Phase 6 Slice 3 已完成 Browser 人工控制的离线垂直闭环：用户可在两个 Agent Turn 之间申请当前 Session/
 Sandbox generation 的短时控制权，右侧 noVNC 面板通过平台 WebSocket 操作同一 Chromium；人工控制与

@@ -323,6 +323,7 @@ export interface AgentCandidate {
   content_hash: string;
   size_bytes: number;
   status: string;
+  rejection_code: string | null;
 }
 
 export interface AgentArtifact {

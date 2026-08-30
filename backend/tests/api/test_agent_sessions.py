@@ -10,10 +10,12 @@ from pydantic import ValidationError
 
 from literature_agent.api.agent_sessions import (
     MessageCreateRequest,
+    get_agent_artifact_content,
     get_agent_artifact_query_service,
     get_agent_session_service,
     get_mcp_configuration_service,
     get_skill_configuration_service,
+    list_agent_artifacts,
     list_tool_executions,
     router,
 )
@@ -254,6 +256,30 @@ def test_agent_artifact_api_hides_storage_and_serves_safe_verified_content() -> 
     assert content.headers["x-content-type-options"] == "nosniff"
     assert content.headers["content-disposition"].startswith("inline;")
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_python_artifact_is_download_only_and_never_browser_previewable() -> None:
+    class _PythonArtifactService(_ArtifactService):
+        artifact = replace(
+            _ArtifactService.artifact,
+            artifact_id="00000000-0000-0000-0000-000000000002",
+            name="plot_quadratic.py",
+            media_type="text/x-python",
+            content_hash="b" * 64,
+            size_bytes=14,
+        )
+        content_bytes = b"print('safe')\n"
+
+    service = _PythonArtifactService()
+    actor = ActorContext(owner_id="owner-1")
+    listed = await list_agent_artifacts("run-1", actor, service)
+    content = await get_agent_artifact_content(service.artifact.artifact_id, actor, service)
+
+    assert listed[0].previewable is False
+    assert content.headers["content-type"].startswith("text/x-python")
+    assert content.headers["x-content-type-options"] == "nosniff"
+    assert content.headers["content-disposition"].startswith("attachment;")
 
 
 async def test_tool_execution_api_returns_only_safe_usage_and_hash_summary() -> None:

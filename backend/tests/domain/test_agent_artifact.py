@@ -69,6 +69,7 @@ def test_artifact_content_validates_magic_text_json_and_svg_active_content() -> 
         ("data.csv", "text/csv", "name,value\n论文,1\n".encode()),
         ("notes.md", "text/markdown", "# 研究笔记".encode()),
         ("notes.txt", "text/plain", "研究笔记".encode()),
+        ("plot.py", "text/x-python", b"print('quadratic')\n"),
         ("data.json", "application/json", b'{"value":1}'),
     ],
 )
@@ -92,6 +93,7 @@ def test_artifact_content_accepts_each_fixed_supported_type(
         ),
         ("data.json", "application/json", b"{", "artifact_json_invalid"),
         ("notes.txt", "text/plain", b"bad\x00text", "artifact_text_invalid"),
+        ("plot.py", "text/plain", b"print(1)\n", "artifact_extension_mismatch"),
         (
             "chart.svg",
             "image/svg+xml",

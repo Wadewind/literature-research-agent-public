@@ -169,6 +169,7 @@ class CandidateResponse(BaseModel):
     content_hash: str
     size_bytes: int
     status: str
+    rejection_code: str | None
 
 
 class AgentArtifactResponse(BaseModel):
@@ -840,6 +841,7 @@ async def get_turn(run_id: str, actor: ActorDep, service: ServiceDep) -> TurnRes
                     content_hash=x.content_hash,
                     size_bytes=x.size_bytes,
                     status=x.status.value,
+                    rejection_code=x.rejection_code,
                 )
                 for x in value.candidates
             ],

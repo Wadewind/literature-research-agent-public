@@ -131,6 +131,23 @@ def test_submit_artifact_schema_matches_frozen_tool_policy_ref() -> None:
     assert _tool_schema_hash(value) == expected.input_schema_hash
 
 
+def test_submit_artifact_schema_enumerates_supported_media_types() -> None:
+    lease = _lease()
+    value = AgentArtifactToolFactory(_Service(), _WorkspaceRepository(lease.record)).create(
+        _request(), lease
+    )[0]
+
+    schema = value.tool_call_schema.model_json_schema()
+    media_type_schema = schema["properties"]["media_type"]
+    enum_ref = media_type_schema.get("$ref")
+    if enum_ref is not None:
+        media_type_schema = schema["$defs"][enum_ref.rsplit("/", 1)[-1]]
+
+    assert "text/x-python" in media_type_schema["enum"]
+    assert "image/png" in media_type_schema["enum"]
+    assert "text/x-python" in (value.description or "")
+
+
 class _WorkspaceRepository:
     def __init__(self, record):
         self.record = record
@@ -166,7 +183,7 @@ async def test_submit_artifact_tool_passes_stable_tool_call_and_scope() -> None:
     )
 
     assert tool.name == "submit_artifact"
-    assert '"status":"validated"' in result
+    assert '"status":"validated_not_published"' in result
     assert service.calls[0]["tool_call_id"] == "call-1"
 
 

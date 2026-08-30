@@ -26,6 +26,9 @@ Fake Runtime 原有 descriptor 仍可形成 `STAGED` Candidate，用于离线业
 Storage 校验时不会伪造正式下载资源。`ResearchAgentRuntime` 继续保持五方法，LangChain `ToolRuntime` 与
 Deep Agents Tool 只存在于 infrastructure adapter。
 
+`submit_artifact` v3 把 `media_type` 固定为枚举 Schema，并在可纠正错误中返回允许的 MIME/扩展名清单。
+成功工具结果使用 `validated_not_published`，明确它仍是等待 Turn 成功提交的内部 Candidate。
+
 ## 状态、数据模型和事务
 
 - Candidate 状态机只有 `STAGED → VALIDATED → COMMITTED` 与 `STAGED → REJECTED`；非法跨越由 Domain
@@ -54,7 +57,9 @@ MIME、大小和创建时间；`declared_public_target_checked` 只表示 URL/DN
 - SVG：XML 结构校验，并拒绝 script、foreignObject、事件属性、外部引用、DOCTYPE/ENTITY 等主动内容；
   UI 不内嵌，默认下载；
 - PDF：校验 `%PDF-` 与尾部 EOF，默认下载；
-- CSV、Markdown、纯文本、JSON：必须是 UTF-8、不得含 NUL；CSV/JSON 再做结构校验，默认下载。
+- CSV、Markdown、纯文本、JSON、Python 源码：必须是 UTF-8、不得含 NUL；CSV/JSON 再做结构校验，默认
+  下载。
+- Python 源码只接受 `.py` + `text/x-python`，始终以 `attachment` + `nosniff` 下载，不进入图片预览路径。
 
 归档、可执行文件、宏文档、动态依赖产物、目录、symlink/device、路径穿越和 `/workspace/outputs/` 外路径
 均拒绝。下载每次重新校验 Storage bytes 的 size/hash，设置安全 `Content-Disposition`、`nosniff` 和
@@ -62,7 +67,8 @@ MIME、大小和创建时间；`declared_public_target_checked` 只表示 URL/DN
 
 ## 失败、重复和取消
 
-- 永久文件错误形成仅含稳定错误码的 `REJECTED` Candidate/Event，不保存文件正文或原始路径。
+- 永久文件错误形成 `REJECTED` Candidate/Event，不保存文件正文或原始路径；Candidate 只保留清理过控制
+  字符与路径分隔符的尝试名称、声明媒体类型和稳定 `rejection_code`，用于 UI 诊断。
 - 取消、旧 Runtime permit 或旧 Sandbox generation/fence 在任何拒绝事实和 Storage write 之前检查，写入
   前后再次检查；迟到结果不能发布正式 Artifact。
 - `RuntimeExecutionControlError` 保留平台分类：取消映射为 `CANCELLED`，显式 temporary 映射为

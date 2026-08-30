@@ -8,6 +8,7 @@ import pytest
 from literature_agent.application.agent_artifact_service import (
     AgentArtifactServiceError,
     AgentArtifactSubmissionService,
+    _safe_rejected_candidate_value,
 )
 from literature_agent.application.ports.agent_artifact_source import AgentArtifactSourceScope
 from literature_agent.application.ports.research_agent_runtime import RuntimeTurnRequest
@@ -42,6 +43,18 @@ def _request() -> RuntimeTurnRequest:
             turn_run_id="turn-1",
         ),
     )
+
+
+def test_rejected_candidate_attempt_value_preserves_safe_name_and_removes_controls() -> None:
+    assert (
+        _safe_rejected_candidate_value("plot_quadratic.py", fallback="invalid-name")
+        == "plot_quadratic.py"
+    )
+    assert (
+        _safe_rejected_candidate_value("../bad\nname.py", fallback="invalid-name")
+        == "..�bad�name.py"
+    )
+    assert _safe_rejected_candidate_value("\x00", fallback="invalid-name") == "�"
 
 
 class _Source:
@@ -96,7 +109,7 @@ class _Service(AgentArtifactSubmissionService):
         return candidate
 
     async def _record_rejection(self, **kwargs):
-        self.rejected = kwargs["code"]
+        self.rejected = kwargs
 
 
 class _FailingCommitService(_Service):
@@ -124,6 +137,27 @@ async def test_submit_validates_download_and_records_only_small_fact() -> None:
     assert candidate.content_hash == hashlib.sha256(content).hexdigest()
     assert list(storage.values.values()) == [content]
     assert service.recorded == candidate
+
+
+@pytest.mark.asyncio
+async def test_submit_rejection_keeps_attempted_name_type_and_stable_code() -> None:
+    service = _Service(_Storage())
+
+    with pytest.raises(AgentArtifactServiceError) as caught:
+        await service.submit(
+            request=_request(),
+            permit=RuntimeExecutionPermit("turn-1", "owner-1", "attempt-1", 1),
+            source=_Source(b"print('quadratic')\n"),
+            tool_call_id="call-invalid-type",
+            path="/workspace/outputs/plot_quadratic.py",
+            name="plot_quadratic.py",
+            media_type="text/plain",
+        )
+
+    assert caught.value.code == "artifact_extension_mismatch"
+    assert service.rejected["name"] == "plot_quadratic.py"
+    assert service.rejected["media_type"] == "text/plain"
+    assert service.rejected["code"] == "artifact_extension_mismatch"
 
 
 @pytest.mark.asyncio

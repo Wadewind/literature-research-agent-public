@@ -11,6 +11,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import PurePosixPath
 from uuid import NAMESPACE_URL, uuid5
 
@@ -25,6 +26,22 @@ AGENT_ARTIFACT_MAX_BYTES = WORKSPACE_MAX_FILE_BYTES
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[^/\\\x00\r\n]{1,255}$")
+
+
+class AgentArtifactMediaType(StrEnum):
+    """正式 Agent Artifact 允许声明的固定媒体类型。"""
+
+    PNG = "image/png"
+    JPEG = "image/jpeg"
+    SVG = "image/svg+xml"
+    PDF = "application/pdf"
+    CSV = "text/csv"
+    MARKDOWN = "text/markdown"
+    TEXT = "text/plain"
+    JSON = "application/json"
+    PYTHON = "text/x-python"
+
+
 _SUPPORTED_TYPES: dict[str, tuple[str, ...]] = {
     "image/png": (".png",),
     "image/jpeg": (".jpg", ".jpeg"),
@@ -34,6 +51,7 @@ _SUPPORTED_TYPES: dict[str, tuple[str, ...]] = {
     "text/markdown": (".md", ".markdown"),
     "text/plain": (".txt",),
     "application/json": (".json",),
+    "text/x-python": (".py",),
 }
 _SVG_FORBIDDEN_ELEMENTS = {
     "script",
@@ -61,6 +79,22 @@ class AgentArtifactValidationError(ValueError):
         self.code = code
         self.safe_message = safe_message
         super().__init__(safe_message)
+
+
+def agent_artifact_supported_types() -> tuple[dict[str, object], ...]:
+    """返回可安全写入 Tool 错误的媒体类型与扩展名清单。"""
+    return tuple(
+        {"media_type": media_type, "extensions": extensions}
+        for media_type, extensions in _SUPPORTED_TYPES.items()
+    )
+
+
+def agent_artifact_supported_type_hint() -> str:
+    """返回供受限 Agent Prompt 使用的紧凑类型提示。"""
+    return "，".join(
+        f"{'/'.join(extensions)}={media_type}"
+        for media_type, extensions in _SUPPORTED_TYPES.items()
+    )
 
 
 @dataclass(frozen=True, slots=True)

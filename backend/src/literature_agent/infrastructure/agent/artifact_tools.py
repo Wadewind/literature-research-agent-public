@@ -22,7 +22,10 @@ from literature_agent.application.ports.research_agent_runtime import (
 from literature_agent.application.runtime_execution_control import (
     RuntimeExecutionControlError,
 )
-from literature_agent.domain.agent_artifact import AgentArtifactValidationError
+from literature_agent.domain.agent_artifact import (
+    AgentArtifactMediaType,
+    AgentArtifactValidationError,
+)
 from literature_agent.infrastructure.agent.sandbox_workspace import (
     SandboxLeaseStatus,
     SandboxWorkspaceLease,
@@ -119,11 +122,15 @@ class AgentArtifactToolFactory:
         async def submit_artifact(
             path: str,
             name: str,
-            media_type: str,
+            media_type: AgentArtifactMediaType,
             runtime: ToolRuntime[Any],
             source_url: str | None = None,
         ) -> str:
-            """提交 /workspace/outputs/ 中的成果；网络来源可附带 HTTP(S) source_url。"""
+            """提交 outputs 成果。
+
+            支持 PNG/JPEG/SVG/PDF/CSV/Markdown/TXT/JSON/Python (`text/x-python`)；
+            网络来源可附带 HTTP(S) source_url。
+            """
             permit = getattr(runtime.context, "runtime_permit", None)
             context_turn_run_id = getattr(runtime.context, "turn_run_id", None)
             if (
@@ -136,6 +143,9 @@ class AgentArtifactToolFactory:
                     code="artifact_runtime_context_invalid",
                     safe_message="Artifact Runtime 上下文无效",
                 )
+            declared_media_type = (
+                media_type.value if isinstance(media_type, AgentArtifactMediaType) else media_type
+            )
             try:
                 candidate = await service.submit(
                     request=request,
@@ -144,7 +154,7 @@ class AgentArtifactToolFactory:
                     tool_call_id=runtime.tool_call_id,
                     path=path,
                     name=name,
-                    media_type=media_type,
+                    media_type=declared_media_type,
                     source_url=source_url,
                 )
             except RuntimeExecutionControlError as exc:
@@ -176,7 +186,7 @@ class AgentArtifactToolFactory:
             return json.dumps(
                 {
                     "candidate_id": candidate.candidate_id,
-                    "status": candidate.status.value,
+                    "status": "validated_not_published",
                     "name": candidate.name,
                     "media_type": candidate.media_type,
                     "content_hash": candidate.content_hash,

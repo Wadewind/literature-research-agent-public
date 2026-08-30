@@ -491,9 +491,14 @@ Storage 与 ID 授权后物化到 `/workspace/inbox/`；Agent 只有显式调用
 `/workspace/outputs/` 的普通文件带出 Sandbox。平台在事务外重新读取并校验 path/type/size/MIME/magic/
 hash，再写内容寻址 staging Storage；只有业务 Turn 成功的短事务可以发布不可变 AgentArtifact。
 
-首版支持研究所需的图片、PDF、CSV、Markdown、纯文本和 JSON；未知归档、可执行文件、宏文档、symlink
-和路径穿越拒绝。不自动扫描或发布整个 `/workspace`，也不把 ReviewRun 强绑定的既有 Artifact 表直接
+首版支持研究所需的图片、PDF、CSV、Markdown、纯文本、JSON 和 UTF-8 Python 源码；`.py` 仅作为
+`text/x-python` 附件下载，不能在浏览器内联预览，响应固定带 `nosniff`。未知归档、可执行二进制、宏文档、
+symlink 和路径穿越拒绝。不自动扫描或发布整个 `/workspace`，也不把 ReviewRun 强绑定的既有 Artifact 表直接
 泛化。Playwright `browser_file_upload` 继续关闭，后续只能通过引用 Attachment ID 的平台 Tool 增加。
+
+`submit_artifact` v3 将 `media_type` 冻结为枚举 Schema，错误结果返回受支持扩展名/MIME 清单；成功只表示
+`validated_not_published`，正式发布仍要求整个 Turn 成功。REJECTED Candidate 保留经过控制字符/路径分隔符
+清理的尝试名称、声明类型和 `rejection_code`，前端不再用 `rejected.txt` 占位掩盖诊断事实。
 
 ### 受限代码分析
 
