@@ -22,6 +22,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 
 - Project 是统一工作空间，文献库是三种研究模式共享的资源底座。全站复用固定 `AppSidebar` 与 56px
   `PageBar`；项目四入口只出现在 Sidebar 的当前 Project 分区，不再由页面复制 Header、Mode Nav 或 Hero。
+- `AppSidebar` 桌面默认宽 232px，展开时由右缘 separator 在 216–288px 内调整，支持 pointer、方向键、
+  Home/End 和双击复位；窄屏仍固定为 56px icon rail。展开宽度与折叠状态共享 v1 `localStorage` 偏好，
+  既有只含 `collapsed` 的记录自动回退默认宽度。导航、会话树、PageBar 次级文字和 Chat 创建页提示统一
+  提升字号、字重与 muted 对比度，不改变页面信息架构。
 - Project 工作区现在用“文献库 / 文献问答 / 综述 / 研究助手”区分三种产品模式。Research Agent 使用
   独立 `AgentSession/AgentTurnRun`，不会把 RAG Conversation 冒充为持续 Agent Thread，也不复制官方
   Deep Agents UI 的数据层。
@@ -128,6 +132,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - **栏宽偏好隔离**：RAG 与 Agent 使用同一个纯 resize helper 和可聚焦 separator，各自保存
   `literature-agent:chat-workspace` / `agent-workspace` v1 最小记录；非法/旧版本回退默认值，Conversation、
   Evidence、Session 和 SDK 状态不进入 localStorage。
+- **应用侧栏只做小范围 UI 调整**：默认宽度保持 232px，216px 下限保留主导航与操作空间，288px 上限
+  避免挤占研究工作区。separator 常态只显示低对比 grip，hover/focus/drag 时增强；拖动期间禁用文本选择。
+  宽度与折叠状态沿用同一个版本化 UI 记录，不新建服务端偏好或把 Project/Session 事实写入浏览器。
 
 ## 失败、重试与取消行为
 
@@ -243,6 +250,11 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   自动发送，以及既有 RAG/刷新/Citation/PDF/归档只读旅程；测试页未捕获 JavaScript page error，未调用
   真实模型或外部网络。1280×720 临时截图走查确认研究切入点与底部 Composer 同屏、Dialog 内部滚动区和
   固定操作区清晰；走查后又将共享遮罩收敛到 10% 冷墨色与 1px 模糊，临时截图未作为像素基线保留。
+- 2026-08-31 的侧栏可读性与宽度增强先以偏好 schema、宽度边界和 separator 语义测试得到真实红灯；
+  完成后前端全量为 `40 files / 197 passed`，production build 通过。隔离 Playwright 侧栏用例
+  `1 passed (1.9s)`，覆盖方向键、Home/End、216–288px 边界、pointer 拖动、刷新恢复、折叠恢复、双击
+  复位与 880px 窄屏 56px icon rail；Phase 2 Fake 问答闭环另为 `1 passed (7.2s)`。1280×720 临时截图
+  确认默认宽度下项目名、导航、会话树、问题卡片和 Composer 无挤压；截图未作为像素基线保留。
 
 ## 代码入口
 
@@ -294,6 +306,8 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   未脱敏 Tool payload 均不进入前端。迁移前 Tool 调用没有可恢复预览时明确显示缺失说明。
 - Chat/Agent 的 viewport 三栏以桌面为验收主体；窄屏顺序展开且不建设 Drawer。栏宽偏好只在各自模式
   内复用，不跨设备同步。
+- 应用侧栏宽度同样只保存在当前浏览器，不跨设备同步；窄于 900px 时忽略展开宽度并固定显示 56px
+  icon rail，不在移动端提供拖拽。
 - 本轮只完成键盘入口、焦点、动效降级与桌面页面走查；未执行自动色彩对比审计、全量 WCAG、跨浏览器
   或移动端认证。既有 favicon 404 与历史 Agent Turn ToolExecution 404 仍按其真实来源保留。
 - 2026-08-30 的历史 Turn/工具展开回归使用真实本地会话验证：页面恢复 4 个 Turn、9 个 Tool disclosure、

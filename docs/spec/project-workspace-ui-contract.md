@@ -37,8 +37,9 @@ Project 工作区 canonical 路由为：
 当前项目分区。项目的“文献库 / 文献问答 / 综述 / 研究助手”四个入口只在这个分区呈现，Library 页面不再
 复制模式 tabs 或三卡入口：
 
-- Sidebar 桌面宽 232px，用户可折叠为 56px icon rail；折叠偏好只进入版本化 `localStorage` UI 状态，
-  不保存 Project、Session 或其他业务事实；
+- Sidebar 桌面默认宽 232px，展开时可在 216–288px 内小范围调整，用户也可折叠为 56px icon rail；
+  分隔条支持 pointer、方向键、Home/End 与双击复位。展开宽度和折叠状态只进入同一份版本化
+  `localStorage` UI 偏好，不保存 Project、Session 或其他业务事实；窄屏继续固定为 56px icon rail；
 - 四个入口使用 canonical route 和 `aria-current="page"` 表达当前位置；当前 Project 名只来自平台查询，
   不信任 URL 或本地缓存伪造所有权；
 - 所有主页面自行渲染统一 `PageBar`：语义化 breadcrumb、唯一页面 `h1`（≤20px）和可选 actions，

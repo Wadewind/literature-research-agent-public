@@ -5,15 +5,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppSidebarView,
+  clampSidebarWidth,
   parseSidebarPreference,
   projectIdFromPathname,
   projectModeFromPathname,
+  SIDEBAR_WIDTH,
 } from "./AppSidebar";
 
 function renderSidebar(
   pathname: string,
   options: {
     collapsed?: boolean;
+    width?: number;
     projectId?: string;
     projectName?: string;
     conversations?: Array<{ conversation_id: string; title: string; scope_type: "project"; paper_ids: string[] }>;
@@ -31,7 +34,11 @@ function renderSidebar(
       { initialEntries: [pathname] },
       createElement(AppSidebarView, {
         collapsed: options.collapsed ?? false,
+        width: options.width ?? SIDEBAR_WIDTH.default,
         onToggle: () => undefined,
+        onWidthChange: () => undefined,
+        onWidthCommit: () => undefined,
+        onWidthReset: () => undefined,
         pathname,
         projectId: options.projectId,
         project: options.projectName
@@ -91,6 +98,18 @@ describe("AppSidebar", () => {
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('aria-label="文献库"');
     expect(html).toContain('aria-label="研究助手"');
+    expect(html).not.toContain('aria-label="调整侧栏宽度"');
+  });
+
+  it("展开态提供有界且可访问的侧栏宽度控制", () => {
+    const html = renderSidebar("/library", { width: 264 });
+
+    expect(html).toContain('--app-sidebar-width:264px');
+    expect(html).toContain('role="separator"');
+    expect(html).toContain('aria-label="调整侧栏宽度"');
+    expect(html).toContain('aria-valuemin="216"');
+    expect(html).toContain('aria-valuemax="288"');
+    expect(html).toContain('aria-valuenow="264"');
   });
 
   it("在当前功能下显示最近会话与独立的新建入口", () => {
@@ -112,11 +131,28 @@ describe("AppSidebar", () => {
     expect(html).toContain('/projects/project-1/agent/session-1');
   });
 
-  it("只接受当前版本且字段完整的折叠偏好", () => {
-    expect(parseSidebarPreference('{"version":1,"collapsed":true}')).toBe(true);
-    expect(parseSidebarPreference('{"version":2,"collapsed":true}')).toBe(false);
-    expect(parseSidebarPreference('{"version":1,"collapsed":"yes"}')).toBe(false);
-    expect(parseSidebarPreference("not-json")).toBe(false);
-    expect(parseSidebarPreference(null)).toBe(false);
+  it("解析宽度偏好，并兼容只含折叠状态的既有记录", () => {
+    expect(parseSidebarPreference('{"version":1,"collapsed":true,"width":272}'))
+      .toEqual({ collapsed: true, width: 272 });
+    expect(parseSidebarPreference('{"version":1,"collapsed":true}'))
+      .toEqual({ collapsed: true, width: SIDEBAR_WIDTH.default });
+    expect(parseSidebarPreference('{"version":1,"collapsed":false,"width":999}'))
+      .toEqual({ collapsed: false, width: SIDEBAR_WIDTH.max });
+    expect(parseSidebarPreference('{"version":1,"collapsed":true,"width":"wide"}'))
+      .toEqual({ collapsed: true, width: SIDEBAR_WIDTH.default });
+    expect(parseSidebarPreference('{"version":2,"collapsed":true}'))
+      .toEqual({ collapsed: false, width: SIDEBAR_WIDTH.default });
+    expect(parseSidebarPreference('{"version":1,"collapsed":"yes"}'))
+      .toEqual({ collapsed: false, width: SIDEBAR_WIDTH.default });
+    expect(parseSidebarPreference("not-json"))
+      .toEqual({ collapsed: false, width: SIDEBAR_WIDTH.default });
+    expect(parseSidebarPreference(null))
+      .toEqual({ collapsed: false, width: SIDEBAR_WIDTH.default });
+  });
+
+  it("将侧栏宽度限制在允许区间", () => {
+    expect(clampSidebarWidth(180)).toBe(SIDEBAR_WIDTH.min);
+    expect(clampSidebarWidth(252)).toBe(252);
+    expect(clampSidebarWidth(340)).toBe(SIDEBAR_WIDTH.max);
   });
 });

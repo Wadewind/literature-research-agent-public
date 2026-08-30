@@ -1,5 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import {
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 
 import { apiFetch } from "../api/client";
@@ -7,6 +14,13 @@ import type { AgentSession, Conversation, Project } from "../api/types";
 import { chatConversationPath, chatHomePath } from "../workspace/projectWorkspace";
 
 const SIDEBAR_STORAGE_KEY = "literature-atlas.app-sidebar.v1";
+
+export const SIDEBAR_WIDTH = {
+  min: 216,
+  max: 288,
+  default: 232,
+  step: 8,
+} as const;
 
 type ProjectMode = "library" | "chat" | "reviews" | "agent";
 type SidebarIconName = "projects" | "library" | "chat" | "reviews" | "agent";
@@ -22,11 +36,21 @@ const SIDEBAR_ICON_PATHS: Record<SidebarIconName, string> = {
 interface SidebarPreferenceV1 {
   version: 1;
   collapsed: boolean;
+  width?: number;
+}
+
+interface SidebarPreference {
+  collapsed: boolean;
+  width: number;
 }
 
 interface AppSidebarViewProps {
   collapsed: boolean;
+  width: number;
   onToggle: () => void;
+  onWidthChange: (width: number) => void;
+  onWidthCommit: (width: number) => void;
+  onWidthReset: () => void;
   pathname: string;
   projectId?: string;
   project?: Pick<Project, "name" | "archived_at">;
@@ -79,30 +103,46 @@ export function projectModeFromPathname(
   return undefined;
 }
 
-function loadSidebarPreference(): boolean {
-  if (typeof window === "undefined") return false;
+const DEFAULT_SIDEBAR_PREFERENCE: SidebarPreference = {
+  collapsed: false,
+  width: SIDEBAR_WIDTH.default,
+};
+
+export function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return SIDEBAR_WIDTH.default;
+  return Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, Math.round(width)));
+}
+
+function loadSidebarPreference(): SidebarPreference {
+  if (typeof window === "undefined") return DEFAULT_SIDEBAR_PREFERENCE;
   try {
     return parseSidebarPreference(window.localStorage.getItem(SIDEBAR_STORAGE_KEY));
   } catch {
-    return false;
+    return DEFAULT_SIDEBAR_PREFERENCE;
   }
 }
 
-export function parseSidebarPreference(raw: string | null): boolean {
-  if (!raw) return false;
+export function parseSidebarPreference(raw: string | null): SidebarPreference {
+  if (!raw) return DEFAULT_SIDEBAR_PREFERENCE;
   try {
     const value = JSON.parse(raw) as Partial<SidebarPreferenceV1>;
-    return value.version === 1 && typeof value.collapsed === "boolean"
-      ? value.collapsed
-      : false;
+    if (value.version !== 1 || typeof value.collapsed !== "boolean") {
+      return DEFAULT_SIDEBAR_PREFERENCE;
+    }
+    return {
+      collapsed: value.collapsed,
+      width: typeof value.width === "number"
+        ? clampSidebarWidth(value.width)
+        : SIDEBAR_WIDTH.default,
+    };
   } catch {
-    return false;
+    return DEFAULT_SIDEBAR_PREFERENCE;
   }
 }
 
-function saveSidebarPreference(collapsed: boolean): void {
+function saveSidebarPreference(preference: SidebarPreference): void {
   if (typeof window === "undefined") return;
-  const value: SidebarPreferenceV1 = { version: 1, collapsed };
+  const value: SidebarPreferenceV1 = { version: 1, ...preference };
   try {
     window.localStorage.setItem(SIDEBAR_STORAGE_KEY, JSON.stringify(value));
   } catch {
@@ -113,7 +153,8 @@ function saveSidebarPreference(collapsed: boolean): void {
 export default function AppSidebar() {
   const { pathname } = useLocation();
   const projectId = projectIdFromPathname(pathname);
-  const [collapsed, setCollapsed] = useState(loadSidebarPreference);
+  const [preference, setPreference] = useState(loadSidebarPreference);
+  const { collapsed, width } = preference;
   const projectQuery = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => apiFetch<Project>(`/api/v1/projects/${projectId}`),
@@ -131,17 +172,35 @@ export default function AppSidebar() {
   });
 
   const toggleCollapsed = () => {
-    setCollapsed((current) => {
-      const next = !current;
+    setPreference((current) => {
+      const next = { ...current, collapsed: !current.collapsed };
       saveSidebarPreference(next);
       return next;
     });
   };
 
+  const updateWidth = (nextWidth: number) => {
+    setPreference((current) => ({ ...current, width: clampSidebarWidth(nextWidth) }));
+  };
+
+  const commitWidth = (nextWidth: number) => {
+    setPreference((current) => {
+      const next = { ...current, width: clampSidebarWidth(nextWidth) };
+      saveSidebarPreference(next);
+      return next;
+    });
+  };
+
+  const resetWidth = () => commitWidth(SIDEBAR_WIDTH.default);
+
   return (
     <AppSidebarView
       collapsed={collapsed}
+      width={width}
       onToggle={toggleCollapsed}
+      onWidthChange={updateWidth}
+      onWidthCommit={commitWidth}
+      onWidthReset={resetWidth}
       pathname={pathname}
       projectId={projectId}
       project={projectQuery.data}
@@ -156,7 +215,11 @@ export default function AppSidebar() {
 
 export function AppSidebarView({
   collapsed,
+  width,
   onToggle,
+  onWidthChange,
+  onWidthCommit,
+  onWidthReset,
   pathname,
   projectId,
   project,
@@ -243,7 +306,10 @@ export function AppSidebarView({
   };
 
   return (
-    <aside className={`app-sidebar${collapsed ? " is-collapsed" : ""}`}>
+    <aside
+      className={`app-sidebar${collapsed ? " is-collapsed" : ""}`}
+      style={{ "--app-sidebar-width": `${width}px` } as CSSProperties}
+    >
       <NavLink to="/" end className="brand app-sidebar-brand" aria-label="返回项目首页">
         <span className="brand-mark" aria-hidden="true">L·A</span>
         <span className="app-nav-label">
@@ -346,7 +412,97 @@ export function AppSidebarView({
           <span className="app-nav-label">{collapsed ? "展开" : "收起"}</span>
         </button>
       </div>
+      {!collapsed ? (
+        <SidebarResizeHandle
+          width={width}
+          onChange={onWidthChange}
+          onCommit={onWidthCommit}
+          onReset={onWidthReset}
+        />
+      ) : null}
     </aside>
+  );
+}
+
+interface SidebarResizeHandleProps {
+  width: number;
+  onChange: (width: number) => void;
+  onCommit: (width: number) => void;
+  onReset: () => void;
+}
+
+function SidebarResizeHandle({
+  width,
+  onChange,
+  onCommit,
+  onReset,
+}: SidebarResizeHandleProps) {
+  const drag = useRef<{ pointerId: number; clientX: number; width: number } | null>(null);
+  const latestWidth = useRef(width);
+
+  useEffect(() => {
+    latestWidth.current = width;
+  }, [width]);
+
+  useEffect(() => () => {
+    document.documentElement.classList.remove("is-resizing-sidebar");
+  }, []);
+
+  const finishDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!drag.current || drag.current.pointerId !== event.pointerId) return;
+    drag.current = null;
+    document.documentElement.classList.remove("is-resizing-sidebar");
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    onCommit(latestWidth.current);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    let nextWidth: number | undefined;
+    if (event.key === "ArrowLeft") nextWidth = width - SIDEBAR_WIDTH.step;
+    if (event.key === "ArrowRight") nextWidth = width + SIDEBAR_WIDTH.step;
+    if (event.key === "Home") nextWidth = SIDEBAR_WIDTH.min;
+    if (event.key === "End") nextWidth = SIDEBAR_WIDTH.max;
+    if (nextWidth === undefined) return;
+    event.preventDefault();
+    onCommit(clampSidebarWidth(nextWidth));
+  };
+
+  return (
+    <div
+      className="app-sidebar-resize-handle"
+      role="separator"
+      aria-label="调整侧栏宽度"
+      aria-orientation="vertical"
+      aria-valuemin={SIDEBAR_WIDTH.min}
+      aria-valuemax={SIDEBAR_WIDTH.max}
+      aria-valuenow={width}
+      aria-valuetext={`${width} 像素`}
+      tabIndex={0}
+      title="拖动调整侧栏宽度；双击复位"
+      onDoubleClick={onReset}
+      onKeyDown={handleKeyDown}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        drag.current = { pointerId: event.pointerId, clientX: event.clientX, width };
+        latestWidth.current = width;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        document.documentElement.classList.add("is-resizing-sidebar");
+      }}
+      onPointerMove={(event) => {
+        if (!drag.current || drag.current.pointerId !== event.pointerId) return;
+        const nextWidth = clampSidebarWidth(
+          drag.current.width + event.clientX - drag.current.clientX,
+        );
+        latestWidth.current = nextWidth;
+        onChange(nextWidth);
+      }}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
+    >
+      <span aria-hidden="true" />
+    </div>
   );
 }
 

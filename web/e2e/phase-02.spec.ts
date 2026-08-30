@@ -20,6 +20,50 @@ async function createProject(page: import("@playwright/test").Page, name: string
   await project.click();
 }
 
+test("应用侧栏支持有界调整、偏好恢复与窄屏图标栏", async ({ page }) => {
+  await page.goto("/library");
+  const resizeHandle = page.getByRole("separator", { name: "调整侧栏宽度" });
+
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "232");
+  await resizeHandle.focus();
+  await resizeHandle.press("ArrowRight");
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "240");
+
+  await page.reload();
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "240");
+  const handleBox = await resizeHandle.boundingBox();
+  if (!handleBox) throw new Error("侧栏宽度控制不可见");
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 180);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2 + 24, handleBox.y + 180);
+  await page.mouse.up();
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "264");
+
+  await page.reload();
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "264");
+  await resizeHandle.press("End");
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
+  await resizeHandle.press("ArrowRight");
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
+  await resizeHandle.press("Home");
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "216");
+  await resizeHandle.dblclick();
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "232");
+
+  await page.getByRole("button", { name: "收起侧栏" }).click();
+  await expect(resizeHandle).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "展开侧栏" })).toBeVisible();
+  await page.getByRole("button", { name: "展开侧栏" }).click();
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "232");
+
+  await page.setViewportSize({ width: 880, height: 720 });
+  await expect(resizeHandle).toBeHidden();
+  await expect(page.locator(".app-sidebar")).toHaveCSS("width", "56px");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(resizeHandle).toBeVisible();
+});
+
 test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环", async ({ page }) => {
   test.setTimeout(90_000);
   const pageErrors: string[] = [];
