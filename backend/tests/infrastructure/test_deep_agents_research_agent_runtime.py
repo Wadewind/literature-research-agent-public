@@ -77,6 +77,7 @@ from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime im
     _request_hash,
     _RuntimeToolPolicyMiddleware,
     _stream_with_deadline,
+    _tool_call_timeout,
     _tool_schema_hash,
     _TurnContext,
 )
@@ -684,6 +685,88 @@ async def test_persistent_usage_never_reexecutes_terminal_execute_effect() -> No
 
     assert replay.value.code == "agent_tool_effect_not_replayable"
     assert effects == 1
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_error_code"),
+    [
+        (
+            ToolMessage(
+                content="Error: timeout exceeds maximum allowed",
+                tool_call_id="execute-error",
+                status="error",
+            ),
+            "agent_tool_returned_error",
+        ),
+        (
+            ToolMessage(
+                content="[Command failed with exit code 1]",
+                artifact={"exit_code": 1},
+                tool_call_id="execute-error",
+                status="success",
+            ),
+            "agent_execute_nonzero_exit",
+        ),
+    ],
+)
+async def test_persistent_usage_records_returned_execute_error_without_ending_loop(
+    result: ToolMessage,
+    expected_error_code: str,
+) -> None:
+    usage = _UsageControl()
+    middleware = _PersistentUsageMiddleware(usage)
+
+    @tool
+    async def execute(command: str) -> str:
+        """离线 execute 夹具。"""
+        return command
+
+    runtime = ToolRuntime(
+        state={},
+        context=_TurnContext(
+            turn_run_id="turn-1",
+            allowed_tool_names=frozenset({"execute"}),
+            max_model_calls=8,
+            max_tool_calls=12,
+            runtime_permit=None,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="execute-error",
+        store=None,
+        tools=[execute],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": "execute",
+            "args": {"command": "false"},
+            "id": "execute-error",
+            "type": "tool_call",
+        },
+        tool=execute,
+        state={},
+        runtime=runtime,
+    )
+
+    returned = await middleware.awrap_tool_call(request, lambda _: asyncio.sleep(0, result))
+
+    assert returned is result
+    assert usage.succeeded_calls == []
+    assert usage.failed_calls == [("execute-error", expected_error_code)]
+
+
+def test_execute_tool_wait_includes_provider_cleanup_grace() -> None:
+    budget = RuntimeBudget(
+        deadline_at=datetime.now(UTC) + timedelta(minutes=5),
+        tool_timeout_seconds=30,
+        execute_timeout_seconds=60,
+        max_tool_output_bytes=64 * 1024,
+        max_input_tokens_per_model_call=60_000,
+        max_output_tokens_per_model_call=2_048,
+    )
+
+    assert _tool_call_timeout(budget, "execute") == pytest.approx(63, abs=0.1)
+    assert _tool_call_timeout(budget, "search_project_chunks") == pytest.approx(30, abs=0.1)
 
 
 async def test_persistent_usage_rejects_non_finite_tool_args_before_effect() -> None:
@@ -2430,6 +2513,7 @@ def test_executable_backend_prompt_states_sandbox_execute_capability(monkeypatch
     assert "execute" in captured["system_prompt"]
     assert "mkdir" in captured["system_prompt"]
     assert "宿主" in captured["system_prompt"]
+    assert "禁止使用 pip、uv、apt、npm 等动态安装依赖" in captured["system_prompt"]
 
 
 async def test_exact_model_harness_profile_does_not_pollute_same_provider() -> None:

@@ -827,6 +827,13 @@ Profile；`execute` 是否可见只由当前 Backend 与本轮 PolicySnapshot �
 它只能在 Session 专属 `/workspace` 中执行，包括 `mkdir`，不是宿主 Shell。相关五个 Infrastructure
 测试文件完整回归为 134 passed，未访问真实模型、OpenSandbox 或公网。
 
+同日后续真实 Turn 暴露了 `execute` 的镜像与超时协作缺口：旧可变镜像 tag 仍可让 Worker 创建不含固定
+依赖的过期环境；Adapter 的 `sh -lc` 又会重置镜像 `PATH`，即使新镜像存在固定 Python 依赖也会落到
+`/usr/bin/python3`。当前配置已 fail-closed 为完整 `@sha256:...` 引用，Adapter 改用 `sh -c`，Prompt
+禁止动态安装；命令墙钟仍为 60 秒，Runtime 仅增加 3 秒 Provider 清理等待。Tool 返回错误或 `execute`
+非零退出会写入失败 ToolCall 并作为观察返回模型纠正，不再错误显示为成功；Provider 超过清理等待或 Turn
+deadline 才终止本轮。
+
 Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何把代码执行扩大到宿主、允许
 private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/网络 Profile、正式外部写产品能力或
 长期 Memory 的决定都必须单独更新本 Spec，并在满足 `AGENTS.md` 条件时创建 ADR。raw 公网通道可能

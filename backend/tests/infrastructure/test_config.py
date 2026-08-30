@@ -181,7 +181,7 @@ def test_research_agent_runtime_defaults_offline(monkeypatch) -> None:
     assert settings.research_model_api_key is None
 
 
-def test_research_agent_sandbox_image_defaults_to_slice_7_3(monkeypatch) -> None:
+def test_research_agent_sandbox_image_defaults_to_current_pinned_digest(monkeypatch) -> None:
     """真实模式默认使用包含固定 MCP recipe 的当前派生镜像。"""
     monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", "deep_agents")
     monkeypatch.delenv("AGENT_RESEARCH_SANDBOX_IMAGE", raising=False)
@@ -203,7 +203,8 @@ def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypa
     monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_DOMAIN", "sandbox.example:443")
     monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_PROTOCOL", "https")
     monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_API_KEY", "sandbox-secret-value")
-    monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_IMAGE", "research-sandbox:fixed")
+    pinned_image = "research-sandbox@sha256:" + "a" * 64
+    monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_IMAGE", pinned_image)
     monkeypatch.setenv("AGENT_CHAT_API_KEY", "review-secret-value")
 
     settings = Settings.from_env()
@@ -216,10 +217,29 @@ def test_research_agent_real_settings_are_separate_and_secret_is_hidden(monkeypa
     assert settings.research_sandbox_domain == "sandbox.example:443"
     assert settings.research_sandbox_protocol == "https"
     assert settings.research_sandbox_api_key == "sandbox-secret-value"
-    assert settings.research_sandbox_image == "research-sandbox:fixed"
+    assert settings.research_sandbox_image == pinned_image
     assert "agent-secret-value" not in repr(settings)
     assert "sandbox-secret-value" not in repr(settings)
     assert "review-secret-value" not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    "image_ref",
+    [
+        "research-sandbox:latest",
+        "agent-service/research-agent-sandbox:phase5-7.3",
+        "research-sandbox@sha256:not-a-digest",
+    ],
+)
+def test_research_agent_real_settings_reject_mutable_sandbox_image(
+    monkeypatch,
+    image_ref: str,
+) -> None:
+    monkeypatch.setenv("AGENT_RESEARCH_RUNTIME_BACKEND", "deep_agents")
+    monkeypatch.setenv("AGENT_RESEARCH_SANDBOX_IMAGE", image_ref)
+
+    with pytest.raises(ValueError, match="不可变 sha256 digest"):
+        Settings.from_env()
 
 
 @pytest.mark.parametrize("backend", ["unknown", "DEEP_AGENTS"])

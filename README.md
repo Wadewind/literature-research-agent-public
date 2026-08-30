@@ -135,6 +135,9 @@ AGENT_RESEARCH_SANDBOX_API_KEY=...  # 与 OPENSANDBOX_SERVER_API_KEY 同值
 AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1
 ```
 
+`AGENT_RESEARCH_SANDBOX_IMAGE` 必须是完整的 `@sha256:...` 不可变引用。为避免旧进程继续创建过期环境，
+`latest`、`phase5-7.3` 等可变 tag 会在真实 Research Runtime 启动时直接被拒绝。
+
 然后在终端 2 启动应用：
 
 ```bash
@@ -223,6 +226,8 @@ AGENT_RESEARCH_SANDBOX_PROTOCOL=http
 AGENT_RESEARCH_SANDBOX_API_KEY=...
 AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1
 ```
+
+Research Sandbox 镜像配置只接受完整的 `@sha256:...` 不可变引用，不接受 `latest` 或阶段 tag。
 
 - Embedding Base URL 是 API 根路径；Adapter 会自行追加 `/embeddings`。
 - 不支持 `response_format=json_schema` 的 Chat Provider 必须设置 `AGENT_CHAT_JSON_SCHEMA_SUPPORTED=false`，业务输出仍会经过 Pydantic Schema 和 Citation Validator。

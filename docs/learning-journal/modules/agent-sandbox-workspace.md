@@ -88,8 +88,14 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 - Sandbox 固定 1 CPU、2 GiB、命令 60 秒、inline 输出 64 KiB、网络 default-deny、空 env/volume；
   Worker 不持有 Docker Socket，OpenSandbox server 是显式外部前提，不加入普通 compose。
 - OpenSandbox 0.1.15 的 execd timeout 实测只限制 RPC 等待，不终止已启动命令；Adapter 因而用固定镜像
-  coreutils `timeout` 包裹整个命令进程组，Provider 等待上限增加 2 秒清理余量。超时返回非零 exit code，
-  后续命令仍可在同一 Backend 执行。
+  coreutils `timeout` 包裹整个命令进程组，Provider 等待上限增加 2 秒清理余量。命令仍使用 60 秒墙钟，
+  Runtime 外层额外等待 3 秒让 Provider 返回并回收进程组，且不越过 Turn deadline；超时返回非零 exit
+  code，后续命令仍可在同一 Backend 执行。
+- Adapter 使用非 login 的 `sh -c`，保留固定镜像声明的 `PATH`。使用 `sh -lc` 会被 Debian 登录 shell
+  重置为系统 Python，绕过镜像内 `/opt/research-agent-venv` 的 numpy、pandas 与 matplotlib 固定依赖。
+- Deep Agents 0.7.8 会把命令非零退出包装成 `status=success` 的 `ToolMessage`，同时只在 artifact 中保留
+  `exit_code`。Runtime 因而独立检查 Tool 错误状态与 `execute` 非零退出：ToolCall 记为失败，但错误观察
+  仍返回模型进行下一步纠正；只有 Provider 在清理余量内仍未返回才终止 Turn。
 - 项目本地 Server 固定为 0.2.2，使用 `config/opensandbox-server.phase6.toml` 与
   `scripts/opensandbox-server.sh`：控制面仅监听 loopback，Docker bridge、空 host path allowlist、drop ALL、
   no-new-privileges、PID 256、固定端口范围和固定 execd/egress digest，API key 必填。三个本地 image digest
@@ -102,7 +108,8 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
   创建该目录，避免旧 generation、空目录不进入 Snapshot 或镜像切换导致 Artifact 输出契约缺失。
 - `sandbox/research-agent/Dockerfile` 固定上游 Chrome image index digest，并在构建时预装固定版本的
   Python、numpy、pandas、matplotlib 与 CJK 字体；7.3 又以 pinned Node 24 构建阶段和独立 lock 预装
-  Playwright/arXiv MCP，运行时不安装依赖。
+  Playwright/arXiv MCP，运行时不安装依赖。真实 Runtime 配置只接受完整 `@sha256:...` 镜像引用，拒绝
+  `latest` 和阶段 tag；系统提示也明确禁止 `pip`、`uv`、`apt`、`npm` 和创建环境后下载依赖。
 
 ## 重要测试与实际结果
 
@@ -122,6 +129,11 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 - 本切片范围 Ruff 通过，修改文件 Pyright 0 errors。
 - 2026-08-30 outputs 初始化与离线 Runtime/`execute` Profile 污染回归的相关 Infrastructure 组合为
   134 passed；测试完全离线，未连接真实 OpenSandbox。
+- 2026-08-30 `execute` 超时协作修复的新增定向回归为 10 passed、91 deselected；OpenSandbox Backend
+  完整离线回归为 24 passed，镜像 recipe/真实 Smoke 入口为 1 passed、3 skipped，Usage Service 为
+  8 passed。随后显式连接本地 OpenSandbox 0.2.2 与固定镜像运行安全 Smoke：3 passed（103.46s），
+  覆盖固定 Python 环境及 numpy/matplotlib 导入、资源/隔离、TTL 清理和命令超时后 Backend 继续可用；
+  本机 `.env` 改为 digest 后再次运行核心镜像/隔离用例为 1 passed（34.31s）。
 - Phase 6 Slice 6 新增 expired/session_closed 覆盖后，主智能体复核 PostgreSQL cleanup/CAS 与 Alembic
   `head → -1 → head`：13 passed（18.55s）。离线 cleanup、Server
   配置、Provider 404 和 Worker 定向均通过；项目 TOML 由本机 Server 0.2.2 `load_config` 实际解析成功。

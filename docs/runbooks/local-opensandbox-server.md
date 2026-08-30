@@ -16,6 +16,8 @@
 本机 Docker inspect 已确认上述三个 digest 存在并与镜像 ID 匹配；重建 research image 后必须显式审查并
 更新 digest，不能静默退回 tag。Server 仅监听 `127.0.0.1:8080`，使用 Docker bridge、空 host path
 allowlist、drop capability ALL、no-new-privileges、PID 256、固定端口范围和 default-deny egress。
+Worker 配置也会在真实 Research Runtime 启动时拒绝 `latest`、阶段 tag 和不完整 digest，避免旧环境被
+静默复用。
 
 ## 固定镜像准备与 fail-closed 核验
 
@@ -105,8 +107,8 @@ AGENT_RESEARCH_SANDBOX_API_KEY="$OPENSANDBOX_SERVER_API_KEY" \
 ```
 
 Smoke 创建可删除 Sandbox，验证非 root、CPU/内存/PID、无平台 Secret/宿主挂载、命令进程组超时后仍可
-继续执行、输出边界、60 秒 TTL、重复销毁，以及 Bash、Python、Node、Chromium、Playwright 与固定 Search
-MCP 的统一 default-deny。
+继续执行、固定 `python3` 指向 `/opt/research-agent-venv` 且可导入 numpy/matplotlib、输出边界、60 秒
+TTL、重复销毁，以及 Bash、Python、Node、Chromium、Playwright 与固定 Search MCP 的统一 default-deny。
 它不调用模型，也不会成功访问 arXiv。结束后检查没有残留 Sandbox/egress 容器，再停止 Server。
 
 Phase 6 的 Browser 与 public-egress 证据使用独立显式开关：

@@ -3,6 +3,7 @@
 import logging
 import math
 import os
+import re
 from dataclasses import dataclass, field
 
 _DEFAULT_APP_NAME = "Literature Review Agent"
@@ -66,6 +67,7 @@ _DEFAULT_RESEARCH_SANDBOX_IMAGE = (
     "agent-service/research-agent-sandbox@sha256:"
     "8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1"
 )
+_PINNED_OCI_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 # arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。
 _DEFAULT_ARXIV_BACKEND = "fake"
 _DEFAULT_WORKER_METRICS_PORT = 8001
@@ -404,6 +406,10 @@ class Settings:
             )
             if not research_sandbox_domain.strip() or not research_sandbox_image.strip():
                 raise ValueError("Research Sandbox domain/image 不能为空")
+            if _PINNED_OCI_IMAGE.fullmatch(research_sandbox_image) is None:
+                raise ValueError(
+                    "AGENT_RESEARCH_SANDBOX_IMAGE 必须使用不可变 sha256 digest"
+                )
         return cls(
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=debug,

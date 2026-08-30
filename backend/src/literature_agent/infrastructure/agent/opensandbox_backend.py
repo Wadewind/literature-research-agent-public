@@ -128,8 +128,7 @@ class OpenSandboxBackend(BaseSandbox):
         # OpenSandbox 0.1.15 的 execd timeout 是 RPC 等待上限，实际验证不会终止
         # 已启动的命令；因此固定镜像内再用 coreutils timeout 约束整个进程组。
         bounded_command = (
-            "timeout --kill-after=1s "
-            f"{effective_timeout}s sh -lc {shlex.quote(command)}"
+            f"timeout --kill-after=1s {effective_timeout}s sh -c {shlex.quote(command)}"
         )
         execution = self._sandbox.commands.run(
             bounded_command,

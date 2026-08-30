@@ -93,6 +93,7 @@ _TURN_METADATA_KEY = "agent_runtime_turn_id"
 _SESSION_METADATA_KEY = "agent_runtime_session_id"
 _REQUEST_HASH_METADATA_KEY = "agent_runtime_request_hash"
 _EXECUTION_METADATA_KEY = "agent_runtime_execution_id"
+_EXECUTE_PROVIDER_CLEANUP_GRACE_SECONDS = 3
 _FENCING_METADATA_KEY = "agent_runtime_fencing_token"
 _RUNTIME_REVISION_METADATA_KEY = "agent_runtime_revision"
 _GRAPH_REVISION_METADATA_KEY = "agent_graph_revision"
@@ -355,17 +356,22 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
                     "Tool effect 缺少结果缓存，禁止重复执行",
                 )
             budget = await self._control.start_turn(context.turn_run_id)
-            timeout = min(
-                budget.execute_timeout_seconds
-                if name == "execute"
-                else budget.tool_timeout_seconds,
-                _remaining_seconds(budget.deadline_at),
-            )
+            timeout = _tool_call_timeout(budget, name)
             async with asyncio.timeout(timeout):
                 result = await handler(request)
             result_bytes = _tool_result_bytes(result)
             if len(result_bytes) > budget.max_tool_output_bytes:
                 raise AgentUsageError("agent_tool_output_too_large", "Tool 输出超过安全上限")
+            failure = _tool_result_failure(name, result)
+            if failure is not None and call is not None and claimed:
+                await _record_tool_failure(
+                    self._control,
+                    context,
+                    call.reservation_key,
+                    failure[0],
+                    failure[1],
+                )
+                return result
             await self._control.succeed_tool_call(
                 context.turn_run_id,
                 call.reservation_key,
@@ -648,7 +654,8 @@ class DeepAgentsResearchAgentRuntime:
                 + (
                     "当前 Runtime 已授权 execute；它只在当前 Session 专属 Sandbox 的"
                     " /workspace 中执行 shell 命令，可以用于 mkdir 和固定依赖的数据处理，"
-                    "绝不是 Worker 宿主 Shell。"
+                    "绝不是 Worker 宿主 Shell。禁止使用 pip、uv、apt、npm 等动态安装依赖，"
+                    "也不得创建新环境下载依赖；固定依赖缺失时应直接报告。"
                     if allow_execute
                     else ""
                 )
@@ -1767,11 +1774,39 @@ def _tool_result_bytes(result: ToolMessage | Command[Any]) -> bytes:
     raise AgentUsageError("agent_tool_result_unsupported", "Tool 结果类型无法形成稳定摘要")
 
 
+def _tool_result_failure(
+    name: str,
+    result: ToolMessage | Command[Any],
+) -> tuple[str, str] | None:
+    if not isinstance(result, ToolMessage):
+        return None
+    if result.status == "error":
+        return "agent_tool_returned_error", "Tool 返回错误"
+    if name != "execute" or not isinstance(result.artifact, Mapping):
+        return None
+    exit_code = result.artifact.get("exit_code")
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+        return "agent_execute_nonzero_exit", "Sandbox 命令执行失败"
+    return None
+
+
 def _remaining_seconds(deadline_at: datetime) -> float:
     remaining = (deadline_at - datetime.now(UTC)).total_seconds()
     if remaining <= 0:
         raise AgentUsageError("agent_turn_deadline_exceeded", "Agent Turn 已超过墙钟预算")
     return remaining
+
+
+def _tool_call_timeout(budget: RuntimeBudget, name: str) -> float:
+    """命令墙钟仍受策略限制，外层只额外等待 Provider 回收进程组。"""
+    operation_timeout = (
+        budget.execute_timeout_seconds if name == "execute" else budget.tool_timeout_seconds
+    )
+    cleanup_grace = _EXECUTE_PROVIDER_CLEANUP_GRACE_SECONDS if name == "execute" else 0
+    return min(
+        operation_timeout + cleanup_grace,
+        _remaining_seconds(budget.deadline_at),
+    )
 
 
 def _replayable_tool_names(policy_snapshot: PolicySnapshot) -> frozenset[str]:

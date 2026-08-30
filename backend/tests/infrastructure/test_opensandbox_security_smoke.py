@@ -76,6 +76,12 @@ async def test_real_sandbox_is_non_root_secret_free_bounded_and_default_deny() -
         assert _assert_ok(backend, "cat /sys/fs/cgroup/pids.max").strip() == "256"
         cpu_max = _assert_ok(backend, "cat /sys/fs/cgroup/cpu.max").split()
         assert len(cpu_max) == 2 and int(cpu_max[0]) == int(cpu_max[1])
+        fixed_python = _assert_ok(
+            backend,
+            'python3 -c "import sys, matplotlib, numpy; '
+            'print(sys.executable, matplotlib.__version__, numpy.__version__)"',
+        )
+        assert fixed_python.startswith("/opt/research-agent-venv/bin/python3 ")
 
         forbidden_mounts = _assert_ok(
             backend,

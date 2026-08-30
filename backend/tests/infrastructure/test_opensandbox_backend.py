@@ -101,7 +101,7 @@ def test_execute_is_workspace_scoped_timed_and_output_bounded() -> None:
     assert result.truncated is True
     assert len(result.output.encode()) <= 64 * 1024
     executed, options = sandbox.commands.calls[0]
-    assert executed.startswith("timeout --kill-after=1s 60s sh -lc ")
+    assert executed.startswith("timeout --kill-after=1s 60s sh -c ")
     assert "python3 -c" in executed
     assert options.working_directory == "/workspace"
     assert options.timeout == timedelta(seconds=62)
