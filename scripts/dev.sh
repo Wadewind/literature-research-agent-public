@@ -8,6 +8,7 @@ WEB_DIR="${PROJECT_ROOT}/web"
 COMPOSE_FILE="${PROJECT_ROOT}/deploy/compose/compose.yml"
 ENV_FILE="${AGENT_ENV_FILE:-${PROJECT_ROOT}/.env}"
 MODE="fake"
+START_OPENSANDBOX="false"
 
 drop_unsupported_socks_proxies() {
     local proxy_name
@@ -38,7 +39,7 @@ usage() {
         "用法: ./scripts/dev.sh [--fake|--real]" \
         "" \
         "  --fake  使用 Fake Parser/Embedding/Chat/arXiv（默认，不联网）" \
-        "  --real  从 .env 读取配置，并启用 Docling、真实 Provider 与 arXiv"
+        "  --real  从 .env 读取配置，并启用 Docling、真实 Provider 与 arXiv；deep_agents 模式同时启动 OpenSandbox"
 }
 
 case "${1:-}" in
@@ -109,6 +110,26 @@ if [[ "${MODE}" == "real" ]]; then
         printf 'AGENT_EMBEDDING_DIMENSIONS 必须为 1024（与 pgvector 列一致）\n' >&2
         exit 1
     fi
+    if [[ "${AGENT_RESEARCH_RUNTIME_BACKEND:-fake}" == "deep_agents" ]]; then
+        if [[ "${AGENT_RESEARCH_SANDBOX_DOMAIN:-127.0.0.1:8080}" != "127.0.0.1:8080" ]] \
+            || [[ "${AGENT_RESEARCH_SANDBOX_PROTOCOL:-http}" != "http" ]]; then
+            printf '%s\n' \
+                '一键启动 OpenSandbox 只支持项目固定的 http://127.0.0.1:8080；远程 Server 请使用手动启动流程。' >&2
+            exit 1
+        fi
+        if [[ -z "${AGENT_RESEARCH_SANDBOX_API_KEY:-}" ]]; then
+            printf '%s\n' \
+                'deep_agents 模式缺少配置: AGENT_RESEARCH_SANDBOX_API_KEY' >&2
+            exit 1
+        fi
+        if [[ -n "${OPENSANDBOX_SERVER_API_KEY:-}" ]] \
+            && [[ "${OPENSANDBOX_SERVER_API_KEY}" != "${AGENT_RESEARCH_SANDBOX_API_KEY}" ]]; then
+            printf '%s\n' \
+                'OPENSANDBOX_SERVER_API_KEY 与 AGENT_RESEARCH_SANDBOX_API_KEY 不一致。' >&2
+            exit 1
+        fi
+        START_OPENSANDBOX="true"
+    fi
     drop_unsupported_socks_proxies
 else
     export AGENT_PARSER_BACKEND="fake"
@@ -151,6 +172,25 @@ wait_for_api_ready() {
     return 1
 }
 
+wait_for_opensandbox_ready() {
+    local opensandbox_pid="$1"
+    local attempt
+    for attempt in {1..80}; do
+        if ! kill -0 "${opensandbox_pid}" 2>/dev/null; then
+            printf 'OpenSandbox Server 在就绪前退出。\n' >&2
+            return 1
+        fi
+        if curl --noproxy '*' --fail --silent --max-time 1 \
+            http://127.0.0.1:8080/health >/dev/null 2>&1; then
+            printf 'OpenSandbox Server 已就绪。\n'
+            return 0
+        fi
+        sleep 0.25
+    done
+    printf 'OpenSandbox Server 在 20 秒内未就绪，停止其余本地服务。\n' >&2
+    return 1
+}
+
 cleanup() {
     local process_id
     trap - EXIT INT TERM
@@ -162,6 +202,28 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
+
+if [[ "${START_OPENSANDBOX}" == "true" ]]; then
+    printf '启动 OpenSandbox Server: http://127.0.0.1:8080\n'
+    (
+        exec setsid env \
+            -u AGENT_EMBEDDING_API_KEY \
+            -u AGENT_CHAT_API_KEY \
+            -u AGENT_RESEARCH_MODEL_API_KEY \
+            -u AGENT_RESEARCH_SANDBOX_API_KEY \
+            OPENSANDBOX_SERVER_API_KEY="${AGENT_RESEARCH_SANDBOX_API_KEY}" \
+            "${PROJECT_ROOT}/scripts/opensandbox-server.sh"
+    ) &
+    opensandbox_pid="$!"
+    child_pids+=("${opensandbox_pid}")
+    # Server 已获得独立环境副本；避免其专用变量继续进入 Worker/API/Web。
+    unset OPENSANDBOX_SERVER_API_KEY
+    printf '等待 OpenSandbox Server 就绪...\n'
+    wait_for_opensandbox_ready "${opensandbox_pid}"
+else
+    # Fake Agent 不需要 Sandbox Key，避免无关进程继承本地凭据。
+    unset AGENT_RESEARCH_SANDBOX_API_KEY OPENSANDBOX_SERVER_API_KEY
+fi
 
 printf '启动 Worker...\n'
 (
@@ -190,6 +252,9 @@ printf 'API Metrics: http://127.0.0.1:8000/metrics\n'
 api_pid="$!"
 child_pids+=("${api_pid}")
 
+# Browser Control 使 API 也需要 Sandbox Key；API 启动后移除父进程副本，避免 Web 继承。
+unset AGENT_RESEARCH_SANDBOX_API_KEY
+
 printf '等待 API 就绪...\n'
 wait_for_api_ready "${api_pid}"
 
@@ -200,7 +265,11 @@ printf '启动 Web: http://localhost:5173\n'
 ) &
 child_pids+=("$!")
 
-printf '按 Ctrl-C 停止 API、Worker 和 Web；PostgreSQL/Valkey 将继续运行。\n'
+if [[ "${START_OPENSANDBOX}" == "true" ]]; then
+    printf '按 Ctrl-C 停止 OpenSandbox、API、Worker 和 Web；PostgreSQL/Valkey 将继续运行。\n'
+else
+    printf '按 Ctrl-C 停止 API、Worker 和 Web；PostgreSQL/Valkey 将继续运行。\n'
+fi
 set +e
 wait -n "${child_pids[@]}"
 exit_code=$?

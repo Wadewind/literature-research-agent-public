@@ -8,6 +8,9 @@ Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目
 `docs/spec/web-ui-app-shell-redesign.md` 的最终 UI 契约日期：2026-08-28；Slice 1 精简产品契约与威胁模型
 完成日期：2026-08-28；Slice 2 Agent 输出 Artifact 完成日期：2026-08-28；Slice 3 Browser 画面与跨 Turn
 人工控制完成日期：2026-08-28；Slice 4 Agent 输入附件完成日期：2026-08-28。
+2026-08-31 补充本地开发编排：`scripts/dev.sh --real` 仅在 `deep_agents` 模式启动固定本地 OpenSandbox，
+以同一 Sandbox API Key 等待 `/health` 后再启动 Worker，并在统一进程组清理中停止 Server；Fake 与远程
+Server 路径不扩展。
 Slice 5 固定能力、Project Context 与硬预算实现完成日期：2026-08-28。
 Slice 6 Workspace/Sandbox 与统一 egress 强化完成日期：2026-08-28。
 ADR-0012 将 Slice 7 从固定 arXiv Host allowlist 调整为版本化 Sandbox public-egress Profile 的日期：

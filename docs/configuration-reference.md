@@ -141,9 +141,11 @@ Sandbox 部署配置：
 - `AGENT_RESEARCH_SANDBOX_API_KEY`；
 - `AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1`。
 
-OpenSandbox Server 独立于 `scripts/dev.sh` 启动。项目版本化配置是
-`config/opensandbox-server.phase6.toml`，入口是 `scripts/opensandbox-server.sh`；不会读取或修改用户 home
-配置，也不能由 API 请求覆盖。运行前必须用环境变量提供 Server/Worker 共享的本地 API key。完整步骤见
+`scripts/dev.sh --real` 在 `deep_agents` 模式下会启动并管理本地 OpenSandbox Server；手动启动 Worker 时
+仍使用 `scripts/opensandbox-server.sh` 独立启动。项目版本化配置是
+`config/opensandbox-server.phase6.toml`；不会读取或修改用户 home 配置，也不能由 API 请求覆盖。一键脚本
+把 `AGENT_RESEARCH_SANDBOX_API_KEY` 只复制给 Server 子进程的 `OPENSANDBOX_SERVER_API_KEY`，不要求在
+`.env` 重复保存同一 Secret。完整步骤见
 [`本地 OpenSandbox Server`](runbooks/local-opensandbox-server.md)。当前配置固定 Server 0.2.2、loopback
 控制面、Docker bridge、无 host volume、drop ALL、no-new-privileges、PID 256 和固定 execd/egress digest。
 它提供本地 default-deny 行为证据，但未配置 secure runtime，不是公网多用户隔离方案。

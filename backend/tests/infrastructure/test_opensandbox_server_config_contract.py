@@ -49,3 +49,15 @@ def test_server_start_script_requires_pinned_server_and_api_key() -> None:
     assert "OPENSANDBOX_SERVER_API_KEY" in script
     assert "OPENSANDBOX_INSECURE_SERVER" not in script
     assert 'exec "${server_executable}" --config "${CONFIG_FILE}"' in script
+
+
+def test_real_deep_agents_dev_script_manages_local_server_lifecycle() -> None:
+    script = (PROJECT_ROOT / "scripts" / "dev.sh").read_text(encoding="utf-8")
+
+    assert '"${AGENT_RESEARCH_RUNTIME_BACKEND:-fake}" == "deep_agents"' in script
+    assert "deep_agents 模式缺少配置: AGENT_RESEARCH_SANDBOX_API_KEY" in script
+    assert 'OPENSANDBOX_SERVER_API_KEY="${AGENT_RESEARCH_SANDBOX_API_KEY}"' in script
+    assert "http://127.0.0.1:8080/health" in script
+    assert 'child_pids+=("${opensandbox_pid}")' in script
+    assert "unset AGENT_RESEARCH_SANDBOX_API_KEY" in script
+    assert "OPENSANDBOX_INSECURE_SERVER" not in script

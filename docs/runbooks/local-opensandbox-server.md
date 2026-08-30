@@ -81,7 +81,18 @@ image 是本地演示资产，没有在本阶段提供可跨机器获取的生�
 
 ## 启动
 
-先安装固定 Server，并准备固定镜像。不要把 API key 写入仓库或命令历史；以下使用隐藏输入：
+先安装固定 Server，并准备固定镜像。在根目录 `.env` 选择 `deep_agents`、配置
+`AGENT_RESEARCH_SANDBOX_API_KEY` 后，推荐使用一键脚本：
+
+```bash
+./scripts/dev.sh --real
+```
+
+一键脚本只在 `deep_agents` 模式启动本地 Server，把该 Key 映射到 Server 子进程所需的
+`OPENSANDBOX_SERVER_API_KEY`，等待 `http://127.0.0.1:8080/health` 就绪后再启动 Worker，并在退出时一并
+停止 Server。它不会安装 Server、拉取或重建镜像，也不支持管理远程 Server。
+
+如需脱离一键脚本手动启动，不要把 API key 写入仓库或命令历史；以下使用隐藏输入：
 
 ```bash
 uv tool install 'opensandbox-server==0.2.2'
@@ -91,9 +102,9 @@ export OPENSANDBOX_SERVER_API_KEY
 ./scripts/opensandbox-server.sh
 ```
 
-另一个终端启动 `--real` Worker/API 时，把同一值作为
-`AGENT_RESEARCH_SANDBOX_API_KEY`，并保持 domain/protocol/image 与 `.env.example` 一致。脚本会拒绝错误
-Server 版本和空 API key；不会启用 insecure bypass。
+另一个终端手动启动 Worker/API 时，把同一值作为 `AGENT_RESEARCH_SANDBOX_API_KEY`，并保持
+domain/protocol/image 与 `.env.example` 一致。Server 入口会拒绝错误版本和空 API key；不会启用 insecure
+bypass。
 
 ## 显式安全 Smoke
 
