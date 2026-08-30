@@ -5,7 +5,7 @@ import subprocess
 import sys
 from typing import cast
 
-from sqlalchemy import Table, create_engine, inspect
+from sqlalchemy import Table, create_engine, inspect, text
 from testcontainers.community.postgres import PostgresContainer
 
 from literature_agent.infrastructure.persistence.models import (
@@ -357,7 +357,76 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
             finally:
                 engine.dispose()
 
+        run_alembic("upgrade", "e4a7c2f9b6d1")
+        engine = create_engine(url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("""
+                    INSERT INTO papers (
+                        paper_id, owner_id, merged_into_paper_id, created_at, archived_at
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000001',
+                        'migration-owner', NULL, now(), NULL
+                    )
+                """))
+                connection.execute(text("""
+                    INSERT INTO paper_versions (
+                        version_id, paper_id, owner_id, file_hash, storage_key,
+                        size_bytes, content_type, display_filename,
+                        current_parse_revision_id, ingestion_run_id,
+                        is_deduplication_canonical, created_at
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000002',
+                        '00000000-0000-0000-0000-000000000001',
+                        'migration-owner', :file_hash, 'migration/paper.pdf',
+                        100, 'application/pdf', '2401.00001.pdf',
+                        NULL, NULL, true, now()
+                    )
+                """), {"file_hash": "f" * 64})
+                connection.execute(text("""
+                    INSERT INTO document_parse_revisions (
+                        revision_id, version_id, parser_name, parser_version,
+                        parser_profile_hash, status, config, error, degraded,
+                        warnings, created_at, completed_at
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000003',
+                        '00000000-0000-0000-0000-000000000002',
+                        'fixture', '1.0', :profile_hash, 'succeeded',
+                        '{}'::jsonb, NULL, false, '[]'::jsonb, now(), now()
+                    )
+                """), {"profile_hash": "a" * 64})
+                connection.execute(text("""
+                    INSERT INTO document_elements (
+                        element_id, revision_id, element_type, sequence,
+                        parent_element_id, section_path, text, payload,
+                        content_hash, warnings
+                    ) VALUES (
+                        '00000000-0000-0000-0000-000000000004',
+                        '00000000-0000-0000-0000-000000000003',
+                        'title', 1, NULL, NULL, '  Migrated\n  Paper   Title  ',
+                        '{}'::jsonb, :content_hash, '[]'::jsonb
+                    )
+                """), {"content_hash": "c" * 64})
+                connection.execute(text("""
+                    UPDATE paper_versions
+                    SET current_parse_revision_id =
+                        '00000000-0000-0000-0000-000000000003'
+                    WHERE version_id = '00000000-0000-0000-0000-000000000002'
+                """))
+        finally:
+            engine.dispose()
         run_alembic("upgrade", "head")
+        engine = create_engine(url)
+        try:
+            with engine.connect() as connection:
+                migrated_title = connection.execute(text("""
+                    SELECT title, title_source
+                    FROM papers
+                    WHERE paper_id = '00000000-0000-0000-0000-000000000001'
+                """)).one()
+            assert migrated_title == ("Migrated Paper Title", "parsed_document")
+        finally:
+            engine.dispose()
         state_check = candidate_checks()["ck_agent_candidate_state_fields"]
         assert all(
             value in state_check
@@ -373,6 +442,8 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_tool_calls")
         assert has_table("agent_sandbox_cleanups")
         assert has_column("agent_policy_snapshots", "network_profile_hash")
+        assert has_column("papers", "title")
+        assert has_column("papers", "title_source")
         assert {
             "ck_agent_attachment_version",
             "ck_agent_attachment_size",
@@ -381,6 +452,10 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
             "ck_agent_message_attachment_ordinal",
         } <= attachment_constraints()
         run_alembic("downgrade", "-1")
+        assert not has_column("papers", "title")
+        assert not has_column("papers", "title_source")
+        assert has_column("agent_policy_snapshots", "network_profile_hash")
+        run_alembic("downgrade", "b6c1e4f8a2d7")
         assert has_table("agent_browser_control_leases")
         assert has_table("agent_attachments")
         assert has_table("agent_message_attachments")
@@ -390,7 +465,7 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_sandbox_cleanups")
         assert not has_column("agent_policy_snapshots", "network_profile_hash")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
-        run_alembic("downgrade", "-1")
+        run_alembic("downgrade", "a8d2f6c4e1b9")
         assert not has_table("agent_sandbox_cleanups")
         run_alembic("upgrade", "head")
         assert has_table("agent_browser_control_leases")
@@ -398,5 +473,7 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
         assert has_table("agent_turn_usages")
         assert has_table("agent_sandbox_cleanups")
         assert has_column("agent_policy_snapshots", "network_profile_hash")
+        assert has_column("papers", "title")
+        assert has_column("papers", "title_source")
         assert "ck_agent_candidate_state_fields" in candidate_checks()
         run_alembic("check")

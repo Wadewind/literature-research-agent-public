@@ -20,7 +20,7 @@ from literature_agent.domain.exceptions import (
     PaperVersionNotFoundError,
     ProjectNotFoundError,
 )
-from literature_agent.domain.paper import Paper
+from literature_agent.domain.paper import Paper, PaperTitleSource
 from literature_agent.domain.paper_version import PaperVersion
 from literature_agent.domain.project_paper import ProjectPaper
 
@@ -42,6 +42,8 @@ class PaperListItem:
     """个人文献库或 Project 文献列表条目。"""
 
     paper_id: str
+    title: str | None
+    title_source: PaperTitleSource | None
     created_at: datetime
     version: PaperVersionSummary
     project_ids: tuple[str, ...]
@@ -155,6 +157,8 @@ class PaperQueryService[TSession: Session]:
     ) -> PaperListItem:
         return PaperListItem(
             paper_id=paper.paper_id,
+            title=paper.title,
+            title_source=paper.title_source,
             created_at=paper.created_at,
             version=PaperVersionSummary(
                 version_id=version.version_id,

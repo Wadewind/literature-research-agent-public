@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from literature_agent.domain.paper import create_paper
+from literature_agent.domain.paper import PaperTitleSource, create_paper
 from literature_agent.infrastructure.persistence.paper_repository import (
     SqlalchemyPaperRepository,
 )
@@ -76,6 +76,28 @@ async def test_update_persists_archived_at(
     restored = await repo.get_by_id(paper.paper_id)
     assert restored is not None
     assert restored.is_archived is False
+
+
+@pytest.mark.asyncio
+async def test_title_and_source_round_trip(
+    repo: SqlalchemyPaperRepository,
+    session: AsyncSession,
+    project: str,
+) -> None:
+    """标题及来源可新增、更新并从 PostgreSQL 还原为领域枚举。"""
+    paper = create_paper(owner_id="user-1")
+    await repo.add(paper)
+    await session.commit()
+
+    await repo.update(
+        paper.with_title("A Parsed Paper Title", PaperTitleSource.PARSED_DOCUMENT)
+    )
+    await session.commit()
+
+    fetched = await repo.get_by_id(paper.paper_id)
+    assert fetched is not None
+    assert fetched.title == "A Parsed Paper Title"
+    assert fetched.title_source is PaperTitleSource.PARSED_DOCUMENT
 
 
 @pytest.mark.asyncio

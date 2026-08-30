@@ -31,7 +31,7 @@ from literature_agent.domain.exceptions import (
     RunConcurrentModificationError,
     RunNotFoundError,
 )
-from literature_agent.domain.paper import create_paper
+from literature_agent.domain.paper import PaperTitleSource, create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import create_outbox_entry
@@ -414,7 +414,11 @@ class ArxivProjectImportService[TSession: Session]:
             )
             created_run_id: str | None = None
             if version is None:
-                paper = create_paper(actor.owner_id)
+                paper = create_paper(
+                    actor.owner_id,
+                    title=str(source.metadata_snapshot["title"]),
+                    title_source=PaperTitleSource.ARXIV_METADATA,
+                )
                 ingestion_run = create_run(
                     project_id=project_id,
                     owner_id=actor.owner_id,
@@ -475,6 +479,13 @@ class ArxivProjectImportService[TSession: Session]:
                     # 与 ProjectLibrary/Phase1 上传保持一致：不静默恢复用户已归档论文。
                     # 直接失败也优于绑定一个后续 RAG 范围不可见的来源。
                     raise ArxivError("review_source_paper_archived", temporary=False)
+                titled_paper = paper.with_title(
+                    str(source.metadata_snapshot["title"]),
+                    PaperTitleSource.ARXIV_METADATA,
+                )
+                if titled_paper is not paper:
+                    await self._paper_repo_factory(session).update(titled_paper)
+                    paper = titled_paper
                 relation_repo = self._project_paper_repo_factory(session)
                 if await relation_repo.get(project_id, paper.paper_id) is None:
                     await relation_repo.add(

@@ -22,6 +22,7 @@ from literature_agent.domain.exceptions import (
     ProjectArchivedError,
     ProjectNotFoundError,
 )
+from literature_agent.domain.paper import PaperTitleSource
 from literature_agent.infrastructure.persistence.paper_repository import (
     SqlalchemyPaperRepository,
 )
@@ -53,6 +54,8 @@ class PaperListItemResponse(BaseModel):
     """个人文献库或 Project 文献列表条目。"""
 
     paper_id: str
+    title: str | None
+    title_source: PaperTitleSource | None
     created_at: datetime
     version: VersionSummaryResponse
     project_ids: list[str]
@@ -153,6 +156,8 @@ def _response(item: PaperListItem) -> PaperListItemResponse:
     """把应用层 Paper 条目转换成 HTTP 响应。"""
     return PaperListItemResponse(
         paper_id=item.paper_id,
+        title=item.title,
+        title_source=item.title_source,
         created_at=item.created_at,
         version=VersionSummaryResponse(
             version_id=item.version.version_id,

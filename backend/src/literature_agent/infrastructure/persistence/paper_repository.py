@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from literature_agent.application.ports.paper_repository import PaperRepository
-from literature_agent.domain.paper import Paper
+from literature_agent.domain.paper import Paper, PaperTitleSource
 from literature_agent.infrastructure.persistence.models import PaperORM
 
 
@@ -15,6 +15,8 @@ def _to_domain(orm: PaperORM) -> Paper:
         owner_id=orm.owner_id,
         created_at=orm.created_at,
         archived_at=orm.archived_at,
+        title=orm.title,
+        title_source=PaperTitleSource(orm.title_source) if orm.title_source else None,
     )
 
 
@@ -25,6 +27,8 @@ def _to_orm(paper: Paper) -> PaperORM:
         owner_id=paper.owner_id,
         created_at=paper.created_at,
         archived_at=paper.archived_at,
+        title=paper.title,
+        title_source=paper.title_source.value if paper.title_source else None,
     )
 
 
@@ -50,6 +54,8 @@ class SqlalchemyPaperRepository(PaperRepository):
         if orm is None:
             return
         orm.archived_at = paper.archived_at
+        orm.title = paper.title
+        orm.title_source = paper.title_source.value if paper.title_source else None
 
     async def get_by_id(self, paper_id: str) -> Paper | None:
         """按 ID 查询 Paper。"""

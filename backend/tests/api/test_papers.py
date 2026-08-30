@@ -15,7 +15,7 @@ from literature_agent.application.paper_query_service import PaperQueryService
 from literature_agent.application.paper_service import PaperService
 from literature_agent.application.project_library_service import ProjectLibraryService
 from literature_agent.domain.actor import ActorContext
-from literature_agent.domain.paper import create_paper
+from literature_agent.domain.paper import PaperTitleSource, create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.project import create_project
 from literature_agent.domain.project_paper import create_project_paper
@@ -73,7 +73,11 @@ async def fixture():
     other = create_project(owner_id="user-1", name="项目二", description="")
     await fx.project_repo.add(project)
     await fx.project_repo.add(other)
-    paper = create_paper(owner_id="user-1")
+    paper = create_paper(
+        owner_id="user-1",
+        title="Attention Is All You Need",
+        title_source=PaperTitleSource.PARSED_DOCUMENT,
+    )
     await fx.paper_repo.add(paper)
     version = create_paper_version(
         paper_id=paper.paper_id,
@@ -128,6 +132,8 @@ async def test_project_and_personal_library_lists(fixture) -> None:
     assert other_response.json() == []
     item = project_response.json()[0]
     assert item["paper_id"] == paper.paper_id
+    assert item["title"] == "Attention Is All You Need"
+    assert item["title_source"] == "parsed_document"
     assert item["version"]["version_id"] == version.version_id
     assert item["version"]["parse_ready"] is True
     assert library_response.json()[0]["project_ids"] == [project.project_id]

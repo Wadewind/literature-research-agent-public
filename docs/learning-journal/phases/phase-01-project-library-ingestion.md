@@ -76,6 +76,11 @@ Paper                         稳定的学术作品身份和书目信息
 
 Phase 1 允许 Paper 元数据不完整。PDF 中提取的标题等信息必须记录来源；DOI、作者和年份未经本地或外部元数据校验不能视为已验证事实。
 
+> 2026-08-30 补充：`Paper.title` 与 `Paper.title_source` 成对存在，当前来源为
+> `arxiv_metadata` 或 `parsed_document`。arXiv 元数据优先于 PDF 解析标题；解析成功只补齐缺失标题，
+> 不覆盖已有 arXiv 标题。迁移先从 Review Source 元数据快照回填，再从当前 Parse Revision 的首个
+> TITLE Element 回填，仍未知时保持 `NULL`，由 UI 回退显示 Version 文件名而不伪造书目标题。
+
 ### Element
 
 Element 是规范化后的文档单元，例如标题、章节标题、段落、列表项、表格、公式、图片、题注、页眉和页脚。最低信息包括：

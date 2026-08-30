@@ -15,6 +15,7 @@ import type {
 import { createScopeSelection, toggleScopePaper, type ScopeSelection } from "../conversations/scopeSelection";
 import { ensureUploadIntent, type UploadIntent } from "../library/uploadIntent";
 import PageBar from "../components/PageBar";
+import PaperTitle from "../components/PaperTitle";
 import { chatHomePath, chatPreselectionPath } from "../workspace/projectWorkspace";
 
 function formatSize(bytes: number): string {
@@ -211,7 +212,7 @@ export default function LibraryPage() {
           <p className="eyebrow">FROM PERSONAL LIBRARY</p><h2>收录已有文献</h2><p>不再上传，也不重复解析。</p>
           {libraryQuery.isPending && <p className="muted">正在检查个人文献库…</p>}
           {available.length === 0 && !libraryQuery.isPending && <div className="reuse-empty">暂无可收录的其他文献</div>}
-          <div className="reuse-list">{available.map((paper) => <div key={paper.paper_id}><span><strong>{paper.version.display_filename}</strong><small>{paper.version.parse_ready ? "已解析" : "处理中"} · {formatSize(paper.version.size_bytes)}</small></span><button type="button" className="button-quiet" disabled={archived || addMutation.isPending} onClick={() => addMutation.mutate(paper)}>+收录</button></div>)}</div>
+          <div className="reuse-list">{available.map((paper) => <div key={paper.paper_id}><span><strong><PaperTitle paper={paper} /></strong><small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "处理中"} · {formatSize(paper.version.size_bytes)}</small></span><button type="button" className="button-quiet" disabled={archived || addMutation.isPending} onClick={() => addMutation.mutate(paper)}>+收录</button></div>)}</div>
           {addMutation.isError && <p className="error-text">{errorMessage(addMutation.error)}</p>}
           <Link className="text-link" to="/library">查看完整个人文献库 →</Link>
         </div>
@@ -292,7 +293,7 @@ function PaperRow({ paper, index, projectId, archivedProject, selected, removing
   return (
     <article className={`project-paper-row ${paperArchived ? "archived-row" : ""}`}>
       <label className="paper-select" title="选择用于多篇问答"><input type="checkbox" checked={selected} onChange={onToggle} disabled={archivedProject || paperArchived} /><span>{String(index + 1).padStart(2, "0")}</span></label>
-      <div className="paper-identity"><div className="identity-title"><h3>{paper.version.display_filename}</h3>{paperArchived && <span className="badge badge-warn">个人库已归档</span>}</div><p><span>{formatSize(paper.version.size_bytes)}</span><span className="mono">VER {paper.version.version_id.slice(0, 8)}</span></p></div>
+      <div className="paper-identity"><div className="identity-title"><h3><PaperTitle paper={paper} /></h3>{paperArchived && <span className="badge badge-warn">个人库已归档</span>}</div><p><span className="paper-filename" title={paper.version.display_filename}>{paper.version.display_filename}</span><span>{formatSize(paper.version.size_bytes)}</span><span className="mono">VER {paper.version.version_id.slice(0, 8)}</span></p></div>
       <div className="paper-state"><span className={`status-dot ${indexReady ? "ready" : "working"}`} /><span>{indexText}</span>{indexQuery.data?.indexing_run_id && !indexReady && <Link to={`/runs/${indexQuery.data.indexing_run_id}`}>查看索引 Run</Link>}</div>
       <div className="paper-actions"><button className="button-ask-inline" type="button" disabled={archivedProject || paperArchived} onClick={onAsk}>询问此篇</button><a href={`/api/v1/projects/${projectId}/paper-versions/${paper.version.version_id}/file`} target="_blank" rel="noreferrer">原文</a>{paper.version.parse_ready && <Link to={`/projects/${projectId}/versions/${paper.version.version_id}/document`}>结构预览</Link>}<button className="button-text-warn" type="button" disabled={archivedProject} onClick={onArchive}>{paperArchived ? "恢复个人库资产" : "归档个人库资产"}</button><button className="button-text-danger" type="button" disabled={archivedProject || removing} onClick={onRemove}>{removing ? "移除中" : "移出项目"}</button></div>
     </article>

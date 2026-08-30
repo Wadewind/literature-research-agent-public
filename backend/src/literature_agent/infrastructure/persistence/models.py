@@ -1072,6 +1072,8 @@ class PaperORM(Base):
         default=lambda: str(uuid4()),
     )
     owner_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    title_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     merged_into_paper_id: Mapped[str | None] = mapped_column(
         ForeignKey("papers.paper_id"),
         nullable=True,
@@ -1084,6 +1086,18 @@ class PaperORM(Base):
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "(title IS NULL AND title_source IS NULL) OR "
+            "(title IS NOT NULL AND title_source IS NOT NULL)",
+            name="ck_papers_title_source_pair",
+        ),
+        CheckConstraint(
+            "title_source IS NULL OR title_source IN "
+            "('arxiv_metadata','parsed_document')",
+            name="ck_papers_title_source",
+        ),
     )
 
 
@@ -1497,6 +1511,22 @@ class ModelInvocationORM(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         nullable=False,
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "requested_max_tokens IS NULL OR requested_max_tokens > 0",
+            name="ck_model_invocation_requested_max_tokens",
+        ),
+        CheckConstraint(
+            "finish_reason IS NULL OR finish_reason IN "
+            "('stop','length','content_filter','tool_calls','function_call','other')",
+            name="ck_model_invocation_finish_reason",
+        ),
+        CheckConstraint(
+            "(response_bytes IS NULL AND response_sha256 IS NULL) OR "
+            "(response_bytes >= 0 AND response_sha256 ~ '^[0-9a-f]{64}$')",
+            name="ck_model_invocation_response_fingerprint",
+        ),
     )
 
 

@@ -7,6 +7,7 @@ import type { Conversation, PaperListItem, Project } from "../api/types";
 import ChatWorkspaceFrame from "../components/ChatWorkspaceFrame";
 import ConversationRail from "../components/ConversationRail";
 import PageBar from "../components/PageBar";
+import PaperTitle from "../components/PaperTitle";
 import {
   createScopeSelection,
   scopeRequest,
@@ -132,8 +133,8 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
                         onChange={() => setScopeDraft(toggleScopePaper(selection, paper.paper_id))}
                       />
                       <span>
-                        <strong>{paper.version.display_filename}</strong>
-                        <small>{paper.version.parse_ready ? "已解析" : "等待解析"}{paper.archived_at ? " · 已归档" : ""}</small>
+                        <strong><PaperTitle paper={paper} /></strong>
+                        <small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "等待解析"}{paper.archived_at ? " · 已归档" : ""}</small>
                       </span>
                     </label>
                   ))}
@@ -164,7 +165,7 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
             </dl>
             {selectedPapers.length > 0 ? (
               <ol className="scope-paper-summary">
-                {selectedPapers.map((paper) => <li key={paper.paper_id}>{paper.version.display_filename}</li>)}
+                {selectedPapers.map((paper) => <li key={paper.paper_id}><PaperTitle paper={paper} /></li>)}
               </ol>
             ) : (
               <p className="muted">回答只会引用本次范围内经过校验的 Evidence。</p>

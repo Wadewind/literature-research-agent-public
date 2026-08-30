@@ -15,6 +15,7 @@ build/
 
 # Node / 前端
 node_modules/
+.playwright-cli/
 web/test-results/
 web/playwright-report/
 

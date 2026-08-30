@@ -774,6 +774,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
         event_repo_factory=SqlalchemyEventRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
         paper_version_repo_factory=SqlalchemyPaperVersionRepository,
         parse_revision_repo_factory=SqlalchemyParseRevisionRepository,
         element_repo_factory=SqlalchemyElementRepository,

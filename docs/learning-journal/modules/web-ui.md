@@ -61,6 +61,12 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 
 - 前端不持有任何业务事实：列表与状态全部来自 PostgreSQL 支撑的 REST API；SSE 事件流由后端从 PostgreSQL 重放/推送（见 `run-event.md`）。
 - `/library` 展示 owner 范围的个人文献资产及其 Project 收录范围；Project 页面并行读取当前收录与个人库，可直接收录已有 PaperVersion。移出 Project 只删除 `ProjectPaper`，不会删除 PDF 或解析结果。
+- 个人文献库使用约 68px 的紧凑书目行：标题为一级信息，文件名、大小和添加日期为二级信息；状态脊柱
+  表达已解析、处理中和归档。工具栏支持标题/文件名搜索、状态与 Project 筛选、最近添加/标题排序；
+  Project 标签最多直接显示两个，其余以 `+N` 汇总。
+- `PaperTitle` 是个人库、Project 文献行、已有文献复用列表和 Chat 范围选择的共享投影：优先显示
+  `Paper.title`，缺失时回退 `PaperVersion.display_filename`。标题只通过 CSS 截断，完整文本保留在
+  `title` 属性中供鼠标悬停查看；文件名仍作为可追溯的次级信息显示。
 - Project 列表使用 `ProjectPaper.selected_version_id` 固定的 Version，不使用“最新 Version”隐式切换语料；该边界会直接被 Phase 2 Retrieval 继承。
 - 上传幂等键由浏览器生成：选择新文件时 `crypto.randomUUID()` 生成新 Key，同一文件（同名同大小）重试复用同一 Key（`src/library/uploadIntent.ts`）。
 - 上传响应区分新建、复用和已收录：新文件带 `run_id` 进入 Run 页；复用已解析文件时 `run_id=null` 并直接刷新文献库。
@@ -238,6 +244,7 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   `reviewHumanInput.ts`、`reviewResults.ts`、`reviewListRefresh.ts`
 - SSE：`web/src/runs/useRunEvents.ts`、`eventStore.ts`、`runStatus.ts`
 - RAG 交互状态：`web/src/conversations/messageIntent.ts`、`scopeSelection.ts`
+- 文献标题与目录筛选：`web/src/components/PaperTitle.tsx`、`web/src/library/paperCatalog.ts`
 - API 封装：`web/src/api/client.ts`、`types.ts`
 - 后端消费端点：`backend/src/literature_agent/api/conversations.py`、`documents.py`、`papers.py`、`projects.py`
 - Review 后端读路径：`backend/src/literature_agent/api/reviews.py`、
@@ -274,6 +281,11 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - 2026-08-30 的历史 Turn/工具展开回归使用真实本地会话验证：页面恢复 4 个 Turn、9 个 Tool disclosure、
   4 个研究过程 disclosure，角色标题计数为 0，浏览器控制台无错误；前端全量为 32 files / 176 passed，
   production build 通过。
+- 2026-08-30 的文献标题与个人库密度优化增加 2 个测试文件 / 6 个断言，覆盖标题回退、完整 title
+  属性、组合筛选和稳定排序；前端全量为 36 files / 187 passed，生产构建通过。后端标题领域/API/导入
+  定向回归为 43 passed，迁移 head 为
+  `a9e3d5f7b1c4`，PostgreSQL 往返与升降级为 6 passed。1440×1000 与 390×844 浏览器走查确认书目行
+  为 68px、桌面单行/窄屏双行截断、搜索生效且均无横向溢出。
 
 ## 60 秒面试说明
 

@@ -25,6 +25,7 @@ from literature_agent.application.ports.event_notifier import (
 )
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.outbox_repository import OutboxRepository
+from literature_agent.application.ports.paper_repository import PaperRepository
 from literature_agent.application.ports.paper_version_repository import (
     PaperVersionRepository,
 )
@@ -34,12 +35,14 @@ from literature_agent.application.ports.parse_revision_repository import (
 from literature_agent.application.ports.run_repository import RunRepository
 from literature_agent.application.ports.session import Session
 from literature_agent.domain.document_element import (
+    ElementType,
     ParsedDocument,
     detect_document_warnings,
     normalize_parsed_document,
 )
 from literature_agent.domain.event import create_event
 from literature_agent.domain.exceptions import RunConcurrentModificationError
+from literature_agent.domain.paper import PaperTitleSource
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.parse_revision import (
     DocumentParseRevision,
@@ -72,6 +75,7 @@ class IngestionExecutor[TSession: Session]:
         session_factory: Callable[[], AbstractAsyncContextManager[TSession]],
         run_repo_factory: Callable[[TSession], RunRepository],
         event_repo_factory: Callable[[TSession], EventRepository],
+        paper_repo_factory: Callable[[TSession], PaperRepository],
         paper_version_repo_factory: Callable[[TSession], PaperVersionRepository],
         parse_revision_repo_factory: Callable[[TSession], ParseRevisionRepository],
         element_repo_factory: Callable[[TSession], ElementRepository],
@@ -89,6 +93,7 @@ class IngestionExecutor[TSession: Session]:
             session_factory: 返回异步上下文管理器的工厂，用于控制事务。
             run_repo_factory: 根据 session 创建 RunRepository 的工厂。
             event_repo_factory: 根据 session 创建 EventRepository 的工厂。
+            paper_repo_factory: 根据 session 创建 PaperRepository 的工厂。
             paper_version_repo_factory: 根据 session 创建 PaperVersionRepository 的工厂。
             parse_revision_repo_factory: 根据 session 创建 ParseRevisionRepository 的工厂。
             element_repo_factory: 根据 session 创建 ElementRepository 的工厂。
@@ -103,6 +108,7 @@ class IngestionExecutor[TSession: Session]:
         self._session_factory = session_factory
         self._run_repo_factory = run_repo_factory
         self._event_repo_factory = event_repo_factory
+        self._paper_repo_factory = paper_repo_factory
         self._paper_version_repo_factory = paper_version_repo_factory
         self._parse_revision_repo_factory = parse_revision_repo_factory
         self._element_repo_factory = element_repo_factory
@@ -347,6 +353,29 @@ class IngestionExecutor[TSession: Session]:
             await self._paper_version_repo_factory(session).set_current_parse_revision(
                 revision.version_id, revision.revision_id
             )
+            parsed_title = next(
+                (
+                    element.text
+                    for element in parsed.elements
+                    if element.element_type is ElementType.TITLE and element.text
+                ),
+                None,
+            )
+            if parsed_title is not None:
+                version = await self._paper_version_repo_factory(session).get_by_id(
+                    revision.version_id
+                )
+                paper = (
+                    await self._paper_repo_factory(session).get_by_id(version.paper_id)
+                    if version is not None
+                    else None
+                )
+                if paper is not None:
+                    titled_paper = paper.with_title(
+                        parsed_title, PaperTitleSource.PARSED_DOCUMENT
+                    )
+                    if titled_paper is not paper:
+                        await self._paper_repo_factory(session).update(titled_paper)
             await self._finish_run(
                 session,
                 run_row,

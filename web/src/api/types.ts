@@ -46,6 +46,8 @@ export interface VersionSummary {
 
 export interface PaperListItem {
   paper_id: string;
+  title: string | null;
+  title_source: "arxiv_metadata" | "parsed_document" | null;
   created_at: string;
   version: VersionSummary;
   project_ids: string[];

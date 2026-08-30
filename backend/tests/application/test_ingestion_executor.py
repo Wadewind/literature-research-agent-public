@@ -1,5 +1,7 @@
 """IngestionExecutor 应用服务测试。"""
 
+from dataclasses import replace
+
 import pytest
 
 from literature_agent.application.ingestion_executor import IngestionExecutor
@@ -8,6 +10,7 @@ from literature_agent.application.run_execution_service import (
     RunExecutionService,
 )
 from literature_agent.domain.event import create_event
+from literature_agent.domain.paper import PaperTitleSource, create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.parse_profile import ParseProfile
 from literature_agent.domain.parse_revision import (
@@ -21,6 +24,7 @@ from tests.fakes.fake_attempt_repository import FakeAttemptRepository
 from tests.fakes.fake_element_repository import FakeElementRepository
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_outbox_repository import FakeOutboxRepository
+from tests.fakes.fake_paper_repository import FakePaperRepository
 from tests.fakes.fake_paper_version_repository import FakePaperVersionRepository
 from tests.fakes.fake_parse_revision_repository import FakeParseRevisionRepository
 from tests.fakes.fake_project_repository import fake_session
@@ -89,12 +93,14 @@ def _make_executor(
     run_repo, event_repo, version_repo, revision_repo, element_repo,
     attempt_repo, outbox_repo, parser,
     parser_timeout_seconds: float = 300.0,
+    paper_repo: FakePaperRepository | None = None,
 ) -> IngestionExecutor:
     """构建使用 Fake 依赖的 IngestionExecutor。"""
     return IngestionExecutor(
         session_factory=fake_session,
         run_repo_factory=lambda _s: run_repo,
         event_repo_factory=lambda _s: event_repo,
+        paper_repo_factory=lambda _s: paper_repo or FakePaperRepository(),
         paper_version_repo_factory=lambda _s: version_repo,
         parse_revision_repo_factory=lambda _s: revision_repo,
         element_repo_factory=lambda _s: element_repo,
@@ -227,6 +233,31 @@ async def test_full_pipeline_completes_with_elements(
         "result_committed",
     ]
     assert [e.sequence for e in _events(event_repo, run.run_id)] == [1, 2, 3, 4, 5, 6]
+
+
+async def test_success_fills_missing_paper_title_from_parsed_document(
+    run_repo, event_repo, version_repo, revision_repo, element_repo,
+    attempt_repo, outbox_repo, parser,
+) -> None:
+    """解析成功后用 TITLE 元素补齐 Paper 标题及来源。"""
+    paper_repo = FakePaperRepository()
+    paper = create_paper(owner_id="user-1")
+    paper = replace(paper, paper_id="paper-1")
+    await paper_repo.add(paper)
+    version_id = await _add_version(version_repo)
+    run = await _add_uploaded_run(run_repo, event_repo, outbox_repo, version_id)
+    executor = _make_executor(
+        run_repo, event_repo, version_repo, revision_repo, element_repo,
+        attempt_repo, outbox_repo, parser, paper_repo=paper_repo,
+    )
+    service = _make_service(executor, run_repo, event_repo, attempt_repo, outbox_repo)
+
+    await service.execute(run.run_id, correlation_id="job-title")
+
+    updated = await paper_repo.get_by_id("paper-1")
+    assert updated is not None
+    assert updated.title == "Fake 论文标题"
+    assert updated.title_source is PaperTitleSource.PARSED_DOCUMENT
 
 
 async def test_existing_succeeded_revision_is_reused(

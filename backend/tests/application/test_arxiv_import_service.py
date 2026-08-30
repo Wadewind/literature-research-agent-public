@@ -262,7 +262,10 @@ async def test_import_registers_ingestion_bundle_dependencies_and_is_idempotent(
     assert first.imported == replay.imported == 1
     assert sources[0].status is ReviewSourceStatus.IMPORTING
     assert sources[0].paper_id and sources[0].paper_version_id
-    assert len(await ctx["paper_repo"].list_by_owner("owner-1")) == 1
+    imported_papers = await ctx["paper_repo"].list_by_owner("owner-1")
+    assert len(imported_papers) == 1
+    assert imported_papers[0].title == paper.title
+    assert imported_papers[0].title_source.value == "arxiv_metadata"
     assert len(await ctx["version_repo"].list_by_paper(sources[0].paper_id)) == 1
     assert len(await ctx["relations"].list_by_project(ctx["project"].project_id)) == 1
     ingestion_runs = [
