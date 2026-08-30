@@ -64,6 +64,24 @@ def test_log_level_rejects_unknown_name(monkeypatch) -> None:
         Settings.from_env()
 
 
+def test_database_echo_defaults_off_even_when_debug_is_enabled(monkeypatch) -> None:
+    """模型调试不应隐式打开 SQLAlchemy SQL 日志。"""
+    monkeypatch.setenv("AGENT_DEBUG", "true")
+    monkeypatch.delenv("AGENT_DATABASE_ECHO", raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.debug is True
+    assert settings.database_echo is False
+
+
+def test_database_echo_can_be_enabled_explicitly(monkeypatch) -> None:
+    """数据库诊断必须由独立环境变量显式开启。"""
+    monkeypatch.setenv("AGENT_DATABASE_ECHO", "true")
+
+    assert Settings.from_env().database_echo is True
+
+
 def test_chat_json_schema_supported_defaults_to_true(monkeypatch) -> None:
     """默认使用严格 JSON Schema，保持既有 Provider 契约。"""
     monkeypatch.delenv("AGENT_CHAT_JSON_SCHEMA_SUPPORTED", raising=False)

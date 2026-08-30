@@ -9,7 +9,7 @@ def create_engine(settings: Settings) -> AsyncEngine:
     """根据配置创建异步数据库引擎。"""
     return create_async_engine(
         settings.database_url,
-        echo=settings.debug,
+        echo=settings.database_echo,
         future=True,
     )
 

@@ -154,6 +154,7 @@ class Settings:
     arxiv_backend: str = field(default=_DEFAULT_ARXIV_BACKEND)
     worker_metrics_port: int = field(default=_DEFAULT_WORKER_METRICS_PORT)
     log_level: int = field(default=_DEFAULT_LOG_LEVEL)
+    database_echo: bool = field(default=False)
 
     def __post_init__(self) -> None:
         """校验完整 Job 与单次 Parser 的分层超时契约。"""
@@ -201,6 +202,11 @@ class Settings:
         """根据环境变量创建设置对象。"""
         raw_log_level = os.getenv("AGENT_LOG_LEVEL", "INFO").strip().upper()
         debug = os.getenv("AGENT_DEBUG", "").lower() in {"1", "true", "yes"}
+        database_echo = os.getenv("AGENT_DATABASE_ECHO", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
         try:
             log_level = _LOG_LEVELS[raw_log_level]
         except KeyError as exc:
@@ -402,6 +408,7 @@ class Settings:
             app_name=os.getenv("AGENT_APP_NAME", _DEFAULT_APP_NAME),
             debug=debug,
             database_url=os.getenv("AGENT_DATABASE_URL", _DEFAULT_DATABASE_URL),
+            database_echo=database_echo,
             redis_url=os.getenv("AGENT_REDIS_URL", _DEFAULT_REDIS_URL),
             dev_actor_id=os.getenv("AGENT_DEV_ACTOR_ID", _DEFAULT_DEV_ACTOR_ID),
             storage_root=os.getenv("AGENT_STORAGE_ROOT", _DEFAULT_STORAGE_ROOT),

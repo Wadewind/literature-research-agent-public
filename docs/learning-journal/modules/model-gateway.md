@@ -88,6 +88,9 @@ RAG 需要调用外部 Embedding/Chat 模型，但模型调用不可预测：会
   不访问真实 Provider，修复后的完整 Real Review 仍需显式重建验证；
 - 2026-08-30 后续调试切片把 thinking 收敛为 debug-only 配置，RAG 默认输出由 2048 调整为 4096；
   Review 仍保持 8000，切换 thinking 后必须新建 Run，不能把跨配置恢复当作同一 Profile 回归；
+- 2026-08-30 随后将 SQLAlchemy `echo` 从 `AGENT_DEBUG` 解耦为默认关闭的
+  `AGENT_DATABASE_ECHO`；API/Worker 继续复用同一数据库引擎工厂，thinking 调试不再产生持续 SQL 日志；
+  Settings/数据库工厂/Worker 定向回归 `55 passed`，Ruff 与 Pyright 通过；
 - 该切片最终定向配置/Adapter/Worker/预算测试 `122 passed`，排除 Testcontainers 的完整后端回归
   `1193 passed, 10 skipped`；Ruff 通过，Pyright 为 `0 errors`，没有访问真实 Provider；
 - 切片 3 完成时：非集成 216 passed + 4 skipped，integration 43 passed，ruff/pyright 全绿。

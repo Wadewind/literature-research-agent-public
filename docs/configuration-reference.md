@@ -47,13 +47,15 @@ chmod 600 .env
 |---|---:|---|
 | `AGENT_APP_NAME` | `Literature Review Agent` | 服务名称 |
 | `AGENT_DATABASE_URL` | 本地 PostgreSQL | 业务事实与 LangGraph Checkpoint 数据库 |
+| `AGENT_DATABASE_ECHO` | `false` | API/Worker 的 SQLAlchemy SQL echo；仅数据库诊断时开启 |
 | `AGENT_REDIS_URL` | 本地 Valkey DB 0 | ARQ Job 与实时通知，不是业务事实来源 |
 | `AGENT_DEV_ACTOR_ID` | `dev-user` | 仅本地无认证演示的可信开发身份 |
 | `AGENT_STORAGE_ROOT` | `data/storage` | PDF 与 Artifact 存储根目录；API/Worker 必须一致 |
 | `AGENT_WORKER_METRICS_PORT` | `8001` | `0` 关闭；固定绑定 loopback |
 | `AGENT_DEBUG` | `false` | 本地诊断开关，不是认证或安全模式 |
 
-数据库 URL、Storage、开发身份和 Metrics 端口属于部署配置，不应出现在产品设置页面。
+数据库 URL/echo、Storage、开发身份和 Metrics 端口属于部署配置，不应出现在产品设置页面。
+`AGENT_DATABASE_ECHO` 与 `AGENT_DEBUG` 相互独立；模型 thinking 调试不再隐式打开周期性数据库查询日志。
 
 ### 2.2 上传、后台执行与可靠性
 
