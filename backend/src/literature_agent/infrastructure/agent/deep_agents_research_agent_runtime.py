@@ -421,6 +421,40 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
             ) from exc
 
 
+class _CorrectableToolErrorMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
+    """把无副作用且模型可修正的参数错误返回当前 Agent Loop。"""
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        try:
+            return await handler(request)
+        except ResearchAgentRuntimeError as exc:
+            if exc.code != "artifact_path_invalid":
+                raise
+            return ToolMessage(
+                content=json.dumps(
+                    {
+                        "status": "error",
+                        "error": {
+                            "code": exc.code,
+                            "message": exc.safe_message,
+                        },
+                        "instruction": (
+                            "请先把成果写入 /workspace/outputs/，再使用新的工具调用提交。"
+                        ),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                name=str(request.tool_call.get("name", "")),
+                tool_call_id=str(request.tool_call.get("id", "")),
+                status="error",
+            )
+
+
 class _RuntimeToolCallBudgetMiddleware(AgentMiddleware[_ToolCallBudgetState, _TurnContext, Any]):
     """在 Tool node 前一次性预留模型本轮产生的全部 Tool calls。"""
 
@@ -513,6 +547,7 @@ class DeepAgentsResearchAgentRuntime:
         self._usage_control = usage_control
 
         backend = backend or StateBackend()
+        allow_execute = supports_execution(backend)
         if skill_sources and skill_backend is None:
             raise ValueError("Skill sources 缺少只读 Backend")
         routes: dict[str, BackendProtocol] = {}
@@ -522,7 +557,7 @@ class DeepAgentsResearchAgentRuntime:
             default_backend = backend.default
             routes.update(backend.routes)
             artifacts_root = backend.artifacts_root
-        if supports_execution(backend):
+        if allow_execute:
             routes.setdefault("/conversation_history/", StateBackend())
             routes.setdefault("/large_tool_results/", StateBackend())
         if skill_sources:
@@ -536,24 +571,21 @@ class DeepAgentsResearchAgentRuntime:
                 routes=routes,
                 artifacts_root=artifacts_root,
             )
-        self._register_restricted_harness_profile(
-            model,
-            allow_execute=supports_execution(backend),
-        )
+        self._register_restricted_harness_profile(model)
         project_tools = self._project_context_tools(project_context)
         all_tools = (*tools, *project_tools)
         names = [item.name for item in all_tools]
         if len(names) != len(set(names)):
             raise ValueError("Deep Agents Tool 名称不得重复")
-        if supports_execution(backend) and _FORBIDDEN_CUSTOM_TOOL_NAMES & frozenset(names):
+        if allow_execute and _FORBIDDEN_CUSTOM_TOOL_NAMES & frozenset(names):
             raise ValueError("execute/task 只能由受控 Deep Agents Backend 提供")
         filesystem_tool_names = list(_FILESYSTEM_TOOL_NAMES)
-        if supports_execution(backend):
+        if allow_execute:
             filesystem_tool_names.append("execute")
         registered_tool_names = (
             (frozenset(filesystem_tool_names) | frozenset(item.name for item in all_tools))
             - _ALWAYS_FORBIDDEN_TOOL_NAMES
-            - (_FORBIDDEN_CUSTOM_TOOL_NAMES if not supports_execution(backend) else frozenset())
+            - (_FORBIDDEN_CUSTOM_TOOL_NAMES if not allow_execute else frozenset())
         )
         filesystem = FilesystemMiddleware(
             backend=backend,
@@ -579,6 +611,19 @@ class DeepAgentsResearchAgentRuntime:
                 "可以不带项目 Evidence 标记，但不得暗示它们已经通过项目证据验证。"
                 "项目证据不足时应明确说明；只有整轮无法给出任何有效内容时才单独输出"
                 "‘当前授权上下文证据不足。’。"
+                + (
+                    "需要提交正式成果时，必须先将文件写入 /workspace/outputs/，再调用"
+                    " submit_artifact；不要提交 /workspace 根目录或 inbox 中的文件。"
+                    if "submit_artifact" in names
+                    else ""
+                )
+                + (
+                    "当前 Runtime 已授权 execute；它只在当前 Session 专属 Sandbox 的"
+                    " /workspace 中执行 shell 命令，可以用于 mkdir 和固定依赖的数据处理，"
+                    "绝不是 Worker 宿主 Shell。"
+                    if allow_execute
+                    else ""
+                )
             ),
             middleware=cast(
                 Sequence[AgentMiddleware[Any, Any, Any]],
@@ -587,6 +632,7 @@ class DeepAgentsResearchAgentRuntime:
                     summarization,
                     _RuntimeModelCallBudgetMiddleware(),
                     _RuntimeToolCallBudgetMiddleware(registered_tool_names=registered_tool_names),
+                    _CorrectableToolErrorMiddleware(),
                     *((_PersistentUsageMiddleware(usage_control),) if usage_control else ()),
                     _RuntimeToolPolicyMiddleware(
                         registered_tool_names=registered_tool_names,
@@ -1607,8 +1653,6 @@ class DeepAgentsResearchAgentRuntime:
     @staticmethod
     def _register_restricted_harness_profile(
         model: BaseChatModel,
-        *,
-        allow_execute: bool,
     ) -> None:
         params = model._get_ls_params()  # noqa: SLF001 - LangChain 的 Provider 识别扩展点
         provider = params.get("ls_provider")
@@ -1623,7 +1667,9 @@ class DeepAgentsResearchAgentRuntime:
         register_harness_profile(
             f"{provider}:{model_name}",
             HarnessProfile(
-                excluded_tools=(frozenset() if allow_execute else frozenset({"execute"})),
+                # Harness Profile 是进程级、按模型合并的全局状态，不能承载每个
+                # Runtime 的 execute 能力；具体可见性由 Backend 与 Policy Middleware 决定。
+                excluded_tools=frozenset(),
                 general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
             ),
         )

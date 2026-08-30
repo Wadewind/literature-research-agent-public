@@ -76,6 +76,10 @@ MIME、大小和创建时间；`declared_public_target_checked` 只表示 URL/DN
 - 数量/总量在锁定同一 Run 后统计；第 9 项或超过 50 MiB 的事务回滚，不留下 Candidate 行。同一
   `tool_call_id` 重放直接回读已存在 Candidate，不重复计数。由于 Storage write 先于短事务，预算冲突仍
   可能留下不可见的内容寻址 staging blob，等待后续 GC。
+- `artifact_path_invalid` 属于模型可纠正的 Tool 参数错误：平台仍保存 REJECTED Candidate 和失败
+  ToolCall，但向当前 Agent Loop 返回有界 error ToolMessage，要求把文件写入 `/workspace/outputs/` 后以
+  新 Tool Call 重试；不会原样自动重放失败副作用。取消、fence、权限和临时基础设施错误仍按原分类终止或
+  进入 Run 级重试。
 
 ## 安全与可观测性
 
@@ -101,6 +105,8 @@ Sandbox Adapter 会先读取文件清单并拒绝静态 symlink/device，再下�
   超限回滚与同一 Candidate 重放不重复计数；Ruff 全后端通过，Pyright 为 0 errors。
 
 普通测试没有访问真实模型、公共网络或付费 Sandbox；本切片没有运行真实 OpenSandbox Artifact Smoke。
+2026-08-30 Real 缺陷回归另验证 outputs 目录初始化、路径错误同轮纠正和提示契约；相关 Infrastructure
+完整组合为 134 passed。
 
 ## 代码入口
 

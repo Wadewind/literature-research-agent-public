@@ -39,7 +39,7 @@ ENV PATH="/opt/research-agent-venv/bin:${PATH}" \
     HOME="/home/chrome" \
     MPLCONFIGDIR="/workspace/.matplotlib"
 
-RUN mkdir -p /workspace /home/chrome/.cache \
+RUN mkdir -p /workspace/outputs /home/chrome/.cache \
     && chown -R chrome:chrome /workspace /home/chrome /opt/research-agent-venv
 
 USER chrome

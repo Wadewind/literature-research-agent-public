@@ -113,6 +113,10 @@ class _Backend:
     def __init__(self, sandbox_id: str) -> None:
         self.id = sandbox_id
         self.files: dict[str, bytes] = {}
+        self.layout_prepare_calls = 0
+
+    def ensure_workspace_layout(self):
+        self.layout_prepare_calls += 1
 
     def list_workspace_files(self):
         return [(path, "file", len(content)) for path, content in sorted(self.files.items())]
@@ -232,6 +236,7 @@ async def test_acquire_reuses_one_session_lease_and_renews_sliding_ttl() -> None
     assert provider.created[0]["cpu"] == 1
     assert provider.created[0]["memory_mib"] == 2048
     assert provider.renewed == [(first.record.sandbox_id, 600)]
+    assert provider.backends[first.record.sandbox_id].layout_prepare_calls == 2
 
 
 async def test_legacy_or_drifted_network_profile_rotates_generation() -> None:

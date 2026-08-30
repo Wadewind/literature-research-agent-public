@@ -819,6 +819,14 @@ Effect Store 交付有界前缀，外层取消时尝试关闭已认领 Effect；
 每轮消息还携带 Snapshot UTC 时间基准。是否启用引用校验只由本轮最终回复的显式标记决定，不扫描历史
 Thread 的 ToolMessage。旧 v3 Turn 不被原地升级，详细证据见 Real 模式体验缺陷台账。
 
+2026-08-30 Real 对话回归修复了同一条 Workspace 成果链的两个契约缺口：每次新建或复用 Sandbox Lease
+都会幂等创建 `/workspace/outputs`，系统提示要求正式成果先写入该目录；`artifact_path_invalid` 在保留
+Rejected Candidate 与失败 ToolCall 审计后，以有界错误 ToolMessage 返回模型继续纠正，不再直接终止
+整轮。与此同时，离线 reconcile/collect Runtime 不再把“无执行 Backend”写入按模型全局合并的 Harness
+Profile；`execute` 是否可见只由当前 Backend 与本轮 PolicySnapshot 决定，真实 Sandbox Prompt 明确说明
+它只能在 Session 专属 `/workspace` 中执行，包括 `mkdir`，不是宿主 Shell。相关五个 Infrastructure
+测试文件完整回归为 134 passed，未访问真实模型、OpenSandbox 或公网。
+
 Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何把代码执行扩大到宿主、允许
 private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/网络 Profile、正式外部写产品能力或
 长期 Memory 的决定都必须单独更新本 Spec，并在满足 `AGENTS.md` 条件时创建 ADR。raw 公网通道可能

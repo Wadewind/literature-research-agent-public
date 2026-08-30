@@ -98,6 +98,8 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
   default-deny 同时覆盖 Bash、Python、Node、Chromium、Playwright 与 Search MCP，而不只检查 Tool URL。
 - `OpenSandboxProvider.create` 固定传入 `entrypoint=['/entrypoint']`，避免 SDK 的空 entrypoint 默认值覆盖
   pinned Chrome 镜像负责启动 Chromium 与 execd 的 recipe；该值不是用户配置。
+- 固定镜像预建 `/workspace/outputs`；每次新建或复用 Lease 时 Adapter 仍通过 Provider Files API 幂等
+  创建该目录，避免旧 generation、空目录不进入 Snapshot 或镜像切换导致 Artifact 输出契约缺失。
 - `sandbox/research-agent/Dockerfile` 固定上游 Chrome image index digest，并在构建时预装固定版本的
   Python、numpy、pandas、matplotlib 与 CJK 字体；7.3 又以 pinned Node 24 构建阶段和独立 lock 预装
   Playwright/arXiv MCP，运行时不安装依赖。
@@ -118,6 +120,8 @@ RuntimeExecution permit；取消后不得启动下一次命令，环境标记 DI
 - 跨 Turn `STABLE` 复用门槛及续租/轮换 CAS 回收顺序的最终定向回归：19 passed；最终完整非集成回归：
   1013 passed、4 skipped。
 - 本切片范围 Ruff 通过，修改文件 Pyright 0 errors。
+- 2026-08-30 outputs 初始化与离线 Runtime/`execute` Profile 污染回归的相关 Infrastructure 组合为
+  134 passed；测试完全离线，未连接真实 OpenSandbox。
 - Phase 6 Slice 6 新增 expired/session_closed 覆盖后，主智能体复核 PostgreSQL cleanup/CAS 与 Alembic
   `head → -1 → head`：13 passed（18.55s）。离线 cleanup、Server
   配置、Provider 404 和 Worker 定向均通过；项目 TOML 由本机 Server 0.2.2 `load_config` 实际解析成功。

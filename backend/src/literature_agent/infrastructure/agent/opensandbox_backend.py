@@ -149,6 +149,12 @@ class OpenSandboxBackend(BaseSandbox):
             truncated=truncated,
         )
 
+    def ensure_workspace_layout(self) -> None:
+        """幂等创建平台保留的正式成果目录。"""
+        self._sandbox.files.create_directories(
+            [WriteEntry(path="/workspace/outputs", mode=_WORKSPACE_DIRECTORY_MODE)]
+        )
+
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """上传仅接受平台规范化的 `/workspace` 文件路径。"""
         valid = [(path, content) for path, content in files if is_workspace_file_path(path)]

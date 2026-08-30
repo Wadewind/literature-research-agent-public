@@ -108,6 +108,19 @@ def test_execute_is_workspace_scoped_timed_and_output_bounded() -> None:
     assert "sandbox-private-id" not in result.output
 
 
+def test_ensure_workspace_layout_creates_formal_output_directory() -> None:
+    sandbox = _Sandbox()
+    backend = OpenSandboxBackend(sandbox)
+
+    backend.ensure_workspace_layout()
+
+    assert len(sandbox.files.created_directories) == 1
+    entries = sandbox.files.created_directories[0]
+    assert [(item.path, item.mode) for item in entries] == [
+        ("/workspace/outputs", 700)
+    ]
+
+
 def test_upload_and_download_only_accept_workspace_paths() -> None:
     sandbox = _Sandbox()
     backend = OpenSandboxBackend(sandbox)

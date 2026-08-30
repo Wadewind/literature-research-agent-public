@@ -326,6 +326,7 @@ class SandboxWorkspaceManager:
         if reusable:
             assert current is not None
             backend = await self._provider.connect(current.sandbox_id)
+            await asyncio.to_thread(backend.ensure_workspace_layout)
             await self._provider.renew(
                 current.sandbox_id, ttl_seconds=self._lease_ttl_seconds
             )
@@ -375,6 +376,7 @@ class SandboxWorkspaceManager:
         )
         try:
             await self._restore_latest(request.session_id, backend)
+            await asyncio.to_thread(backend.ensure_workspace_layout)
             created = SandboxLeaseRecord(
                 session_id=request.session_id,
                 owner_id=request.context_snapshot.owner_id,

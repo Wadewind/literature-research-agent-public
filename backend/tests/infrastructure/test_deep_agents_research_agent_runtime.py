@@ -70,6 +70,7 @@ from literature_agent.infrastructure.agent import (
 from literature_agent.infrastructure.agent.deep_agents_research_agent_runtime import (
     DeepAgentsResearchAgentRuntime,
     _checkpoint_id,
+    _CorrectableToolErrorMiddleware,
     _opaque_id,
     _PersistentUsageMiddleware,
     _replayable_tool_names,
@@ -456,6 +457,87 @@ async def test_unified_tool_budget_counts_project_and_execute_once_each() -> Non
     assert events[-1].kind is RuntimeEventKind.COMPLETED
     assert context.search_calls == [("turn-1", "统一预算")]
     assert sandbox.commands == ["python -c 'print(1)'"]
+
+
+async def test_correctable_artifact_path_error_returns_tool_error_to_model() -> None:
+    usage = _UsageControl()
+    persistent = _PersistentUsageMiddleware(usage)
+    correctable = _CorrectableToolErrorMiddleware()
+
+    @tool
+    async def submit_artifact(path: str) -> str:
+        """提交正式成果。"""
+        return path
+
+    context = _TurnContext(
+        turn_run_id="turn-1",
+        allowed_tool_names=frozenset({"submit_artifact"}),
+        max_model_calls=8,
+        max_tool_calls=12,
+        replayable_tool_names=frozenset(),
+        runtime_permit=RuntimeExecutionPermit("turn-1", "holder-1", "attempt-1", 1),
+    )
+    runtime = ToolRuntime(
+        state={},
+        context=context,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="artifact-call-1",
+        store=None,
+        tools=[submit_artifact],
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "name": "submit_artifact",
+            "args": {"path": "/workspace/report.txt"},
+            "id": "artifact-call-1",
+            "type": "tool_call",
+        },
+        tool=submit_artifact,
+        state={},
+        runtime=runtime,
+    )
+
+    async def reject(_: ToolCallRequest) -> ToolMessage:
+        raise ResearchAgentRuntimeError(
+            kind=RuntimeErrorKind.PERMANENT,
+            code="artifact_path_invalid",
+            safe_message="Artifact 只能来自 /workspace/outputs/",
+        )
+
+    result = await correctable.awrap_tool_call(
+        request,
+        lambda inner: persistent.awrap_tool_call(inner, reject),
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert result.tool_call_id == "artifact-call-1"
+    assert "artifact_path_invalid" in result.text
+    assert usage.succeeded_calls == []
+    assert usage.failed_calls == [("artifact-call-1", "artifact_path_invalid")]
+
+
+def test_artifact_tool_prompt_requires_formal_output_directory(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    @tool
+    def submit_artifact(path: str) -> str:
+        """提交正式成果。"""
+        return path
+
+    def capture_graph(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(runtime_module, "create_deep_agent", capture_graph)
+    DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(model_name="artifact-output-model"),
+        checkpointer=MemorySaver(),
+        tools=(submit_artifact,),
+    )
+
+    assert "/workspace/outputs/" in captured["system_prompt"]
 
 
 async def test_persistent_usage_wraps_model_and_project_tool_boundaries() -> None:
@@ -2219,7 +2301,6 @@ def test_restricted_harness_does_not_globally_exclude_sandbox_execute(monkeypatc
 
     DeepAgentsResearchAgentRuntime._register_restricted_harness_profile(  # noqa: SLF001
         ScriptedDeepAgentChatModel(model_name="sandbox-execute-model"),
-        allow_execute=True,
     )
 
     assert len(captured) == 1
@@ -2229,7 +2310,7 @@ def test_restricted_harness_does_not_globally_exclude_sandbox_execute(monkeypatc
     assert profile.general_purpose_subagent.enabled is False
 
 
-def test_restricted_harness_excludes_execute_without_executable_backend(monkeypatch) -> None:
+def test_restricted_harness_does_not_encode_runtime_execute_capability(monkeypatch) -> None:
     captured: list[tuple[str, Any]] = []
     monkeypatch.setattr(
         runtime_module,
@@ -2239,11 +2320,70 @@ def test_restricted_harness_excludes_execute_without_executable_backend(monkeypa
 
     DeepAgentsResearchAgentRuntime._register_restricted_harness_profile(  # noqa: SLF001
         ScriptedDeepAgentChatModel(model_name="state-backend-model"),
-        allow_execute=False,
     )
 
     assert len(captured) == 1
-    assert captured[0][1].excluded_tools == frozenset({"execute"})
+    assert captured[0][1].excluded_tools == frozenset()
+
+
+async def test_offline_runtime_profile_does_not_hide_later_sandbox_execute() -> None:
+    class ExecuteRequestingModel(ScriptedDeepAgentChatModel):
+        def _next_message(self, messages: list[Any]) -> AIMessage:
+            self.model_call_count += 1
+            if any(isinstance(message, ToolMessage) for message in messages[-2:]):
+                return AIMessage(content="Sandbox 命令已完成。")
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": "mkdir -p outputs"},
+                        "id": "execute-after-offline-call",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+
+    model = ExecuteRequestingModel(model_name="offline-then-sandbox-model")
+    DeepAgentsResearchAgentRuntime(model=model, checkpointer=MemorySaver())
+    sandbox = _ExecuteSandbox()
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=model,
+        checkpointer=MemorySaver(),
+        backend=sandbox,
+    )
+
+    result = await _collect(
+        runtime.execute_turn(
+            _request(
+                turn_run_id="turn-execute-after-offline",
+                allowed_tool_names=("execute",),
+            )
+        )
+    )
+
+    assert result[-1].kind is RuntimeEventKind.COMPLETED
+    assert sandbox.commands == ["mkdir -p outputs"]
+    assert any("execute" in names for names in model.visible_tool_names)
+
+
+def test_executable_backend_prompt_states_sandbox_execute_capability(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def capture_graph(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(runtime_module, "create_deep_agent", capture_graph)
+    DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(model_name="execute-prompt-model"),
+        checkpointer=MemorySaver(),
+        backend=_ExecuteSandbox(),
+    )
+
+    assert "execute" in captured["system_prompt"]
+    assert "mkdir" in captured["system_prompt"]
+    assert "宿主" in captured["system_prompt"]
 
 
 async def test_exact_model_harness_profile_does_not_pollute_same_provider() -> None:

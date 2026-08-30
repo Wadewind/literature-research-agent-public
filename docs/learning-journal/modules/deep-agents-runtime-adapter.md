@@ -168,6 +168,12 @@ Playwright/arXiv Catalog 与 Sandbox resolver，但切片完成时仍未运行�
 2026-08-28 后续本地功能 Smoke 已验证真实 Lease、认证 Server Proxy、MCP discovery、本地 Browser/下载
 与 Workspace 回收；该结论不包含真实 Provider、公共网络或生产安全验证。
 
+2026-08-30 Real 对话发现离线 reconcile/collect Runtime 会先用同一模型和 `StateBackend` 构图，并把
+`execute` 写入 Harness Profile 的全局 `excluded_tools`；Deep Agents 对同 key 的排除集合只做并集合并，
+后续真实 Sandbox Runtime 无法恢复模型可见性。现已禁止用全局模型 Profile 表达单个 Runtime 的执行
+能力，`execute` 只由当前 Backend 注册并由 Policy Middleware 逐轮过滤；离线 Runtime 后再创建 Sandbox
+Runtime 的回归证明模型可见并能执行 `mkdir`。相关 Infrastructure 完整组合为 134 passed。
+
 受控命令沙箱内运行 Deep Agents 异步链时曾出现 selector 假性等待；相同完全离线命令在沙箱外会正常
 给出断言失败或通过结果。该现象只描述开发工具环境，不是产品 Sandbox 的能力或安全验证。
 
