@@ -12,6 +12,7 @@ describe("AgentInspectorView", () => {
     const html = renderToStaticMarkup(createElement(AgentInspectorView, {
       activeTab: "browser",
       onTabChange: vi.fn(),
+      onClose: vi.fn(),
       evidence: createElement("p", null, "Evidence ledger only"),
       browser: createElement("p", null, "Browser viewer only"),
       outputs: createElement("p", null, "Artifacts only"),
@@ -21,6 +22,7 @@ describe("AgentInspectorView", () => {
     expect(html).toContain('role="tab"');
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('role="tabpanel"');
+    expect(html).toContain('aria-label="关闭检查器"');
     expect(html).toContain("Browser viewer only");
     expect(html).toMatch(/agent-inspector-panel-evidence[^>]*hidden=""[^>]*>.*Evidence ledger only/);
     expect(html).toMatch(/agent-inspector-panel-browser[^>]*>.*Browser viewer only/);

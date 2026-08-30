@@ -71,7 +71,7 @@ describe("AgentResearchActivity", () => {
     expect(html).toContain("工具输入");
     expect(html).toContain("工具输出");
     expect(html).toContain("<details");
-    expect(html).toContain("研究任务已开始");
+    expect(html).not.toContain(">研究过程<");
     expect(html).toContain("研究环境未能启动");
     expect(html).toContain("runtime_sandbox_metadata_invalid");
     expect(html).not.toContain("SECRET_PROMPT_SHOULD_NOT_RENDER");
@@ -93,5 +93,20 @@ describe("AgentResearchActivity", () => {
 
     expect(html).toContain("本轮研究未能完成");
     expect(html).toContain("agent_turn_failed");
+  });
+
+  it("运行时用一个默认展开的正在研究区域收纳工具活动", () => {
+    const html = renderToStaticMarkup(createElement(AgentResearchActivity, {
+      events: [{ sequence: 1, label: "正在执行工具", occurred_at: "2026-08-28T00:00:00Z" }],
+      toolExecutions: undefined,
+      loading: true,
+      error: false,
+      active: true,
+    }));
+
+    expect(html).toContain("正在研究");
+    expect(html).toContain("正在执行工具");
+    expect(html).toContain("open=\"\"");
+    expect(html).not.toContain("研究过程");
   });
 });

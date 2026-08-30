@@ -2,20 +2,21 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type {
   CitationSummary,
   Conversation,
-  ConversationMessage,
+  ConversationMessage as ConversationMessageRecord,
   EvidenceDetail,
   PostMessageResult,
   Project,
 } from "../api/types";
-import ChatWorkspaceFrame from "../components/ChatWorkspaceFrame";
-import ConversationRail, { conversationScopeLabel } from "../components/ConversationRail";
+import ConversationMessage from "../components/ConversationMessage";
+import { conversationScopeLabel } from "../components/ConversationRail";
 import PageBar from "../components/PageBar";
+import ResearchWorkspaceFrame from "../components/ResearchWorkspaceFrame";
 import {
   ensureMessageIntent,
   type MessageIntent,
@@ -51,21 +52,19 @@ function pageLabel(citation: CitationSummary): string {
 
 function ConversationWorkspace() {
   const { projectId = "", conversationId = "" } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [content, setContent] = useState("");
   const [intent, setIntent] = useState<MessageIntent | null>(null);
   const [submittedRunId, setSubmittedRunId] = useState<string | null>(null);
-  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
   const [pdfPage, setPdfPage] = useState<number | null>(null);
+  const selectedEvidenceId = searchParams.get("inspector") === "evidence"
+    ? searchParams.get("evidence")
+    : null;
 
   const projectQuery = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => apiFetch<Project>(`/api/v1/projects/${projectId}`),
-  });
-  const conversationsQuery = useQuery({
-    queryKey: ["conversations", projectId],
-    queryFn: () =>
-      apiFetch<Conversation[]>(`/api/v1/projects/${projectId}/conversations`),
   });
   const conversationQuery = useQuery({
     queryKey: ["conversation", conversationId],
@@ -82,7 +81,7 @@ function ConversationWorkspace() {
   const messagesQuery = useQuery({
     queryKey: ["conversation-messages", conversationId],
     queryFn: () =>
-      apiFetch<ConversationMessage[]>(
+      apiFetch<ConversationMessageRecord[]>(
         `/api/v1/conversations/${conversationId}/messages`,
       ),
     enabled: canInteract,
@@ -116,6 +115,21 @@ function ConversationWorkspace() {
     setPdfPage(page);
   }, [evidenceQuery.data]);
 
+  useEffect(() => {
+    if (!selectedEvidenceId) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        next.delete("inspector");
+        next.delete("evidence");
+        return next;
+      });
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [selectedEvidenceId, setSearchParams]);
+
   const postMutation = useMutation({
     mutationFn: (input: MessageIntent) => {
       if (!canInteract) {
@@ -147,6 +161,23 @@ function ConversationWorkspace() {
     const nextIntent = ensureMessageIntent(intent, question, () => crypto.randomUUID());
     setIntent(nextIntent);
     postMutation.mutate(nextIntent);
+  };
+
+  const openEvidence = (evidenceId: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("inspector", "evidence");
+      next.set("evidence", evidenceId);
+      return next;
+    });
+  };
+  const closeInspector = () => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("inspector");
+      next.delete("evidence");
+      return next;
+    });
   };
 
   if (
@@ -185,16 +216,10 @@ function ConversationWorkspace() {
         title={conversation?.title || "文献问答"}
         actions={<span className="page-bar-stat">{conversation ? conversationScopeLabel(conversation) : "读取范围…"}</span>}
       />
-      <ChatWorkspaceFrame
-        rail={
-          <ConversationRail
-            projectId={projectId}
-            conversations={conversationsQuery.data}
-            activeConversationId={conversationId}
-            error={conversationsQuery.isError ? errorMessage(conversationsQuery.error) : null}
-          />
-        }
-        conversation={<main className="conversation-main">
+      <ResearchWorkspaceFrame
+        kind="chat"
+        inspectorOpen={Boolean(selectedEvidenceId)}
+        main={<main className="conversation-main">
         <header className="chat-heading">
           <div>
             <p className="eyebrow">CITED RAG / {conversation ? conversationScopeLabel(conversation) : "读取中"}</p>
@@ -228,13 +253,11 @@ function ConversationWorkspace() {
             </div>
           )}
           {messagesQuery.data?.map((message) => (
-            <article key={message.message_id} className={`message message-${message.role}`}>
-              <header>
-                <strong>{message.role === "user" ? "你" : "Literature Atlas"}</strong>
-                <time dateTime={message.created_at}>
-                  {new Date(message.created_at).toLocaleString()}
-                </time>
-              </header>
+            <ConversationMessage
+              key={message.message_id}
+              role={message.role}
+              createdAt={message.created_at}
+            >
               {message.role === "assistant" && message.claims ? (
                 <div className="claim-list">
                   {message.claims.map((claim, claimIndex) => (
@@ -247,7 +270,7 @@ function ConversationWorkspace() {
                             type="button"
                             className="citation-marker"
                             title={`${citation.section_path ?? "未标章节"} · ${pageLabel(citation)}`}
-                            onClick={() => setSelectedEvidenceId(citation.evidence_id)}
+                            onClick={() => openEvidence(citation.evidence_id)}
                           >
                             [{claimIndex + 1}.{citationIndex + 1}]
                           </button>
@@ -259,29 +282,25 @@ function ConversationWorkspace() {
               ) : (
                 <p>{message.content}</p>
               )}
-            </article>
+            </ConversationMessage>
           ))}
         </section>
 
-        <form className="question-composer" onSubmit={onSubmit}>
-          <label htmlFor="rag-question">继续提问</label>
+        <form className="conversation-composer question-composer" onSubmit={onSubmit}>
+          <label className="sr-only" htmlFor="rag-question">继续提问</label>
           <textarea
             id="rag-question"
             value={content}
             onChange={(event) => setContent(event.target.value)}
             placeholder="提出一个需要文献证据回答的问题…"
-            rows={3}
+            rows={2}
             maxLength={4000}
             disabled={!canInteract || busy || Boolean(project?.archived_at)}
           />
-          <div>
-            <small>
-              {!canInteract
-                ? "正在确认 Project 与对话范围…"
-                : busy
-                  ? "当前对话一次只处理一个问题"
-                  : "Enter 换行；提交后可实时跟随检索与引用校验"}
-            </small>
+          <div className="conversation-composer-toolbar">
+            <span className="context-chip">
+              {conversation ? conversationScopeLabel(conversation) : "读取范围…"}
+            </span>
             <button
               type="submit"
               disabled={
@@ -292,7 +311,7 @@ function ConversationWorkspace() {
                 Boolean(project?.archived_at)
               }
             >
-              {postMutation.isPending ? "正在提交…" : "发送问题"}<span aria-hidden="true">→</span>
+              {postMutation.isPending ? "正在提交…" : "发送"}<span aria-hidden="true">→</span>
             </button>
           </div>
           {postMutation.isError && (
@@ -300,14 +319,13 @@ function ConversationWorkspace() {
           )}
         </form>
       </main>}
-        evidence={<aside className={`evidence-drawer ${selectedEvidenceId ? "open" : ""}`} aria-live="polite">
+        inspector={<aside className="evidence-drawer" aria-live="polite">
         <header>
           <div><p className="eyebrow">EVIDENCE TRACE</p><h2>来源证据</h2></div>
-          {selectedEvidenceId && (
-            <button type="button" className="button-plain" onClick={() => setSelectedEvidenceId(null)}>关闭</button>
-          )}
+          <button type="button" className="inspector-close" aria-label="关闭检查器" onClick={closeInspector}>
+            <span aria-hidden="true">×</span>
+          </button>
         </header>
-        {!selectedEvidenceId && <p className="muted">点击回答后的引用标记，查看摘录、章节与 PDF 页码。</p>}
         {evidenceQuery.isPending && <p className="muted">正在读取 Evidence…</p>}
         {evidenceQuery.isError && <p className="error-text">{errorMessage(evidenceQuery.error)}</p>}
         {evidence && (

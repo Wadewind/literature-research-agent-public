@@ -30,5 +30,6 @@ describe("Shared research workspace layout", () => {
     expect(loadWorkspaceLayout(storage, "chat")).toEqual(DEFAULT_WORKSPACE_LAYOUT);
     expect(resizeWorkspace(DEFAULT_WORKSPACE_LAYOUT, "left", 500, 1440).left).toBe(420);
     expect(resizeWorkspace(DEFAULT_WORKSPACE_LAYOUT, "right", -500, 1280).right).toBe(300);
+    expect(resizeWorkspace(DEFAULT_WORKSPACE_LAYOUT, "right", 500, 1600).right).toBe(720);
   });
 });

@@ -7,9 +7,11 @@ async function createProject(page: import("@playwright/test").Page, name: string
   await page.goto("/");
   // 空态时创建 Modal 自动打开，否则点击幽灵卡展开
   const nameInput = page.getByLabel("项目名称");
-  if (!(await nameInput.isVisible())) {
-    await page.getByRole("button", { name: "新建项目" }).click();
+  const createButton = page.getByRole("button", { name: "新建项目" });
+  if (await createButton.getAttribute("aria-expanded") !== "true") {
+    await createButton.click();
   }
+  await expect(nameInput).toBeVisible();
   await nameInput.fill(name);
   await page.getByLabel("研究说明 可选").fill("Phase 2 Playwright 验收项目");
   await page.getByRole("button", { name: "创建 Project" }).click();
@@ -39,7 +41,7 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
   await expect(page.getByText(/CITED RAG \/ 整个项目/)).toBeVisible();
 
   await page.getByPlaceholder("提出一个需要文献证据回答的问题…").fill("fake 论文讲了什么？");
-  await page.getByRole("button", { name: /发送问题/ }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("基于给定证据的回答（fake 模型确定性生成）。")).toBeVisible({ timeout: 30_000 });
 
   await page.reload();
@@ -55,6 +57,7 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
     .getByRole("link", { name: "文献库", exact: true })
     .click();
   await page.getByRole("button", { name: "询问此篇" }).click();
+  await page.locator("summary").filter({ hasText: "选择证据范围" }).click();
   await expect(page.getByRole("checkbox").first()).toBeChecked();
   await page.getByRole("button", { name: /创建问答/ }).click();
   await expect(page.getByText(/CITED RAG \/ 1 篇文献/)).toBeVisible();

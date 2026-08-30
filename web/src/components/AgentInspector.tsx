@@ -1,6 +1,5 @@
 import {
   useRef,
-  useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -29,12 +28,12 @@ interface AgentInspectorProps {
   evidence: ReactNode;
   browser: ReactNode;
   outputs: ReactNode;
-}
-
-interface AgentInspectorViewProps extends AgentInspectorProps {
   activeTab: AgentInspectorTab;
   onTabChange: (tab: AgentInspectorTab) => void;
+  onClose: () => void;
 }
+
+type AgentInspectorViewProps = AgentInspectorProps;
 
 export function AgentInspectorView({
   activeTab,
@@ -42,6 +41,7 @@ export function AgentInspectorView({
   evidence,
   browser,
   outputs,
+  onClose,
 }: AgentInspectorViewProps) {
   const tabRefs = useRef<Record<AgentInspectorTab, HTMLButtonElement | null>>({
     evidence: null,
@@ -66,6 +66,14 @@ export function AgentInspectorView({
           <p className="eyebrow">TURN INSPECTOR</p>
           <h2>{activeLabel}</h2>
         </div>
+        <button
+          type="button"
+          className="inspector-close"
+          aria-label="关闭检查器"
+          onClick={onClose}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
       </header>
       <div className="agent-inspector-tabs" role="tablist" aria-label="研究 Turn 信息">
         {tabs.map((tab) => (
@@ -104,12 +112,5 @@ export function AgentInspectorView({
 }
 
 export default function AgentInspector(props: AgentInspectorProps) {
-  const [activeTab, setActiveTab] = useState<AgentInspectorTab>("evidence");
-  return (
-    <AgentInspectorView
-      {...props}
-      activeTab={activeTab}
-      onTabChange={setActiveTab}
-    />
-  );
+  return <AgentInspectorView {...props} />;
 }

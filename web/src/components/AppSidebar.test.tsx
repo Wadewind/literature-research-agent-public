@@ -16,6 +16,13 @@ function renderSidebar(
     collapsed?: boolean;
     projectId?: string;
     projectName?: string;
+    conversations?: Array<{ conversation_id: string; title: string; scope_type: "project"; paper_ids: string[] }>;
+    agentSessions?: Array<{
+      session_id: string;
+      title: string | null;
+      active_turn_run_id: string | null;
+      last_activity_at: string;
+    }>;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -30,6 +37,8 @@ function renderSidebar(
         project: options.projectName
           ? { name: options.projectName, archived_at: null }
           : undefined,
+        conversations: options.conversations,
+        agentSessions: options.agentSessions,
       }),
     ),
   );
@@ -82,6 +91,25 @@ describe("AppSidebar", () => {
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('aria-label="文献库"');
     expect(html).toContain('aria-label="研究助手"');
+  });
+
+  it("在当前功能下显示最近会话与独立的新建入口", () => {
+    const html = renderSidebar("/projects/project-1/agent/session-1", {
+      projectId: "project-1",
+      projectName: "事实性评估方法",
+      conversations: [],
+      agentSessions: [{
+        session_id: "session-1",
+        title: "路径规划研究缺口",
+        active_turn_run_id: null,
+        last_activity_at: "2026-08-30T10:00:00Z",
+      }],
+    });
+
+    expect(html).toContain('aria-label="新建研究会话"');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("路径规划研究缺口");
+    expect(html).toContain('/projects/project-1/agent/session-1');
   });
 
   it("只接受当前版本且字段完整的折叠偏好", () => {

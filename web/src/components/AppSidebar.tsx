@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, NavLink, useLocation } from "react-router-dom";
 
 import { apiFetch } from "../api/client";
-import type { Project } from "../api/types";
-import { chatHomePath } from "../workspace/projectWorkspace";
+import type { AgentSession, Conversation, Project } from "../api/types";
+import { chatConversationPath, chatHomePath } from "../workspace/projectWorkspace";
 
 const SIDEBAR_STORAGE_KEY = "literature-atlas.app-sidebar.v1";
 
@@ -31,6 +31,13 @@ interface AppSidebarViewProps {
   projectId?: string;
   project?: Pick<Project, "name" | "archived_at">;
   projectUnavailable?: boolean;
+  conversations?: Array<Pick<Conversation, "conversation_id" | "title">>;
+  conversationsUnavailable?: boolean;
+  agentSessions?: Array<Pick<
+    AgentSession,
+    "session_id" | "title" | "active_turn_run_id" | "last_activity_at"
+  >>;
+  agentSessionsUnavailable?: boolean;
 }
 
 interface ProjectNavItem {
@@ -38,6 +45,14 @@ interface ProjectNavItem {
   label: string;
   to: string;
   icon: SidebarIconName;
+}
+
+const RECENT_SESSION_LIMIT = 5;
+
+function routeResourceId(pathname: string, mode: "chat" | "agent"): string | undefined {
+  const pattern = mode === "chat" ? /\/chat\/([^/?#]+)/ : /\/agent\/([^/?#]+)/;
+  const match = pattern.exec(pathname);
+  return match?.[1];
 }
 
 export function projectIdFromPathname(pathname: string): string | undefined {
@@ -104,6 +119,16 @@ export default function AppSidebar() {
     queryFn: () => apiFetch<Project>(`/api/v1/projects/${projectId}`),
     enabled: Boolean(projectId),
   });
+  const conversationsQuery = useQuery({
+    queryKey: ["conversations", projectId],
+    queryFn: () => apiFetch<Conversation[]>(`/api/v1/projects/${projectId}/conversations`),
+    enabled: Boolean(projectId && !collapsed),
+  });
+  const agentSessionsQuery = useQuery({
+    queryKey: ["agent-sessions", projectId],
+    queryFn: () => apiFetch<AgentSession[]>(`/api/v1/projects/${projectId}/agent-sessions`),
+    enabled: Boolean(projectId && !collapsed),
+  });
 
   const toggleCollapsed = () => {
     setCollapsed((current) => {
@@ -121,6 +146,10 @@ export default function AppSidebar() {
       projectId={projectId}
       project={projectQuery.data}
       projectUnavailable={projectQuery.isError}
+      conversations={conversationsQuery.data}
+      conversationsUnavailable={conversationsQuery.isError}
+      agentSessions={agentSessionsQuery.data}
+      agentSessionsUnavailable={agentSessionsQuery.isError}
     />
   );
 }
@@ -132,6 +161,10 @@ export function AppSidebarView({
   projectId,
   project,
   projectUnavailable = false,
+  conversations,
+  conversationsUnavailable = false,
+  agentSessions,
+  agentSessionsUnavailable = false,
 }: AppSidebarViewProps) {
   const currentMode = projectId
     ? projectModeFromPathname(pathname, projectId)
@@ -144,6 +177,70 @@ export function AppSidebarView({
         { mode: "agent", label: "研究助手", to: `/projects/${projectId}/agent`, icon: "agent" },
       ]
     : [];
+  const [expanded, setExpanded] = useState<Record<"chat" | "agent", boolean>>({
+    chat: currentMode === "chat",
+    agent: currentMode === "agent",
+  });
+  const [showAll, setShowAll] = useState<Record<"chat" | "agent", boolean>>({
+    chat: false,
+    agent: false,
+  });
+
+  useEffect(() => {
+    if (currentMode !== "chat" && currentMode !== "agent") return;
+    setExpanded((current) => current[currentMode]
+      ? current
+      : { ...current, [currentMode]: true });
+  }, [currentMode]);
+
+  const activeConversationId = routeResourceId(pathname, "chat");
+  const activeSessionId = routeResourceId(pathname, "agent");
+
+  const sessionTree = (mode: "chat" | "agent") => {
+    const isChat = mode === "chat";
+    const items = isChat ? conversations : agentSessions;
+    const unavailable = isChat ? conversationsUnavailable : agentSessionsUnavailable;
+    const visibleItems = showAll[mode] ? items : items?.slice(0, RECENT_SESSION_LIMIT);
+
+    return (
+      <div className="app-session-tree app-nav-label">
+        {items === undefined && !unavailable ? <p>正在读取会话…</p> : null}
+        {unavailable ? <p className="error-text">会话读取失败</p> : null}
+        {items?.length === 0 ? <p>还没有会话</p> : null}
+        {isChat
+          ? (visibleItems as typeof conversations)?.map((conversation) => (
+              <Link
+                key={conversation.conversation_id}
+                className={conversation.conversation_id === activeConversationId ? "active" : ""}
+                to={chatConversationPath(projectId ?? "", conversation.conversation_id)}
+                title={conversation.title || "未命名问答"}
+              >
+                <span>{conversation.title || "未命名问答"}</span>
+              </Link>
+            ))
+          : (visibleItems as typeof agentSessions)?.map((session) => (
+              <Link
+                key={session.session_id}
+                className={session.session_id === activeSessionId ? "active" : ""}
+                to={`/projects/${projectId}/agent/${session.session_id}`}
+                title={session.title || "未命名研究会话"}
+              >
+                <span>{session.title || "未命名研究会话"}</span>
+                {session.active_turn_run_id ? <i aria-label="研究进行中" /> : null}
+              </Link>
+            ))}
+        {(items?.length ?? 0) > RECENT_SESSION_LIMIT ? (
+          <button
+            type="button"
+            className="app-session-more"
+            onClick={() => setShowAll((current) => ({ ...current, [mode]: !current[mode] }))}
+          >
+            {showAll[mode] ? "收起" : `查看全部 ${items?.length}`}
+          </button>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <aside className={`app-sidebar${collapsed ? " is-collapsed" : ""}`}>
@@ -186,18 +283,47 @@ export function AppSidebarView({
             </p>
             {projectItems.map((item) => {
               const active = item.mode === currentMode;
+              const sessionMode: "chat" | "agent" | null =
+                item.mode === "chat" || item.mode === "agent" ? item.mode : null;
               return (
-                <NavLink
-                  key={item.mode}
-                  to={item.to}
-                  end={item.mode === "library"}
-                  aria-label={item.label}
-                  aria-current={active ? "page" : undefined}
-                  className={`app-nav-link${active ? " active" : ""}`}
-                >
-                  <SidebarIcon name={item.icon} />
-                  <span className="app-nav-label">{item.label}</span>
-                </NavLink>
+                <div className={`app-nav-group${active ? " active" : ""}`} key={item.mode}>
+                  <div className="app-nav-group-row">
+                    <NavLink
+                      to={item.to}
+                      end={item.mode === "library"}
+                      aria-label={item.label}
+                      aria-current={active ? "page" : undefined}
+                      className={`app-nav-link${active ? " active" : ""}`}
+                    >
+                      <SidebarIcon name={item.icon} />
+                      <span className="app-nav-label">{item.label}</span>
+                    </NavLink>
+                    {sessionMode ? (
+                      <div className="app-nav-group-actions app-nav-label">
+                        <Link
+                          className="app-nav-create"
+                          to={item.to}
+                          aria-label={sessionMode === "chat" ? "新建文献问答" : "新建研究会话"}
+                        >
+                          <span aria-hidden="true">＋</span>
+                        </Link>
+                        <button
+                          type="button"
+                          className="app-nav-disclosure"
+                          aria-label={`${expanded[sessionMode] ? "收起" : "展开"}${item.label}会话`}
+                          aria-expanded={expanded[sessionMode]}
+                          onClick={() => setExpanded((current) => ({
+                            ...current,
+                            [sessionMode]: !current[sessionMode],
+                          }))}
+                        >
+                          <span aria-hidden="true">›</span>
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  {sessionMode && expanded[sessionMode] ? sessionTree(sessionMode) : null}
+                </div>
               );
             })}
           </div>

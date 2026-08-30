@@ -4,10 +4,9 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { Conversation, PaperListItem, Project } from "../api/types";
-import ChatWorkspaceFrame from "../components/ChatWorkspaceFrame";
-import ConversationRail from "../components/ConversationRail";
 import PageBar from "../components/PageBar";
 import PaperTitle from "../components/PaperTitle";
+import ResearchWorkspaceFrame from "../components/ResearchWorkspaceFrame";
 import {
   createScopeSelection,
   scopeRequest,
@@ -87,90 +86,87 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
         title="文献问答"
         actions={<span className="page-bar-stat"><strong>{conversationsQuery.data?.length ?? "—"}</strong> 条问答</span>}
       />
-      <ChatWorkspaceFrame
-        rail={
-          <ConversationRail
-            projectId={projectId}
-            conversations={conversationsQuery.data}
-            error={conversationsQuery.isError ? errorMessage(conversationsQuery.error) : null}
-          />
-        }
-        conversation={
+      <ResearchWorkspaceFrame
+        kind="chat"
+        main={
           <main className="conversation-main chat-create-main">
             <header className="chat-heading">
               <div>
                 <p className="eyebrow">NEW CITED QUESTION</p>
-                <h2>选择这次问答的证据范围</h2>
-                <p>{scopeDescription}</p>
+                <h2>新建文献问答</h2>
+                <p>先确定引用范围，进入会话后即可持续追问。</p>
               </div>
             </header>
-            <section className="chat-scope-picker" aria-labelledby="chat-scope-title">
-              <div className="chat-scope-intro">
-                <h3 id="chat-scope-title">检索范围</h3>
-                <button
-                  type="button"
-                  className={selection.paperIds.length === 0 ? "scope-choice active" : "scope-choice"}
-                  onClick={() => setScopeDraft(createScopeSelection())}
-                >
-                  <strong>整个 Project</strong>
-                  <span>提问时检索全部已就绪的固定文献版本</span>
-                </button>
+            <section className="chat-create-card" aria-labelledby="chat-scope-title">
+              <div className="chat-create-summary">
+                <span className="context-chip">
+                  {selection.paperIds.length === 0
+                    ? `整个 Project · ${papersQuery.data?.length ?? "—"} 篇`
+                    : `固定文献 · ${selection.paperIds.length} 篇`}
+                </span>
+                <p>{scopeDescription}</p>
               </div>
-              <fieldset>
-                <legend>或固定单篇 / 多篇文献</legend>
-                {papersQuery.isPending ? <p className="muted">正在读取项目文献…</p> : null}
-                {papersQuery.isError ? <p className="error-text">{errorMessage(papersQuery.error)}</p> : null}
-                {papersQuery.data?.length === 0 ? (
-                  <p className="muted">文献库尚无可选论文。先收录并完成索引。</p>
-                ) : null}
-                <div className="chat-paper-options">
-                  {papersQuery.data?.map((paper) => (
-                    <label key={paper.paper_id}>
-                      <input
-                        type="checkbox"
-                        checked={selection.paperIds.includes(paper.paper_id)}
-                        disabled={Boolean(paper.archived_at)}
-                        onChange={() => setScopeDraft(toggleScopePaper(selection, paper.paper_id))}
-                      />
-                      <span>
-                        <strong><PaperTitle paper={paper} /></strong>
-                        <small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "等待解析"}{paper.archived_at ? " · 已归档" : ""}</small>
-                      </span>
-                    </label>
+              <details className="composer-options">
+                <summary id="chat-scope-title">
+                  <span aria-hidden="true">＋</span>
+                  选择证据范围
+                </summary>
+                <div className="composer-options-popover chat-scope-picker">
+                  <button
+                    type="button"
+                    className={selection.paperIds.length === 0 ? "scope-choice active" : "scope-choice"}
+                    onClick={() => setScopeDraft(createScopeSelection())}
+                  >
+                    <strong>整个 Project</strong>
+                    <span>每次提问时从所有已就绪文献中检索</span>
+                  </button>
+                  <fieldset>
+                    <legend>或固定单篇 / 多篇文献</legend>
+                    {papersQuery.isPending ? <p className="muted">正在读取项目文献…</p> : null}
+                    {papersQuery.isError ? <p className="error-text">{errorMessage(papersQuery.error)}</p> : null}
+                    {papersQuery.data?.length === 0 ? (
+                      <p className="muted">文献库尚无可选论文。先收录并完成索引。</p>
+                    ) : null}
+                    <div className="chat-paper-options">
+                      {papersQuery.data?.map((paper) => (
+                        <label key={paper.paper_id}>
+                          <input
+                            type="checkbox"
+                            checked={selection.paperIds.includes(paper.paper_id)}
+                            disabled={Boolean(paper.archived_at)}
+                            onChange={() => setScopeDraft(toggleScopePaper(selection, paper.paper_id))}
+                          />
+                          <span>
+                            <strong><PaperTitle paper={paper} /></strong>
+                            <small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "等待解析"}{paper.archived_at ? " · 已归档" : ""}</small>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                </div>
+              </details>
+              {selectedPapers.length > 0 ? (
+                <div className="context-chip-list" aria-label="已选择文献">
+                  {selectedPapers.map((paper) => (
+                    <span className="context-chip" key={paper.paper_id}><PaperTitle paper={paper} /></span>
                   ))}
                 </div>
-              </fieldset>
+              ) : null}
+              {archived ? <p className="readonly-note">该 Project 已归档。历史问答仍可查看，但不能创建新问答。</p> : null}
+              {createMutation.isError ? <p className="error-text">{errorMessage(createMutation.error)}</p> : null}
+              <footer className="chat-create-actions">
+                <span>创建后范围保持不变</span>
+                <button
+                  type="button"
+                  disabled={archived || createMutation.isPending}
+                  onClick={() => createMutation.mutate(selection)}
+                >
+                  {createMutation.isPending ? "正在创建…" : "创建问答"}<span aria-hidden="true">→</span>
+                </button>
+              </footer>
             </section>
-            {archived ? <p className="readonly-note">该 Project 已归档。历史问答仍可查看，但不能创建新问答。</p> : null}
-            {createMutation.isError ? <p className="error-text">{errorMessage(createMutation.error)}</p> : null}
-            <footer className="chat-create-actions">
-              <span>{selection.paperIds.length === 0 ? "Project scope" : `${selection.paperIds.length} papers selected`}</span>
-              <button
-                type="button"
-                disabled={archived || createMutation.isPending}
-                onClick={() => createMutation.mutate(selection)}
-              >
-                {createMutation.isPending ? "正在创建…" : "创建问答"}<span aria-hidden="true">→</span>
-              </button>
-            </footer>
           </main>
-        }
-        evidence={
-          <aside className="evidence-drawer chat-scope-margin">
-            <header><div><p className="eyebrow">SCOPE MARGIN</p><h2>本次上下文</h2></div></header>
-            <dl className="evidence-meta">
-              <div><dt>范围</dt><dd>{selection.paperIds.length === 0 ? "整个 Project" : "固定文献"}</dd></div>
-              <div><dt>数量</dt><dd>{selection.paperIds.length === 0 ? papersQuery.data?.length ?? "—" : selection.paperIds.length} 篇</dd></div>
-              <div><dt>方式</dt><dd>每个问题独立检索</dd></div>
-            </dl>
-            {selectedPapers.length > 0 ? (
-              <ol className="scope-paper-summary">
-                {selectedPapers.map((paper) => <li key={paper.paper_id}><PaperTitle paper={paper} /></li>)}
-              </ol>
-            ) : (
-              <p className="muted">回答只会引用本次范围内经过校验的 Evidence。</p>
-            )}
-          </aside>
         }
       />
     </div>

@@ -6,9 +6,11 @@ async function createProject(page: Page) {
   await page.goto("/");
   // 空态时创建 Modal 自动打开，否则点击幽灵卡展开
   const nameInput = page.getByLabel("项目名称");
-  if (!(await nameInput.isVisible())) {
-    await page.getByRole("button", { name: "新建项目" }).click();
+  const createButton = page.getByRole("button", { name: "新建项目" });
+  if (await createButton.getAttribute("aria-expanded") !== "true") {
+    await createButton.click();
   }
+  await expect(nameInput).toBeVisible();
   await nameInput.fill("E2E Phase 5 Agent");
   await page.getByLabel("研究说明 可选").fill("Phase 5 离线 Agent Chat UI 验收项目");
   await page.getByRole("button", { name: "创建 Project" }).click();
@@ -48,7 +50,7 @@ test("离线 Research Agent 完成配置、两轮恢复与候选成果展示", a
     .getByRole("navigation", { name: "应用导航" })
     .getByRole("link", { name: "研究助手", exact: true })
     .click();
-  await expect(page.getByRole("heading", { name: "研究会话" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "让项目材料成为持续研究上下文" })).toBeVisible();
   await page.getByLabel("新会话标题").fill("证据综合会话");
   await page.getByRole("button", { name: "新建研究会话" }).click();
   await expect(page).toHaveURL(/\/agent\/[0-9a-f-]+$/);
@@ -59,11 +61,21 @@ test("离线 Research Agent 完成配置、两轮恢复与候选成果展示", a
   await page.getByRole("button", { name: "保存能力配置" }).click();
   await expect(page.getByText(/研究方法已锁定/)).toHaveCount(0);
 
+  await page.getByLabel("添加本轮证据或附件").click();
   await page.getByLabel("本轮 Evidence Matrix").selectOption({ index: 1 });
   await page.getByLabel("研究消息").fill("请综合这些证据并指出主要研究缺口。");
-  await page.getByRole("button", { name: "开始本轮研究" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("当前授权上下文证据不足。")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("tab", { name: /成果/ }).click();
+  const firstTurnOrder = await page.locator(".agent-turn-thread").first().locator(":scope > *").evaluateAll(
+    (nodes) => nodes.map((node) => node.getAttribute("class") ?? ""),
+  );
+  expect(firstTurnOrder).toEqual([
+    "message message-user",
+    "agent-research-disclosure",
+    "message message-assistant",
+  ]);
+  await expect(page.locator(".agent-turn-progress")).toHaveCount(0);
+  await page.getByRole("button", { name: "成果", exact: true }).click();
   await page.getByText("内部候选 · 1", { exact: true }).click();
   const candidateArtifact = page.getByText("research-note.md");
   await candidateArtifact.scrollIntoViewIfNeeded();
@@ -76,15 +88,18 @@ test("离线 Research Agent 完成配置、两轮恢复与候选成果展示", a
   await page.reload();
   await expect(page.getByText("请综合这些证据并指出主要研究缺口。")).toBeVisible();
   await expect(page.getByText("当前授权上下文证据不足。")).toBeVisible();
+  await page.getByLabel("添加本轮证据或附件").click();
   await expect(page.getByLabel("本轮 Evidence Matrix")).toHaveValue("");
   await expect(page.getByLabel("本轮 Evidence Matrix").locator("option:checked")).toHaveText("沿用上一轮 Evidence Matrix");
-  await expect(page.getByText("研究方法已锁定 · 每条消息创建独立 Turn")).toBeVisible();
+  await page.getByText("研究能力", { exact: true }).click();
+  await expect(page.getByText("首轮开始后已锁定；更换研究方法需要新建会话。")).toBeVisible();
+  await page.getByText("研究能力", { exact: true }).click();
 
   await page.getByLabel("研究消息").fill("继续比较不同方法，并给出下一步研究建议。");
-  await page.getByRole("button", { name: "开始本轮研究" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("继续比较不同方法，并给出下一步研究建议。")).toBeVisible();
   await expect(page.locator(".message-assistant")).toHaveCount(2, { timeout: 30_000 });
-  await page.getByRole("tab", { name: /成果/ }).click();
+  await page.getByRole("button", { name: "成果", exact: true }).click();
   await page.getByText("内部候选 · 1", { exact: true }).click();
   await expect(page.getByText("research-note.md")).toBeVisible();
 

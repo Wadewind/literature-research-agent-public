@@ -10,12 +10,12 @@ interface StoredWorkspaceLayout extends WorkspaceLayout {
   version: 1;
 }
 
-export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = { left: 260, right: 360 };
+export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = { left: 260, right: 420 };
 export const WORKSPACE_LAYOUT_BOUNDS = {
   left: { min: 220, max: 420 },
-  right: { min: 300, max: 520 },
-  centerMin: 600,
-  separators: 16,
+  right: { min: 300, max: 720 },
+  centerMin: 560,
+  separators: 8,
 } as const;
 
 interface ReadStorage {

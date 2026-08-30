@@ -1,13 +1,11 @@
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
-  type CSSProperties,
   type FormEvent,
 } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type {
@@ -53,22 +51,16 @@ import {
   isSkillProfileLocked,
   isSessionInProject,
 } from "../agent/presentation";
-import {
-  AGENT_WORKSPACE_DEFAULT,
-  loadAgentWorkspaceLayout,
-  saveAgentWorkspaceLayout,
-  type AgentWorkspaceLayout,
-} from "../agent/workspaceLayout";
 import AgentCapabilityPanel from "../components/AgentCapabilityPanel";
 import AgentAttachmentComposer from "../components/AgentAttachmentComposer";
 import AgentBrowserPanel from "../components/AgentBrowserPanel";
 import AgentEvidenceMargin from "../components/AgentEvidenceMargin";
-import AgentInspector from "../components/AgentInspector";
+import AgentInspector, { type AgentInspectorTab } from "../components/AgentInspector";
 import AgentResearchActivity from "../components/AgentResearchActivity";
-import AgentResizeSeparator from "../components/AgentResizeSeparator";
-import AgentSessionRail from "../components/AgentSessionRail";
 import AgentTurnOutputs from "../components/AgentTurnOutputs";
+import ConversationMessage from "../components/ConversationMessage";
 import PageBar from "../components/PageBar";
+import ResearchWorkspaceFrame from "../components/ResearchWorkspaceFrame";
 import { isCancellable, isTerminal, statusLabel } from "../runs/runStatus";
 import { useRunEvents } from "../runs/useRunEvents";
 
@@ -86,13 +78,38 @@ interface AgentWorkspaceProps {
   sessionId: string;
 }
 
+interface AgentMessageItemProps {
+  message: AgentMessage;
+  onCitation: (citation: CitationSummary) => void;
+}
+
+function AgentMessageItem({ message, onCitation }: AgentMessageItemProps) {
+  return (
+    <ConversationMessage role={message.role} createdAt={message.created_at}>
+      <p>{message.content}</p>
+      {message.claims?.map((claim, claimIndex) => (
+        <div className="agent-inline-claim" key={`${message.message_id}:${claimIndex}`}>
+          <span className="mono">E{String(claimIndex + 1).padStart(2, "0")}</span>
+          {claim.citations.map((citation) => (
+            <button
+              key={citation.evidence_id}
+              type="button"
+              className="citation-marker"
+              onClick={() => onCitation(citation)}
+            >
+              p.{citation.page_start ?? "?"}
+            </button>
+          ))}
+        </div>
+      ))}
+    </ConversationMessage>
+  );
+}
+
 function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const workspaceRef = useRef<HTMLDivElement>(null);
-  const [workspaceLayout, setWorkspaceLayout] = useState<AgentWorkspaceLayout>(() =>
-    loadAgentWorkspaceLayout(window.localStorage)
-  );
   const [newSessionTitle, setNewSessionTitle] = useState("");
   const [content, setContent] = useState("");
   const [messageIntent, setMessageIntent] = useState<AgentMessageIntent | null>(null);
@@ -105,6 +122,13 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     mcp: null,
     skills: null,
   });
+  const inspectorParam = searchParams.get("inspector");
+  const inspectorTab: AgentInspectorTab =
+    inspectorParam === "browser" || inspectorParam === "outputs"
+      ? inspectorParam
+      : "evidence";
+  const inspectorOpen = inspectorParam === "evidence" ||
+    inspectorParam === "browser" || inspectorParam === "outputs";
 
   const projectQuery = useQuery({
     queryKey: ["project", projectId],
@@ -302,6 +326,20 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     sessionId,
   ]);
 
+  useEffect(() => {
+    if (!inspectorOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        next.delete("inspector");
+        return next;
+      });
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [inspectorOpen, setSearchParams]);
+
   const createSessionMutation = useMutation({
     mutationFn: () =>
       apiFetch<AgentSession>(`/api/v1/projects/${projectId}/agent-sessions`, {
@@ -428,6 +466,25 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     postMessageMutation.mutate(intent);
   };
 
+  const openInspector = (tab: AgentInspectorTab) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("inspector", tab);
+      return next;
+    });
+  };
+  const closeInspector = () => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("inspector");
+      return next;
+    });
+  };
+  const selectCitation = (citation: CitationSummary) => {
+    setSelectedEvidence(citation);
+    openInspector("evidence");
+  };
+
   const uploadAttachment = (file: File) => {
     const intent = ensureAgentAttachmentUploadIntent(
       uploadIntent,
@@ -523,7 +580,6 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   const currentActivity = candidateTurnRunId ? turnActivities.get(candidateTurnRunId) : undefined;
   const turnFailure = currentActivity?.failure ?? null;
   const skillLocked = isSkillProfileLocked(messages.length);
-  const researchEvents = currentActivity?.events ?? [];
   const assistantMessages = messages.filter((message) => message.role === "assistant");
   const availableMatrices = eligibleEvidenceMatrices(reviewsQuery.data ?? []);
   const capabilityLoading = mcpCatalogQuery.isPending || mcpProfileQuery.isPending ||
@@ -537,16 +593,6 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
           skillCatalogQuery.error ?? skillProfileQuery.error,
         )
       : null;
-  const updateWorkspaceLayout = (next: AgentWorkspaceLayout) => {
-    setWorkspaceLayout(next);
-    saveAgentWorkspaceLayout(window.localStorage, next);
-  };
-  const resetWorkspaceLayout = () => updateWorkspaceLayout(AGENT_WORKSPACE_DEFAULT);
-  const workspaceStyle = {
-    "--agent-left-width": `${workspaceLayout.left}px`,
-    "--agent-right-width": `${workspaceLayout.right}px`,
-  } as CSSProperties;
-
   return (
     <div className="viewport-workspace-page agent-page">
       <PageBar
@@ -555,67 +601,84 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
         actions={<span className="page-bar-stat"><strong>{sessionsQuery.data?.length ?? "—"}</strong> 个会话</span>}
       />
 
-      <div className="agent-workspace" ref={workspaceRef} style={workspaceStyle}>
-        <AgentSessionRail
-          projectId={projectId}
-          sessions={sessionsQuery.data}
-          activeSessionId={sessionId}
-          title={newSessionTitle}
-          pending={createSessionMutation.isPending}
-          error={createSessionMutation.isError ? errorMessage(createSessionMutation.error) : null}
-          onTitleChange={setNewSessionTitle}
-          onCreate={() => createSessionMutation.mutate()}
-        />
-
-        <AgentResizeSeparator
-          pane="left"
-          layout={workspaceLayout}
-          containerRef={workspaceRef}
-          onChange={updateWorkspaceLayout}
-          onReset={resetWorkspaceLayout}
-        />
-
-        <section className="agent-conversation" aria-label="研究助手对话">
+      <ResearchWorkspaceFrame
+        kind="agent"
+        inspectorOpen={inspectorOpen}
+        main={<section className="agent-conversation" aria-label="研究助手对话">
           {!sessionId ? (
             <div className="agent-welcome">
               <span className="agent-welcome-mark" aria-hidden="true">A·01</span>
               <p className="eyebrow">START A RESEARCH THREAD</p>
               <h2>让项目材料成为持续研究上下文</h2>
-              <p>创建会话后，先选择一次 Evidence Matrix，并按需启用平台维护的研究能力。</p>
+              <p>创建会话后，通过简洁输入区选择证据、附件与研究能力。</p>
+              <form
+                className="agent-start-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  createSessionMutation.mutate();
+                }}
+              >
+                <label className="sr-only" htmlFor="agent-session-title">新会话标题</label>
+                <input
+                  id="agent-session-title"
+                  value={newSessionTitle}
+                  maxLength={200}
+                  autoComplete="off"
+                  onChange={(event) => setNewSessionTitle(event.target.value)}
+                  placeholder="例如：研究缺口分析…"
+                />
+                <button type="submit" disabled={createSessionMutation.isPending}>
+                  {createSessionMutation.isPending ? "正在创建…" : "新建研究会话"}
+                </button>
+              </form>
+              {createSessionMutation.isError ? (
+                <p className="error-text">{errorMessage(createSessionMutation.error)}</p>
+              ) : null}
             </div>
           ) : (
             <>
               <header className="agent-chat-heading">
                 <div><p className="eyebrow">CONTINUOUS RESEARCH</p><h2>{sessionQuery.data?.title || "未命名研究会话"}</h2></div>
-                <span className={
-                  activeTurnRunId
-                    ? "badge badge-pending"
-                    : turnFailure
-                      ? "badge badge-error"
-                      : "badge badge-ok"
-                }>
-                  {activeTurnRunId
-                    ? statusLabel(runQuery.data?.status ?? "queued")
-                    : turnFailure
-                      ? "上一轮失败 · 可重新发起"
-                      : "可继续"}
-                </span>
+                <div className="agent-chat-heading-actions">
+                  <span className={
+                    activeTurnRunId
+                      ? "badge badge-pending"
+                      : turnFailure
+                        ? "badge badge-error"
+                        : "badge badge-ok"
+                  }>
+                    {activeTurnRunId
+                      ? statusLabel(runQuery.data?.status ?? "queued")
+                      : turnFailure
+                        ? "上一轮失败 · 可重新发起"
+                        : "可继续"}
+                  </span>
+                  <div className="inspector-launcher" aria-label="打开研究检查器">
+                    <button type="button" className="button-plain" onClick={() => openInspector("evidence")}>证据</button>
+                    <button type="button" className="button-plain" onClick={() => openInspector("browser")}>浏览器</button>
+                    <button type="button" className="button-plain" onClick={() => openInspector("outputs")}>成果</button>
+                  </div>
+                  <div className="agent-capability-menu">
+                    <AgentCapabilityPanel
+                      mcpCatalog={mcpCatalogQuery.data ?? []}
+                      mcpSelections={mcpSelections}
+                      skillCatalog={skillCatalogQuery.data ?? []}
+                      skillSelections={skillSelections}
+                      skillLocked={skillLocked}
+                      mcpDirty={mcpDirty}
+                      skillDirty={skillDirty}
+                      pending={capabilityMutation.isPending}
+                      loading={capabilityLoading}
+                      error={capabilityError}
+                      onMcpToggle={handleMcpToggle}
+                      onMcpParameter={handleMcpParameter}
+                      onSkillToggle={handleSkillToggle}
+                      onSave={() => capabilityMutation.mutate()}
+                    />
+                  </div>
+                </div>
               </header>
 
-              {activeTurnRunId && (
-                <section className="agent-turn-progress" aria-live="polite">
-                  <span className="progress-pulse" aria-hidden="true" />
-                  <div>
-                    <strong>{researchEvents.at(-1)?.label ?? "研究任务正在执行"}</strong>
-                    <small>Run {activeTurnRunId.slice(0, 8)} · {researchEvents.length} 条筛选后活动</small>
-                  </div>
-                  {isCancellable(runQuery.data?.status ?? "queued") && (
-                    <button className="danger" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>
-                      {cancelMutation.isPending ? "正在停止…" : "停止本轮"}
-                    </button>
-                  )}
-                </section>
-              )}
               {(postMessageMutation.isError || cancelMutation.isError) && (
                 <p className="notice error-text">{errorMessage(postMessageMutation.error ?? cancelMutation.error)}</p>
               )}
@@ -628,29 +691,12 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
                 )}
                 {turnGroups.map((group) => {
                   const activity = turnActivities.get(group.turnRunId);
+                  const userMessages = group.messages.filter((message) => message.role === "user");
+                  const assistantMessagesForTurn = group.messages.filter((message) => message.role === "assistant");
                   return (
                     <section className="agent-turn-thread" key={group.turnRunId}>
-                      {group.messages.map((message) => (
-                        <article
-                          aria-label={message.role === "user" ? "你的消息" : "研究助手消息"}
-                          className={`message message-${message.role}`}
-                          key={message.message_id}
-                        >
-                          <p>{message.content}</p>
-                          {message.claims?.map((claim, claimIndex) => (
-                            <div className="agent-inline-claim" key={`${message.message_id}:${claimIndex}`}>
-                              <span className="mono">E{String(claimIndex + 1).padStart(2, "0")}</span>
-                              {claim.citations.map((citation) => (
-                                <button key={citation.evidence_id} type="button" className="citation-marker" onClick={() => setSelectedEvidence(citation)}>
-                                  p.{citation.page_start ?? "?"}
-                                </button>
-                              ))}
-                            </div>
-                          ))}
-                          <time className="agent-message-time" dateTime={message.created_at}>
-                            {new Date(message.created_at).toLocaleTimeString()}
-                          </time>
-                        </article>
+                      {userMessages.map((message) => (
+                        <AgentMessageItem key={message.message_id} message={message} onCitation={selectCitation} />
                       ))}
                       {activity && (
                         <AgentResearchActivity
@@ -662,93 +708,99 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
                           failure={activity.failure}
                         />
                       )}
+                      {assistantMessagesForTurn.map((message) => (
+                        <AgentMessageItem key={message.message_id} message={message} onCitation={selectCitation} />
+                      ))}
                     </section>
                   );
                 })}
               </div>
 
-              <form className="agent-composer" onSubmit={submitMessage}>
-                <div className="agent-composer-settings" aria-label="研究设置">
-                  <div className="agent-composer-context">
-                    <label htmlFor="agent-matrix">本轮 Evidence Matrix</label>
-                    <select id="agent-matrix" value={selectedReviewRunId} onChange={(event) => { setSelectedReviewRunId(event.target.value); setMessageIntent(null); }} disabled={!canInteract || Boolean(activeTurnRunId)}>
-                      <option value="">{turnQuery.data?.review_output_id ? "沿用上一轮 Evidence Matrix" : "请选择可用 Evidence Matrix"}</option>
-                      {availableMatrices.map((review) => (
-                        <option key={review.run_id} value={review.run_id}>
-                          {review.research_question} · {review.evidence_matrix.valid_papers} valid / {review.evidence_matrix.failed_papers} failed / {review.evidence_matrix.row_count} rows{review.status === "failed" ? " · Review 后续失败" : ""}
-                        </option>
-                      ))}
-                    </select>
+              <form className="conversation-composer agent-composer" onSubmit={submitMessage}>
+                <details className="composer-options">
+                  <summary aria-label="添加本轮证据或附件">
+                    <span aria-hidden="true">＋</span>
+                    本轮上下文
+                  </summary>
+                  <div className="composer-options-popover agent-composer-options">
+                    <div className="agent-composer-context">
+                      <label htmlFor="agent-matrix">Evidence Matrix</label>
+                      <select id="agent-matrix" aria-label="本轮 Evidence Matrix" value={selectedReviewRunId} onChange={(event) => { setSelectedReviewRunId(event.target.value); setMessageIntent(null); }} disabled={!canInteract || Boolean(activeTurnRunId)}>
+                        <option value="">{turnQuery.data?.review_output_id ? "沿用上一轮 Evidence Matrix" : "请选择可用 Evidence Matrix"}</option>
+                        {availableMatrices.map((review) => (
+                          <option key={review.run_id} value={review.run_id}>
+                            {review.research_question} · {review.evidence_matrix.valid_papers} valid / {review.evidence_matrix.failed_papers} failed / {review.evidence_matrix.row_count} rows{review.status === "failed" ? " · Review 后续失败" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <AgentAttachmentComposer
+                      attachments={attachmentsQuery.data ?? []}
+                      selectedIds={selectedAttachmentIds}
+                      disabled={
+                        !canInteract ||
+                        Boolean(activeTurnRunId) ||
+                        deleteAttachmentMutation.isPending
+                      }
+                      uploading={uploadAttachmentMutation.isPending}
+                      error={
+                        uploadAttachmentMutation.isError || deleteAttachmentMutation.isError ||
+                        attachmentsQuery.isError
+                          ? errorMessage(
+                              uploadAttachmentMutation.error ?? deleteAttachmentMutation.error ??
+                              attachmentsQuery.error,
+                            )
+                          : null
+                      }
+                      onUpload={uploadAttachment}
+                      onToggle={(attachmentId) => {
+                        setSelectedAttachmentIds((current) => current.includes(attachmentId) ? current.filter((value) => value !== attachmentId) : current.length < 5 ? [...current, attachmentId] : current);
+                        setMessageIntent(null);
+                      }}
+                      onDelete={(attachmentId) => deleteAttachmentMutation.mutate(attachmentId)}
+                    />
+                    {(selectedReviewRunId && selectedMatrixQuery.isPending) ? <small>正在验证 Evidence Matrix…</small> : null}
+                    {reviewsQuery.isError ? <small className="error-text">{errorMessage(reviewsQuery.error)}</small> : null}
+                    {selectedMatrixQuery.isError ? <small className="error-text">{errorMessage(selectedMatrixQuery.error)}</small> : null}
                   </div>
-                  <AgentCapabilityPanel
-                    mcpCatalog={mcpCatalogQuery.data ?? []}
-                    mcpSelections={mcpSelections}
-                    skillCatalog={skillCatalogQuery.data ?? []}
-                    skillSelections={skillSelections}
-                    skillLocked={skillLocked}
-                    mcpDirty={mcpDirty}
-                    skillDirty={skillDirty}
-                    pending={capabilityMutation.isPending}
-                    loading={capabilityLoading}
-                    error={capabilityError}
-                    onMcpToggle={handleMcpToggle}
-                    onMcpParameter={handleMcpParameter}
-                    onSkillToggle={handleSkillToggle}
-                    onSave={() => capabilityMutation.mutate()}
-                  />
-                </div>
-                <AgentAttachmentComposer
-                  attachments={attachmentsQuery.data ?? []}
-                  selectedIds={selectedAttachmentIds}
-                  disabled={
-                    !canInteract ||
-                    Boolean(activeTurnRunId) ||
-                    deleteAttachmentMutation.isPending
-                  }
-                  uploading={uploadAttachmentMutation.isPending}
-                  error={
-                    uploadAttachmentMutation.isError || deleteAttachmentMutation.isError ||
-                    attachmentsQuery.isError
-                      ? errorMessage(
-                          uploadAttachmentMutation.error ?? deleteAttachmentMutation.error ??
-                          attachmentsQuery.error,
-                        )
-                      : null
-                  }
-                  onUpload={uploadAttachment}
-                  onToggle={(attachmentId) => {
-                    setSelectedAttachmentIds((current) => current.includes(attachmentId) ? current.filter((value) => value !== attachmentId) : current.length < 5 ? [...current, attachmentId] : current);
-                    setMessageIntent(null);
-                  }}
-                  onDelete={(attachmentId) => deleteAttachmentMutation.mutate(attachmentId)}
-                />
-                {(selectedReviewRunId && selectedMatrixQuery.isPending) && <small>正在验证 Evidence Matrix…</small>}
-                {reviewsQuery.isError && <small className="error-text">{errorMessage(reviewsQuery.error)}</small>}
-                {selectedMatrixQuery.isError && <small className="error-text">{errorMessage(selectedMatrixQuery.error)}</small>}
-                <label className="agent-message-label" htmlFor="agent-message">研究消息</label>
-                <textarea id="agent-message" rows={3} maxLength={16_000} value={content} onChange={(event) => { setContent(event.target.value); if (messageIntent && event.target.value.trim() !== messageIntent.content) setMessageIntent(null); }} disabled={!canInteract || Boolean(activeTurnRunId)} placeholder="例如：基于这些证据，比较各研究的方法差异并指出尚未解决的研究缺口。" />
-                <div className="agent-composer-actions">
-                  <small>
-                    {!canInteract
-                      ? "正在确认 Project 与研究会话范围…"
-                      : `${skillLocked ? "研究方法已锁定" : "发送首条消息后将锁定研究方法"} · 每条消息创建独立 Turn`}
-                  </small>
-                  <button type="submit" disabled={!canSendAgentMessage(content, reviewOutputId, activeTurnRunId, !canInteract || postMessageMutation.isPending || mcpDirty || skillDirty)}>{postMessageMutation.isPending ? "正在提交…" : "开始本轮研究"}</button>
+                </details>
+                <label className="sr-only" htmlFor="agent-message">研究消息</label>
+                <textarea id="agent-message" rows={2} maxLength={16_000} value={content} onChange={(event) => { setContent(event.target.value); if (messageIntent && event.target.value.trim() !== messageIntent.content) setMessageIntent(null); }} disabled={!canInteract || Boolean(activeTurnRunId)} placeholder="输入研究问题…" />
+                <div className="conversation-composer-toolbar">
+                  <div className="context-chip-list" aria-label="本轮已选上下文">
+                    <span className="context-chip">
+                      {selectedReviewRunId
+                        ? "已选择 Evidence Matrix"
+                        : turnQuery.data?.review_output_id
+                          ? "沿用 Evidence Matrix"
+                          : "未选择 Evidence Matrix"}
+                    </span>
+                    {selectedAttachmentIds.length > 0 ? (
+                      <span className="context-chip">附件 {selectedAttachmentIds.length}</span>
+                    ) : null}
+                  </div>
+                  {activeTurnRunId ? (
+                    <button
+                      className="danger agent-stop-button"
+                      type="button"
+                      disabled={cancelMutation.isPending || !isCancellable(runQuery.data?.status ?? "queued")}
+                      onClick={() => cancelMutation.mutate()}
+                    >
+                      {cancelMutation.isPending ? "正在停止…" : "停止本轮"}
+                      <span aria-hidden="true">■</span>
+                    </button>
+                  ) : (
+                    <button type="submit" disabled={!canSendAgentMessage(content, reviewOutputId, activeTurnRunId, !canInteract || postMessageMutation.isPending || mcpDirty || skillDirty)}>{postMessageMutation.isPending ? "正在提交…" : "发送"}<span aria-hidden="true">→</span></button>
+                  )}
                 </div>
               </form>
             </>
           )}
-        </section>
-
-        <AgentResizeSeparator
-          pane="right"
-          layout={workspaceLayout}
-          containerRef={workspaceRef}
-          onChange={updateWorkspaceLayout}
-          onReset={resetWorkspaceLayout}
-        />
-
-        <AgentInspector
+        </section>}
+        inspector={<AgentInspector
+          activeTab={inspectorTab}
+          onTabChange={openInspector}
+          onClose={closeInspector}
           evidence={(
             <AgentEvidenceMargin
               projectId={projectId}
@@ -774,8 +826,8 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
               manifestError={manifestQuery.isError}
             />
           )}
-        />
-      </div>
+        />}
+      />
     </div>
   );
 }
