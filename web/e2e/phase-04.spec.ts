@@ -70,6 +70,9 @@ async function rejectExternalRequests(page: Page, externalRequests: string[]) {
 
 async function createProject(page: Page, name: string) {
   await page.goto("/");
+  // 创建面板默认收起为幽灵卡，可见时先点击展开（空态常驻时幽灵卡不存在）
+  const createGhost = page.getByRole("button", { name: "新建项目" });
+  if (await createGhost.isVisible()) await createGhost.click();
   await page.getByLabel("项目名称").fill(name);
   await page.getByLabel("研究说明 可选").fill("Phase 4 离线 Review Playwright 验收项目");
   await page.getByRole("button", { name: "创建 Project" }).click();

@@ -1,18 +1,25 @@
 /** Project 工作台：创建、浏览、归档与恢复。 */
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { PaperListItem, Project } from "../api/types";
 import PageBar from "../components/PageBar";
+import { shouldShowCreatePanel } from "../projects/createPanelVisibility";
 
 export default function ProjectsPage() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  // 仅手动展开时聚焦名称输入框，避免空态首屏抢焦点
+  useEffect(() => {
+    if (createOpen) nameInputRef.current?.focus();
+  }, [createOpen]);
   const projectsQuery = useQuery({
     queryKey: ["projects", includeArchived],
     queryFn: () =>
@@ -32,6 +39,7 @@ export default function ProjectsPage() {
     onSuccess: () => {
       setName("");
       setDescription("");
+      setCreateOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
   });
@@ -51,6 +59,7 @@ export default function ProjectsPage() {
   const projects = projectsQuery.data ?? [];
   const papers = libraryQuery.data ?? [];
   const activeProjectCount = projects.filter((project) => !project.archived_at).length;
+  const showCreatePanel = shouldShowCreatePanel(createOpen, projects.length, projectsQuery.isPending);
 
   return (
     <div className="page-flow">
@@ -59,17 +68,17 @@ export default function ProjectsPage() {
         actions={<div className="page-bar-action-group"><span className="page-bar-stat"><strong>{activeProjectCount}</strong> 个活跃项目</span><Link className="page-bar-link" to="/library">{papers.length} 篇个人文献</Link></div>}
       />
       <section className="section-block">
-        <div className="section-title-row"><div><p className="eyebrow">COLLECTIONS</p><h2>项目列表</h2></div><div className="section-tools"><label><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />显示已归档</label><span className="section-count">{String(projects.length).padStart(2, "0")}</span></div></div>
+        <div className="projects-toolbar section-tools"><label><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />显示已归档</label></div>
         {projectsQuery.isError && <p className="notice error-text">{errorMessage(projectsQuery.error)}</p>}
         {projectsQuery.isPending && <div className="skeleton-block">正在读取项目…</div>}
         {projects.length > 0 && <div className="project-grid">{projects.map((project, index) => {
           const count = papers.filter((paper) => paper.project_ids.includes(project.project_id)).length;
           const archived = Boolean(project.archived_at);
-          return <article className={`project-card ${archived ? "archived-card" : ""}`} key={project.project_id}><div className="project-card-top"><span className="project-number">{String(index + 1).padStart(2, "0")}</span>{archived && <span className="badge badge-warn">已归档</span>}</div><div><h3><Link to={`/projects/${project.project_id}`}>{project.name}</Link></h3><p>{project.description || "尚未添加研究说明"}</p></div><footer><span>{count} 篇文献</span><button type="button" className="button-plain" disabled={archiveMutation.isPending} onClick={() => archiveMutation.mutate({ projectId: project.project_id, restore: archived })}>{archived ? "恢复" : "归档"}</button></footer></article>;
-        })}</div>}
+          return <article className={`project-card ${archived ? "archived-card" : ""}`} key={project.project_id}><div className="project-card-top"><span className="project-card-flags"><span className="project-number">{String(index + 1).padStart(2, "0")}</span>{archived && <span className="badge badge-warn">已归档</span>}</span><button type="button" className="button-plain project-card-archive" disabled={archiveMutation.isPending} onClick={() => archiveMutation.mutate({ projectId: project.project_id, restore: archived })}>{archived ? "恢复" : "归档"}</button></div><div><h3><Link className="project-card-link" to={`/projects/${project.project_id}`}>{project.name}</Link></h3><p>{project.description || "尚未添加研究说明"}</p></div><footer><span>{count} 篇文献</span><span>{new Date(project.updated_at).toLocaleDateString()} 更新</span></footer></article>;
+        })}<button type="button" className="project-card-ghost" aria-expanded={createOpen} onClick={() => setCreateOpen(true)}><span className="project-card-ghost-mark" aria-hidden="true">＋</span><span>新建项目</span></button></div>}
         {archiveMutation.isError && <p className="error-text">{errorMessage(archiveMutation.error)}</p>}
       </section>
-      <section className="create-project"><div><p className="eyebrow">NEW COLLECTION</p><h2>开始一个新课题</h2><p>只需一个名称。文献可以随后上传，也可从个人文献库复用。</p></div><form onSubmit={onSubmit} className="create-form"><label><span>项目名称</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例：大模型事实性评估" maxLength={200} required /></label><label><span>研究说明 <small>可选</small></span><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="记录问题、范围或筛选标准" rows={3} maxLength={4000} /></label><button type="submit" disabled={createMutation.isPending || !name.trim()}>{createMutation.isPending ? "正在创建…" : "创建 Project"}<span aria-hidden="true">→</span></button>{createMutation.isError && <p className="error-text">{errorMessage(createMutation.error)}</p>}</form></section>
+      {showCreatePanel && <section className="create-project"><div><p className="eyebrow">NEW COLLECTION</p><h2>开始一个新课题</h2><p>只需一个名称。文献可以随后上传，也可从个人文献库复用。</p></div><form onSubmit={onSubmit} className="create-form"><label><span>项目名称</span><input ref={nameInputRef} value={name} onChange={(event) => setName(event.target.value)} placeholder="例：大模型事实性评估" maxLength={200} required /></label><label><span>研究说明 <small>可选</small></span><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="记录问题、范围或筛选标准" rows={3} maxLength={4000} /></label><button type="submit" disabled={createMutation.isPending || !name.trim()}>{createMutation.isPending ? "正在创建…" : "创建 Project"}<span aria-hidden="true">→</span></button>{createMutation.isError && <p className="error-text">{errorMessage(createMutation.error)}</p>}</form></section>}
     </div>
   );
 }

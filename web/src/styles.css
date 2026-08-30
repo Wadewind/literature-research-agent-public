@@ -106,7 +106,7 @@ time, .mono, code, .section-count, .project-number, .paper-index, .review-date, 
 .section-title-row .eyebrow { margin-bottom: 7px; }
 .section-count { padding: 0 3px 15px; color: var(--muted); font: 400 23px var(--mono); }
 .project-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.project-card { min-height: 232px; display: grid; grid-template-rows: auto 1fr auto; padding: 22px; color: var(--ink); background: var(--paper); border: 1px solid var(--paper-border); box-shadow: var(--paper-shadow); text-decoration: none; transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.project-card { position: relative; min-height: 232px; display: grid; grid-template-rows: auto 1fr auto; padding: 22px; color: var(--ink); background: var(--paper); border: 1px solid var(--paper-border); box-shadow: var(--paper-shadow); text-decoration: none; transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
 .project-card:hover, .project-card:focus-within { transform: translateY(-2px); border-color: #b8c9d2; box-shadow: 0 10px 24px rgba(22, 47, 65, .085); }
 .project-card.archived-card { opacity: .76; background: #f0f2f2; }
 .project-card-top, .identity-title, .heading-title-row { display: flex; align-items: center; gap: 10px; }
@@ -117,21 +117,35 @@ time, .mono, code, .section-count, .project-number, .paper-index, .review-date, 
 .project-card h3 a:hover { color: var(--blue); }
 .project-card p { color: var(--muted); font-size: 13px; }
 .project-card footer { display: flex; justify-content: space-between; align-items: center; padding-top: 14px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; }
+.project-card-flags { display: flex; align-items: center; gap: 10px; }
+/* stretched-link：链接伪元素铺满卡片，实现整卡可点，归档按钮以 z-index 保持可点 */
+.project-card-link::after { content: ""; position: absolute; inset: 0; }
+.project-card-archive { position: relative; z-index: 1; opacity: 0; transition: opacity .15s ease; }
+.project-card:hover .project-card-archive, .project-card:focus-within .project-card-archive, .archived-card .project-card-archive { opacity: 1; }
+.projects-toolbar { justify-content: flex-end; }
+.project-card-ghost { min-height: 232px; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 22px; color: var(--muted); background: transparent; border: 1px dashed var(--line-dark); box-shadow: none; font-size: 13px; transition: transform .18s ease, border-color .18s ease, color .18s ease; }
+/* 需压过全局 button:hover:not(:disabled) 的优先级 */
+.project-card-ghost:hover:not(:disabled) { color: var(--blue); background: var(--paper); border-color: var(--blue); transform: translateY(-2px); }
+.project-card-ghost-mark { font-size: 24px; font-weight: 400; line-height: 1; }
 .section-tools { display: flex; align-items: center; gap: 22px; }
 .section-tools label, .library-toolbar label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .section-tools input, .library-toolbar input, .paper-select input { width: auto; }
-.create-project { display: grid; grid-template-columns: .8fr 1.2fr; gap: 70px; padding: 42px; color: #eef6fa; background: var(--ink); }
+.create-project { display: grid; grid-template-columns: .8fr 1.2fr; gap: 56px; padding: 36px 40px; color: #eef6fa; background: linear-gradient(155deg, #173951 0%, var(--ink) 58%); border-top: 3px solid var(--vermillion); box-shadow: 0 10px 30px rgba(16, 34, 53, .18); }
 .create-project h2 { color: white; }
-.create-project > div > p:last-child { color: #aebbc4; max-width: 390px; }
+.create-project > div > p:last-child { color: #a9b9c5; max-width: 390px; }
 .create-form { display: grid; gap: 17px; }
-.create-form label > span { display: block; margin-bottom: 6px; color: #b8c4cb; font-size: 12px; }
+.create-form label > span { display: block; margin-bottom: 6px; color: #b8c9d4; font-size: 12px; }
 .create-form small { color: #84949f; }
+.create-form input, .create-form textarea { color: #eef6fa; background: rgba(255, 255, 255, .055); border-color: #38536b; }
+.create-form input::placeholder, .create-form textarea::placeholder { color: #7590a2; }
+.create-form input:focus, .create-form textarea:focus { border-color: #6fa3c0; }
 input, textarea, select { width: 100%; padding: 11px 13px; color: var(--ink); background: var(--paper); border: 1px solid var(--line-dark); border-radius: 0; }
 textarea { resize: vertical; }
 button, .button-link { display: inline-flex; justify-content: center; align-items: center; gap: 22px; min-height: 42px; padding: 9px 18px; color: white; background: var(--blue); border: 1px solid var(--blue); border-radius: 0; cursor: pointer; font-weight: 650; text-decoration: none; }
 button:hover:not(:disabled), .button-link:hover { background: var(--blue-dark); }
 button:disabled { opacity: .48; cursor: not-allowed; }
-.create-form button { justify-self: start; }
+.create-form button { justify-self: start; color: var(--ink); background: #f4f8fa; border-color: #f4f8fa; }
+.create-form button:hover:not(:disabled) { background: #d9e6ed; border-color: #d9e6ed; }
 .button-plain { min-height: auto; padding: 0; color: var(--muted); background: transparent; border: 0; font-size: 12px; font-weight: 550; }
 .button-plain:hover:not(:disabled) { color: var(--blue); background: transparent; text-decoration: underline; }
 .button-outline { color: var(--blue); background: transparent; }
