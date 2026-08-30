@@ -1,12 +1,19 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type { Conversation, PaperListItem, Project } from "../api/types";
+import ChatScopeDialog from "../components/ChatScopeDialog";
 import PageBar from "../components/PageBar";
-import PaperTitle from "../components/PaperTitle";
+import QuestionStarterList from "../components/QuestionStarterList";
 import ResearchWorkspaceFrame from "../components/ResearchWorkspaceFrame";
+import {
+  CHAT_QUESTION_DRAFT_MAX_LENGTH,
+  questionTemplateById,
+  type ChatQuestionTemplateId,
+  type QuestionDraftHandoff,
+} from "../conversations/questionTemplates";
 import {
   createScopeSelection,
   scopeRequest,
@@ -15,6 +22,7 @@ import {
 } from "../conversations/scopeSelection";
 import {
   chatConversationPath,
+  chatConversationPromptPath,
   initialChatScope,
 } from "../workspace/projectWorkspace";
 
@@ -23,10 +31,20 @@ interface ChatWorkspaceHomeProps {
   search: string;
 }
 
+interface CreateConversationInput {
+  scope: ScopeSelection;
+  questionDraft: string;
+  templateId: ChatQuestionTemplateId | null;
+}
+
 function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [scopeDraft, setScopeDraft] = useState<ScopeSelection | null>(null);
+  const [questionDraft, setQuestionDraft] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] =
+    useState<ChatQuestionTemplateId | null>(null);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const projectQuery = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => apiFetch<Project>(`/api/v1/projects/${projectId}`),
@@ -48,15 +66,32 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
   const archived = Boolean(project?.archived_at);
 
   const createMutation = useMutation({
-    mutationFn: (scope: ScopeSelection) =>
+    mutationFn: (input: CreateConversationInput) =>
       apiFetch<Conversation>(`/api/v1/projects/${projectId}/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(scopeRequest(scope)),
+        body: JSON.stringify(scopeRequest(input.scope)),
       }),
-    onSuccess: (conversation) => {
+    onSuccess: (conversation, input) => {
       void queryClient.invalidateQueries({ queryKey: ["conversations", projectId] });
-      navigate(chatConversationPath(projectId, conversation.conversation_id));
+      const selectedTemplate = questionTemplateById(input.templateId);
+      if (selectedTemplate?.question === input.questionDraft) {
+        navigate(
+          chatConversationPromptPath(
+            projectId,
+            conversation.conversation_id,
+            selectedTemplate.id,
+          ),
+        );
+        return;
+      }
+      const path = chatConversationPath(projectId, conversation.conversation_id);
+      if (input.questionDraft) {
+        const state: QuestionDraftHandoff = { questionDraft: input.questionDraft };
+        navigate(path, { state });
+        return;
+      }
+      navigate(path);
     },
   });
 
@@ -72,12 +107,51 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
     );
   }
 
-  const selectedPapers = papersQuery.data?.filter((paper) =>
-    selection.paperIds.includes(paper.paper_id)
-  ) ?? [];
   const scopeDescription = selection.paperIds.length === 0
     ? "每个问题都在当前 Project 的可用索引中独立检索。"
     : `固定检索 ${selection.paperIds.length} 篇选中文献。`;
+  const scopeLabel = selection.paperIds.length === 0
+    ? `整个 Project · ${papersQuery.data?.length ?? "—"} 篇`
+    : `固定文献 · ${selection.paperIds.length} 篇`;
+  const openScopeDialog = () => {
+    createMutation.reset();
+    setScopeDraft(null);
+    setScopeOpen(true);
+  };
+  const closeScopeDialog = () => {
+    if (createMutation.isPending) return;
+    setScopeOpen(false);
+    setScopeDraft(null);
+  };
+  const selectQuestionTemplate = (templateId: ChatQuestionTemplateId) => {
+    const template = questionTemplateById(templateId);
+    if (!template) return;
+    setSelectedTemplateId(template.id);
+    setQuestionDraft(template.question);
+    openScopeDialog();
+  };
+
+  const updateQuestionDraft = (value: string) => {
+    setQuestionDraft(value);
+    const selectedTemplate = questionTemplateById(selectedTemplateId);
+    if (selectedTemplate?.question !== value) setSelectedTemplateId(null);
+  };
+
+  const createConversation = () => {
+    const question = questionDraft.trim();
+    if (!question || archived || createMutation.isPending) return;
+    createMutation.mutate({
+      scope: selection,
+      questionDraft: question,
+      templateId: selectedTemplateId,
+    });
+  };
+
+  const submitQuestionDraft = (event: FormEvent) => {
+    event.preventDefault();
+    if (!questionDraft.trim() || archived) return;
+    openScopeDialog();
+  };
 
   return (
     <div className="viewport-workspace-page chat-page">
@@ -90,82 +164,75 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
         kind="chat"
         main={
           <main className="conversation-main chat-create-main">
-            <header className="chat-heading">
+            <header className="chat-heading chat-create-heading">
               <div>
                 <p className="eyebrow">NEW CITED QUESTION</p>
-                <h2>新建文献问答</h2>
-                <p>先确定引用范围，进入会话后即可持续追问。</p>
+                <h2 id="chat-create-title">向项目文献提问，获取可验证的答案</h2>
+                <p>选择一个研究切入点，或写下自己的问题，再确认用于检索的文献范围。</p>
               </div>
             </header>
-            <section className="chat-create-card" aria-labelledby="chat-scope-title">
-              <div className="chat-create-summary">
-                <span className="context-chip">
-                  {selection.paperIds.length === 0
-                    ? `整个 Project · ${papersQuery.data?.length ?? "—"} 篇`
-                    : `固定文献 · ${selection.paperIds.length} 篇`}
-                </span>
-                <p>{scopeDescription}</p>
-              </div>
-              <details className="composer-options">
-                <summary id="chat-scope-title">
-                  <span aria-hidden="true">＋</span>
-                  选择证据范围
-                </summary>
-                <div className="composer-options-popover chat-scope-picker">
+            <div className="chat-create-stage">
+              <section className="chat-create-card" aria-labelledby="chat-create-title">
+                <QuestionStarterList
+                  selectedId={selectedTemplateId}
+                  disabled={archived}
+                  onSelect={selectQuestionTemplate}
+                />
+              </section>
+              {archived ? <p className="readonly-note chat-create-readonly">该 Project 已归档。历史问答仍可查看，但不能创建新问答。</p> : null}
+            </div>
+
+            <form className="conversation-composer chat-create-composer" onSubmit={submitQuestionDraft}>
+              <label className="sr-only" htmlFor="chat-question-draft">写下自己的问题</label>
+              <textarea
+                id="chat-question-draft"
+                name="question"
+                value={questionDraft}
+                onChange={(event) => updateQuestionDraft(event.target.value)}
+                placeholder="提出一个需要文献证据回答的问题…"
+                rows={2}
+                maxLength={CHAT_QUESTION_DRAFT_MAX_LENGTH}
+                disabled={archived}
+                aria-describedby="chat-question-draft-help"
+                autoComplete="off"
+              />
+              <div className="conversation-composer-toolbar">
+                <div className="chat-create-composer-context">
                   <button
                     type="button"
-                    className={selection.paperIds.length === 0 ? "scope-choice active" : "scope-choice"}
-                    onClick={() => setScopeDraft(createScopeSelection())}
+                    className="context-chip chat-scope-trigger"
+                    aria-haspopup="dialog"
+                    aria-expanded={scopeOpen}
+                    disabled={archived}
+                    onClick={openScopeDialog}
                   >
-                    <strong>整个 Project</strong>
-                    <span>每次提问时从所有已就绪文献中检索</span>
+                    {scopeLabel}
                   </button>
-                  <fieldset>
-                    <legend>或固定单篇 / 多篇文献</legend>
-                    {papersQuery.isPending ? <p className="muted">正在读取项目文献…</p> : null}
-                    {papersQuery.isError ? <p className="error-text">{errorMessage(papersQuery.error)}</p> : null}
-                    {papersQuery.data?.length === 0 ? (
-                      <p className="muted">文献库尚无可选论文。先收录并完成索引。</p>
-                    ) : null}
-                    <div className="chat-paper-options">
-                      {papersQuery.data?.map((paper) => (
-                        <label key={paper.paper_id}>
-                          <input
-                            type="checkbox"
-                            checked={selection.paperIds.includes(paper.paper_id)}
-                            disabled={Boolean(paper.archived_at)}
-                            onChange={() => setScopeDraft(toggleScopePaper(selection, paper.paper_id))}
-                          />
-                          <span>
-                            <strong><PaperTitle paper={paper} /></strong>
-                            <small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "等待解析"}{paper.archived_at ? " · 已归档" : ""}</small>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
+                  <small id="chat-question-draft-help" aria-live="polite">
+                    {selectedTemplateId ? "已选择推荐问题，可继续修改。" : scopeDescription}
+                  </small>
                 </div>
-              </details>
-              {selectedPapers.length > 0 ? (
-                <div className="context-chip-list" aria-label="已选择文献">
-                  {selectedPapers.map((paper) => (
-                    <span className="context-chip" key={paper.paper_id}><PaperTitle paper={paper} /></span>
-                  ))}
-                </div>
-              ) : null}
-              {archived ? <p className="readonly-note">该 Project 已归档。历史问答仍可查看，但不能创建新问答。</p> : null}
-              {createMutation.isError ? <p className="error-text">{errorMessage(createMutation.error)}</p> : null}
-              <footer className="chat-create-actions">
-                <span>创建后范围保持不变</span>
-                <button
-                  type="button"
-                  disabled={archived || createMutation.isPending}
-                  onClick={() => createMutation.mutate(selection)}
-                >
-                  {createMutation.isPending ? "正在创建…" : "创建问答"}<span aria-hidden="true">→</span>
+                <button type="submit" disabled={archived || !questionDraft.trim()}>
+                  创建问答<span aria-hidden="true">→</span>
                 </button>
-              </footer>
-            </section>
+              </div>
+            </form>
+
+            <ChatScopeDialog
+              open={scopeOpen}
+              question={questionDraft.trim()}
+              selection={selection}
+              papers={papersQuery.data}
+              papersPending={papersQuery.isPending}
+              papersError={papersQuery.isError ? errorMessage(papersQuery.error) : null}
+              archived={archived}
+              creating={createMutation.isPending}
+              createError={createMutation.isError ? errorMessage(createMutation.error) : null}
+              onClose={closeScopeDialog}
+              onSelectProject={() => setScopeDraft(createScopeSelection())}
+              onTogglePaper={(paperId) => setScopeDraft(toggleScopePaper(selection, paperId))}
+              onCreate={createConversation}
+            />
           </main>
         }
       />

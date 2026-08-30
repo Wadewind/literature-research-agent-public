@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canInteractWithConversation,
   chatConversationPath,
+  chatConversationPromptPath,
   chatHomePath,
   chatPreselectionPath,
   initialChatScope,
@@ -14,6 +15,9 @@ describe("Project workspace routes", () => {
     expect(chatHomePath("project-1")).toBe("/projects/project-1/chat");
     expect(chatConversationPath("project-1", "conversation-1")).toBe(
       "/projects/project-1/chat/conversation-1",
+    );
+    expect(chatConversationPromptPath("project-1", "conversation-1", "methods")).toBe(
+      "/projects/project-1/chat/conversation-1?question_template=methods",
     );
     expect(chatPreselectionPath("project-1", ["paper 1", "paper 1", "paper-2"])).toBe(
       "/projects/project-1/chat?paper_id=paper+1&paper_id=paper-2",

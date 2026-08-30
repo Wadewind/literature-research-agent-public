@@ -1,12 +1,25 @@
 import type { ScopeSelection } from "../conversations/scopeSelection";
 import type { Conversation, Project } from "../api/types";
 
+export const CHAT_QUESTION_TEMPLATE_PARAM = "question_template";
+
 export function chatHomePath(projectId: string): string {
   return `/projects/${projectId}/chat`;
 }
 
 export function chatConversationPath(projectId: string, conversationId: string): string {
   return `${chatHomePath(projectId)}/${conversationId}`;
+}
+
+export function chatConversationPromptPath(
+  projectId: string,
+  conversationId: string,
+  questionTemplateId: string,
+): string {
+  const search = new URLSearchParams({
+    [CHAT_QUESTION_TEMPLATE_PARAM]: questionTemplateId,
+  });
+  return `${chatConversationPath(projectId, conversationId)}?${search.toString()}`;
 }
 
 export function chatPreselectionPath(projectId: string, paperIds: string[]): string {

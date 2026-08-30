@@ -2,7 +2,13 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type {
@@ -21,8 +27,10 @@ import {
   ensureMessageIntent,
   type MessageIntent,
 } from "../conversations/messageIntent";
+import { questionDraftFromHandoff } from "../conversations/questionTemplates";
 import { useRunEvents } from "../runs/useRunEvents";
 import {
+  CHAT_QUESTION_TEMPLATE_PARAM,
   canInteractWithConversation,
   isConversationInProject,
 } from "../workspace/projectWorkspace";
@@ -52,15 +60,42 @@ function pageLabel(citation: CitationSummary): string {
 
 function ConversationWorkspace() {
   const { projectId = "", conversationId = "" } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [content, setContent] = useState("");
+  const [questionHandoff] = useState(() => {
+    const initialSearch = new URLSearchParams(location.search);
+    const templateId = initialSearch.get(CHAT_QUESTION_TEMPLATE_PARAM);
+    const navigationDraft = questionDraftFromHandoff(null, location.state);
+    return {
+      draft: questionDraftFromHandoff(templateId, location.state),
+      initialSearch,
+      shouldConsume: templateId !== null || navigationDraft.length > 0,
+    };
+  });
+  const [content, setContent] = useState(questionHandoff.draft);
   const [intent, setIntent] = useState<MessageIntent | null>(null);
   const [submittedRunId, setSubmittedRunId] = useState<string | null>(null);
   const [pdfPage, setPdfPage] = useState<number | null>(null);
   const selectedEvidenceId = searchParams.get("inspector") === "evidence"
     ? searchParams.get("evidence")
     : null;
+
+  useEffect(() => {
+    if (!questionHandoff.shouldConsume) return;
+    const nextSearch = new URLSearchParams(questionHandoff.initialSearch);
+    nextSearch.delete(CHAT_QUESTION_TEMPLATE_PARAM);
+    const query = nextSearch.toString();
+    navigate(
+      {
+        pathname: location.pathname,
+        search: query ? `?${query}` : "",
+        hash: location.hash,
+      },
+      { replace: true, state: null },
+    );
+  }, [location.hash, location.pathname, navigate, questionHandoff]);
 
   const projectQuery = useQuery({
     queryKey: ["project", projectId],

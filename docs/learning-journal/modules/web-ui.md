@@ -75,6 +75,11 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   导航并带入范围，不再直接创建 Conversation。`paper_id` 预选仅接受当前 Project Paper API 返回的 ID。
   详情内部链接使用 `/chat/:conversationId`，旧 `/conversations/:conversationId` 保留兼容；对话页从
   REST 恢复 Message/Claim/Citation，SSE 只驱动进度与缓存失效。
+- Chat 首页提供方法、实验和结论边界三个范围中立的固定问题模板，并以工作区底部唯一 Composer 承载
+  推荐或自由问题草稿。模板按钮只选择草稿并打开中央范围 Dialog，不创建 Conversation、不提交模型；
+  自由问题点击“创建问答”后进入同一 Dialog，取消只丢弃范围临时修改。确认后固定模板通过受控
+  `question_template` ID、自定义问题通过一次性 route state 交给目标 Composer，初始化后立即消费，
+  Composer 只预填并等待用户明确发送；主操作不再创建空白 Conversation。
 - Project/Paper 归档 UI 使用 `include_archived` 显式查看；「归档个人库资产」不等于「移出项目」，两者在 Project 文献行中是独立动作。
 
 ## 关键决定与替代方案
@@ -90,6 +95,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - **读模型显式返回固定 Version**：个人库与 Project 文献列表都返回非空 `version`；Project 列表中的 Version 来自 `ProjectPaper.selected_version_id`。`GET .../paper-versions/{id}/file` 不要求已有 Parse Revision，但要求当前 Project 确实收录该 Version，越权一律 404。
 - **`paper_versions.display_filename` 迁移**：文件名此前只存在于 Run `input_payload`，无法支撑文献库列表展示；作为 Version 的展示字段落库（仅为展示信息，不参与存储路径）。
 - **提问幂等意图**：`messageIntent` 在一次问题首次提交时生成 Key，同内容失败重试复用，内容变化才换 Key；成功后清空。它只保存交互意图，不保存服务端 Message/Run 事实。
+- **推荐问题不是隐式 Run**：固定问题模板属于版本内前端内容，不从模型动态生成；点击只改变本地草稿并
+  打开范围 Dialog。Dialog 的范围选择是可取消的本地临时状态，只有最终确认才创建 Conversation。受控
+  模板 ID 与一次性 route state 只绑定刚创建的目标 Conversation，详情页消费后从 history entry 清除。
+  这样保留用户发送前确认，也避免前端串联“创建 Conversation + 提交首条 Message”产生部分成功。
 - **回答与事件解耦**：`answer_committed` 与 Run 终态同事务，前端收到后关闭 EventSource 并失效 messages；回答文本、Claim 与 Citation 始终重新读取 REST，不进入 Event payload。
 - **Evidence 阅读路径**：Claim 后的引用标记打开 Evidence 侧栏，显示 excerpt/section/page，再以 `key={page}` 重建 iframe 跳原文；不引入 pdf.js 或 UI 组件库。
 - **Review 列表是最小读模型**：除 Run/问题/阶段外，只附加 canonical aggregate Evidence Matrix 的
@@ -227,11 +236,18 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   session 回读，显式 Smoke 为 1 passed（15.96s）。最终前端仍为 30 files / 170 passed，production
   build 通过，Phase 5 Agent UI 离线旅程为 1 passed（36.6s）。该组合证据不冒充真实模型的完整下一
   Turn E2E、跨浏览器认证或公网多用户 Browser 安全认证。
+- 2026-08-31 的 Chat 入口增强先以固定模板、草稿交接和缺失范围 Dialog 得到真实红灯，再补齐可访问问题
+  按钮、工作区底部唯一 Composer、中央范围确认与取消回滚。定向为 5 files / 13 passed，完整 Vitest 为
+  40 files / 195 passed，production build 通过。Phase 2 Fake 浏览器闭环为 1 passed（18.4s），覆盖推荐
+  问题打开 Dialog、问题保留、范围草稿取消、焦点恢复、自由问题、单篇预选、新 Conversation 只预填不
+  自动发送，以及既有 RAG/刷新/Citation/PDF/归档只读旅程；测试页未捕获 JavaScript page error，未调用
+  真实模型或外部网络。1280×720 临时截图走查确认研究切入点与底部 Composer 同屏、Dialog 内部滚动区和
+  固定操作区清晰；走查后又将共享遮罩收敛到 10% 冷墨色与 1px 模糊，临时截图未作为像素基线保留。
 
 ## 代码入口
 
 - 应用壳与可访问入口：`web/src/App.tsx`、`web/src/App.test.tsx`
-- 页面：`web/src/pages/`（ProjectsPage、PersonalLibraryPage、LibraryPage、ChatPage、ConversationPage、RunDetailPage、DocumentPage）
+- 页面：`web/src/pages/`（ProjectsPage、PersonalLibraryPage、LibraryPage、ChatPage、ConversationPage、RunDetailPage、DocumentPage）；Chat 范围弹窗为 `web/src/components/ChatScopeDialog.tsx`
 - Review 页面：`web/src/pages/ReviewsPage.tsx`、`ReviewDetailPage.tsx`、
   `web/src/components/ReviewResults.tsx`
 - Agent 页面：`web/src/pages/AgentPage.tsx`、`web/src/components/AgentSessionRail.tsx`、
@@ -240,6 +256,8 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - Project 工作区：`web/src/components/AppSidebar.tsx`、`PageBar.tsx`、`ChatWorkspaceFrame.tsx`、
   `ConversationRail.tsx`、`WorkspaceResizeSeparator.tsx`；canonical 路由、
   Project-scoped 预选与 versioned layout 纯规则位于 `web/src/workspace/`。
+- Chat 问题入口：`web/src/components/QuestionStarterList.tsx`、
+  `web/src/conversations/questionTemplates.ts`、`web/src/pages/ChatPage.tsx` 与 `ConversationPage.tsx`。
 - Review 纯展示/意图：`web/src/reviews/reviewPresentation.ts`、`reviewIntent.ts`、
   `reviewHumanInput.ts`、`reviewResults.ts`、`reviewListRefresh.ts`
 - SSE：`web/src/runs/useRunEvents.ts`、`eventStore.ts`、`runStatus.ts`

@@ -36,11 +36,28 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
   await expect(page.getByText("索引已就绪")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("link", { name: "询问整个 Project", exact: true }).click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/chat$/);
-  await page.getByRole("button", { name: /创建问答/ }).click();
+  const starterButton = page.getByRole("button", { name: /当前范围内的文献采用了哪些核心方法/ });
+  await starterButton.click();
+  const scopeDialog = page.getByRole("dialog", { name: "确认检索边界" });
+  await expect(scopeDialog).toBeVisible();
+  await expect(scopeDialog.getByText("当前范围内的文献采用了哪些核心方法？")).toBeVisible();
+  await scopeDialog.getByRole("checkbox").first().check();
+  await scopeDialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(scopeDialog).not.toBeVisible();
+  await expect(starterButton).toBeFocused();
+  await expect(page.getByPlaceholder("提出一个需要文献证据回答的问题…")).toHaveValue(
+    "当前范围内的文献采用了哪些核心方法？",
+  );
+  await page.getByRole("button", { name: "创建问答", exact: true }).click();
+  await expect(scopeDialog).toBeVisible();
+  await expect(scopeDialog.getByRole("checkbox").first()).not.toBeChecked();
+  await scopeDialog.getByRole("button", { name: "确认并创建问答" }).click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/chat\/[0-9a-f-]+$/);
   await expect(page.getByText(/CITED RAG \/ 整个项目/)).toBeVisible();
 
-  await page.getByPlaceholder("提出一个需要文献证据回答的问题…").fill("fake 论文讲了什么？");
+  const questionInput = page.getByPlaceholder("提出一个需要文献证据回答的问题…");
+  await expect(questionInput).toHaveValue("当前范围内的文献采用了哪些核心方法？");
+  await questionInput.fill("fake 论文讲了什么？");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("基于给定证据的回答（fake 模型确定性生成）。")).toBeVisible({ timeout: 30_000 });
 
@@ -57,9 +74,11 @@ test("Project RAG、引用回跳、单篇范围与归档只读形成完整闭环
     .getByRole("link", { name: "文献库", exact: true })
     .click();
   await page.getByRole("button", { name: "询问此篇" }).click();
-  await page.locator("summary").filter({ hasText: "选择证据范围" }).click();
-  await expect(page.getByRole("checkbox").first()).toBeChecked();
+  await page.getByPlaceholder("提出一个需要文献证据回答的问题…").fill("这篇论文使用了哪些实验设置？");
   await page.getByRole("button", { name: /创建问答/ }).click();
+  await expect(scopeDialog).toBeVisible();
+  await expect(scopeDialog.getByRole("checkbox").first()).toBeChecked();
+  await scopeDialog.getByRole("button", { name: "确认并创建问答" }).click();
   await expect(page.getByText(/CITED RAG \/ 1 篇文献/)).toBeVisible();
 
   await page

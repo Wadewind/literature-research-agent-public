@@ -11,6 +11,12 @@ Agent 文件交换日期：2026-08-28；按 ADR-0011 收敛为本地个人项目
 2026-08-31 补充本地开发编排：`scripts/dev.sh --real` 仅在 `deep_agents` 模式启动固定本地 OpenSandbox，
 以同一 Sandbox API Key 等待 `/health` 后再启动 Worker，并在统一进程组清理中停止 Server；Fake 与远程
 Server 路径不扩展。
+2026-08-31 补充完成后的 Chat 产品入口增强：三个固定问题模板位于上方研究切入区，推荐与自由问题统一
+进入工作区底部 Composer；模板点击或自由问题创建操作打开中央范围 Dialog，取消会回滚范围临时修改并
+恢复触发点焦点，最终确认才创建 Conversation。问题仍以受控模板 ID/一次性 route state 预填目标
+Composer，不提交模型；现有项目创建与新范围 Dialog 的遮罩统一降低为 10% 冷墨色与 1px 模糊。该增强
+不修改 Phase 6 API、数据库或 Runtime；TDD 先得到缺失 Dialog 模块失败，定向为 5 files / 13 passed，
+完整前端为 40 files / 195 passed、production build 通过，Phase 2 Fake 浏览器闭环为 1 passed（18.4s）。
 Slice 5 固定能力、Project Context 与硬预算实现完成日期：2026-08-28。
 Slice 6 Workspace/Sandbox 与统一 egress 强化完成日期：2026-08-28。
 ADR-0012 将 Slice 7 从固定 arXiv Host allowlist 调整为版本化 Sandbox public-egress Profile 的日期：

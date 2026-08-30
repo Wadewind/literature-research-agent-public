@@ -59,7 +59,15 @@ Conversation rail | 新建问答与范围选择 | Scope / Evidence Margin
 - URL 无论文参数时默认整个 Project；
 - `paper_id` 可重复出现，用于从文献库带入单篇或多篇预选；
 - 预选 ID 只有存在于当前 Project `GET /papers` 结果时才生效，重复和跨 Project ID 被省略；
-- 用户仍可在新建面板切换整个 Project、单篇或多篇固定范围；
+- 首页上方提供三个固定、范围中立的推荐问题，中央工作区底部使用唯一 Composer 承载推荐或自由问题
+  草稿与当前范围摘要；推荐问题是显式选择草稿，不能在点击时创建 Conversation 或自动提交模型 Run；
+- 选择推荐问题会预填底部 Composer 并打开中央“确认检索边界”Dialog；自由问题由用户点击“创建问答”
+  后进入同一 Dialog。Dialog 内可选择整个 Project、单篇或多篇固定范围，取消只丢弃本次范围修改并保留
+  问题草稿，只有“确认并创建问答”才调用既有 Conversation API；
+- 空问题不能通过主操作创建 Conversation；范围摘要按钮可随时重开 Dialog，URL 带入的合法论文预选
+  必须作为初始范围呈现；
+- 创建成功后通过固定 `question_template` ID 或一次性 route state 把问题草稿交给新 Conversation
+  Composer，Composer 只预填、不自动发送；初始化后必须从当前 history entry 消费该交接状态；
 - 创建仍调用既有 Project-scoped Conversation API，不新增后端接口；
 - 归档 Project 只读，历史可访问但不能创建新问答。
 
@@ -113,7 +121,9 @@ AgentSession rail | 消息时间线 + 研究活动 + 固定 Composer | Turn 检�
 - TanStack Query 持有 Project、Paper、Conversation、AgentSession/Turn、Message、Evidence、ToolExecution、
   Manifest 与 Artifact 服务端状态；独立查询按业务 ID 与 enabled 条件启动；
 - React 本地状态只保存 scope 草稿、输入、稳定幂等意图、当前 Evidence/Inspector tab 和栏宽；
-- 页面 identity 变化重建交互状态，旧幂等 Key、问题草稿和 Evidence 选择不得进入新 Conversation；
+- 页面 identity 变化重建交互状态，旧幂等 Key、问题草稿和 Evidence 选择不得进入新 Conversation；唯一
+  例外是 Chat 首页创建成功时显式绑定到新 `conversation_id` 的单次问题草稿交接，目标 Composer 初始化
+  后必须消费，后续刷新或进入其他 Conversation 不得再次预填；
 - separator 使用 `role="separator"`、垂直方向、当前/最小/最大值与键盘操作；表单保持可见 label 或
   视觉隐藏但可访问的 label；
 - 桌面是验收主体；窄屏隐藏 separator 并改为可顺序访问的布局，不建设 Drawer。
@@ -121,6 +131,7 @@ AgentSession rail | 消息时间线 + 研究活动 + 固定 Composer | Turn 检�
 ## 8. 非范围
 
 - 不修改 RAG 检索、Claim/Citation/Evidence、Conversation 或 Run 后端契约；
+- 不把推荐问题点击变成隐式模型调用，也不在前端串联 Conversation 创建与首条 Message 提交；
 - 不把 RAG Conversation 改造成持续模型上下文；
 - 不接入官方 Deep Agents UI，不合并 AgentSession 与 Conversation；
 - 不新增 UI 框架、依赖、移动 Drawer 或全局 Dashboard。
