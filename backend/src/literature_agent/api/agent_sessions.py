@@ -239,7 +239,11 @@ class AgentToolExecutionResponse(BaseModel):
     args_hash: str
     status: str
     input_size_bytes: int
+    input_preview: str | None
+    input_preview_truncated: bool
     output_size_bytes: int | None
+    output_preview: str | None
+    output_preview_truncated: bool
     result_hash: str | None
     error_code: str | None
     safe_message: str | None
@@ -869,7 +873,11 @@ async def list_tool_executions(
                 args_hash=item.args_hash,
                 status=item.status.value,
                 input_size_bytes=item.input_size_bytes,
+                input_preview=item.input_preview,
+                input_preview_truncated=item.input_preview_truncated,
                 output_size_bytes=item.output_size_bytes,
+                output_preview=item.output_preview,
+                output_preview_truncated=item.output_preview_truncated,
                 result_hash=item.result_hash,
                 error_code=item.error_code,
                 safe_message=item.safe_message,

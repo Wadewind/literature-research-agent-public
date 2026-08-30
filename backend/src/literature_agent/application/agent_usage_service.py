@@ -189,6 +189,8 @@ class AgentUsageService[TSession: Session]:
                 input_schema_hash=request.input_schema_hash,
                 args_hash=request.args_hash,
                 input_size_bytes=request.input_size_bytes,
+                input_preview=request.input_preview,
+                input_preview_truncated=request.input_preview_truncated,
                 now=now,
             )
             repo = self._usage_repo_factory(session)
@@ -199,11 +201,15 @@ class AgentUsageService[TSession: Session]:
                     existing.input_schema_hash,
                     existing.args_hash,
                     existing.input_size_bytes,
+                    existing.input_preview,
+                    existing.input_preview_truncated,
                 ) != (
                     proposed.tool_name,
                     proposed.input_schema_hash,
                     proposed.args_hash,
                     proposed.input_size_bytes,
+                    proposed.input_preview,
+                    proposed.input_preview_truncated,
                 ):
                     raise AgentUsageError(
                         "agent_tool_reservation_conflict", "Tool reservation 重放发生冲突"
@@ -270,6 +276,8 @@ class AgentUsageService[TSession: Session]:
         *,
         output_size_bytes: int,
         result_hash: str,
+        output_preview: str | None = None,
+        output_preview_truncated: bool = False,
     ) -> AgentToolCall:
         async with self._session_factory() as session:
             usage, _, _ = await self._load_locked_closure(session, turn_run_id)
@@ -278,7 +286,12 @@ class AgentUsageService[TSession: Session]:
             repo = self._usage_repo_factory(session)
             value = await self._require_tool_call(repo, turn_run_id, reservation_key)
             if value.status is AgentToolCallStatus.SUCCEEDED:
-                if value.output_size_bytes != output_size_bytes or value.result_hash != result_hash:
+                if (
+                    value.output_size_bytes != output_size_bytes
+                    or value.result_hash != result_hash
+                    or value.output_preview != output_preview
+                    or value.output_preview_truncated != output_preview_truncated
+                ):
                     raise AgentUsageError("agent_tool_result_conflict", "Tool 成功结果重放发生冲突")
                 await session.commit()
                 return value
@@ -287,6 +300,8 @@ class AgentUsageService[TSession: Session]:
             succeeded = value.succeed(
                 output_size_bytes=output_size_bytes,
                 result_hash=result_hash,
+                output_preview=output_preview,
+                output_preview_truncated=output_preview_truncated,
                 now=self._clock(),
             )
             if not await repo.save_tool_call(
@@ -303,19 +318,32 @@ class AgentUsageService[TSession: Session]:
         *,
         error_code: str,
         safe_message: str,
+        output_preview: str | None = None,
+        output_preview_truncated: bool = False,
     ) -> AgentToolCall:
         async with self._session_factory() as session:
             await self._load_locked_closure(session, turn_run_id, allow_cancelled=True)
             repo = self._usage_repo_factory(session)
             value = await self._require_tool_call(repo, turn_run_id, reservation_key)
             if value.status is AgentToolCallStatus.FAILED:
-                if value.error_code != error_code or value.safe_message != safe_message:
+                if (
+                    value.error_code != error_code
+                    or value.safe_message != safe_message
+                    or value.output_preview != output_preview
+                    or value.output_preview_truncated != output_preview_truncated
+                ):
                     raise AgentUsageError("agent_tool_error_conflict", "Tool 失败结果重放发生冲突")
                 await session.commit()
                 return value
             if value.status is not AgentToolCallStatus.RUNNING:
                 raise AgentUsageError("agent_tool_complete_conflict", "Tool 调用当前不能标记失败")
-            failed = value.fail(error_code=error_code, safe_message=safe_message, now=self._clock())
+            failed = value.fail(
+                error_code=error_code,
+                safe_message=safe_message,
+                output_preview=output_preview,
+                output_preview_truncated=output_preview_truncated,
+                now=self._clock(),
+            )
             if not await repo.save_tool_call(failed, expected_status=AgentToolCallStatus.RUNNING):
                 raise AgentUsageError("agent_tool_complete_conflict", "Tool 调用完成发生并发冲突")
             await session.commit()

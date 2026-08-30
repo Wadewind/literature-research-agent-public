@@ -62,9 +62,13 @@ version/content hash。转换后的 MCP `StructuredTool.args_schema` 若为 dict
 `inputSchema`，不把 Tool description 混入。权限闭包和 Runtime lease/fence 在外部调用前后检查；持久
 Usage middleware 位于 policy guard 外层，只有后置 fence 校验通过才记录成功，外部 I/O 不发生在数据库事务内。
 
-`GET /api/v1/agent-turn-runs/{run_id}/tool-executions` 只返回 owner-scoped Usage 与以下摘要：Tool 名称/
-版本、schema/args/result hash、输入输出大小、状态、时长和安全错误。它不读取旧 `ToolExecution.result_payload`，
-也不返回 raw args/result、MCP endpoint、Prompt、正文或 Secret。
+`GET /api/v1/agent-turn-runs/{run_id}/tool-executions` 只返回 owner-scoped Usage 与以下公开投影：Tool 名称/
+版本、schema/args/result hash、输入输出大小、状态、时长、安全错误，以及 Runtime 边界生成的输入/输出
+预览。输入预览最多 8 KiB，输出预览最多 16 KiB；敏感键、常见 Authorization/Bearer/API key/token/
+password/cookie 形式先脱敏，超长内容带显式截断标记。预览只取模型本来可见的 Tool arguments 和
+`ToolMessage.content`，不读取内部 artifact 或旧 `ToolExecution.result_payload`，也不返回 raw args/result、
+MCP endpoint、Prompt、论文全文或 Secret。迁移前的历史调用预览保持 `NULL`，前端明确显示“未记录”，
+不会从 hash 猜测或伪造内容。
 
 ## 失败、重复、取消
 
@@ -81,7 +85,8 @@ Usage middleware 位于 policy guard 外层，只有后置 fence 校验通过才
 - Domain/Application：`backend/tests/domain/test_agent_usage.py`、
   `backend/tests/application/test_agent_usage_service.py`；
 - Adapter/API/Schema：`backend/tests/infrastructure/test_deep_agents_research_agent_runtime.py`、
-  `backend/tests/api/test_agent_sessions.py`、`backend/tests/infrastructure/test_agent_usage_schema_contract.py`；
+  `backend/tests/infrastructure/test_agent_tool_preview.py`、`backend/tests/api/test_agent_sessions.py`、
+  `backend/tests/infrastructure/test_agent_usage_schema_contract.py`；
 - 代码入口：`application/agent_usage_service.py`、`domain/agent_usage.py`、
   `infrastructure/persistence/agent_usage_repository.py` 和 `DeepAgentsResearchAgentRuntime`。
 

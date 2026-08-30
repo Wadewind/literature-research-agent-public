@@ -52,8 +52,12 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - Turn Inspector 固定为“证据 / 浏览器 / 成果”三个可访问 tab。证据区显示不可变索引快照、Matrix 与
   Claim/Citation/Evidence；浏览器区复用 noVNC；成果区组合正式 Artifact、内部 Candidate 与 Manifest。
   inactive panel 退出布局但保持 Browser 组件挂载。前端不解析回答正文制造引用，也不读取 candidate 内容。
-- 当前 Turn 的研究活动只展示筛选 Event、脱敏 ToolExecution 与 Usage/Budget；Manifest 只展示公开来源
-  状态、hash、大小和服务端实际返回的 URL。无 Session 时附件查询保持 disabled，不再请求空 session。
+- Agent 消息按 `turn_run_id` 分组，每一轮都通过 REST 恢复自己的筛选 Event、脱敏 ToolExecution 与
+  Usage/Budget；只有当前候选 Turn 额外订阅 SSE，并按 sequence 覆盖 REST 快照。研究过程和每次工具调用
+  内联在对应消息组中，可分别折叠；工具展开后显示服务端返回的有界脱敏输入/输出预览。用户消息靠右，
+  助手正文采用无角色标题的左侧自然流，运行中只使用低干扰旋转/呼吸动画且支持 reduced-motion。
+  Manifest 只展示公开来源状态、hash、大小和服务端实际返回的 URL。无 Session 时附件查询保持 disabled，
+  不再请求空 session。
 
 - 前端不持有任何业务事实：列表与状态全部来自 PostgreSQL 支撑的 REST API；SSE 事件流由后端从 PostgreSQL 重放/推送（见 `run-event.md`）。
 - `/library` 展示 owner 范围的个人文献资产及其 Project 收录范围；Project 页面并行读取当前收录与个人库，可直接收录已有 PaperVersion。移出 Project 只删除 `ProjectPaper`，不会删除 PDF 或解析结果。
@@ -261,10 +265,15 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   文件管理、fork/rewind、candidate 内容查看或移动端 Drawer；窄屏只避免阻断性溢出。Fake Runtime 固定回答没有 Citation 且完成
   很快，因此 E2E 不把非空 Agent Citation 或运行中取消作为稳定断言；相应业务边界由后端和通用 Run
   分层测试覆盖。
+- UI 中的“研究过程”来自白名单 Run Event，不是模型隐藏思维链；模型 Prompt、原始 chain-of-thought 和
+  未脱敏 Tool payload 均不进入前端。迁移前 Tool 调用没有可恢复预览时明确显示缺失说明。
 - Chat/Agent 的 viewport 三栏以桌面为验收主体；窄屏顺序展开且不建设 Drawer。栏宽偏好只在各自模式
   内复用，不跨设备同步。
 - 本轮只完成键盘入口、焦点、动效降级与桌面页面走查；未执行自动色彩对比审计、全量 WCAG、跨浏览器
   或移动端认证。既有 favicon 404 与历史 Agent Turn ToolExecution 404 仍按其真实来源保留。
+- 2026-08-30 的历史 Turn/工具展开回归使用真实本地会话验证：页面恢复 4 个 Turn、9 个 Tool disclosure、
+  4 个研究过程 disclosure，角色标题计数为 0，浏览器控制台无错误；前端全量为 32 files / 176 passed，
+  production build 通过。
 
 ## 60 秒面试说明
 

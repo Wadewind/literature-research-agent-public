@@ -896,7 +896,7 @@ class AgentModelCallReservationORM(Base):
 
 
 class AgentToolCallORM(Base):
-    """所有 Runtime Tool invocation 的脱敏执行摘要。"""
+    """所有 Runtime Tool invocation 的脱敏执行摘要与有界公开预览。"""
 
     __tablename__ = "agent_tool_calls"
     reservation_key: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -910,7 +910,11 @@ class AgentToolCallORM(Base):
     args_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     input_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_preview: Mapped[str | None] = mapped_column(Text)
+    input_preview_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False)
     output_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    output_preview: Mapped[str | None] = mapped_column(Text)
+    output_preview_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False)
     result_hash: Mapped[str | None] = mapped_column(String(64))
     error_code: Mapped[str | None] = mapped_column(String(100))
     safe_message: Mapped[str | None] = mapped_column(String(500))
@@ -932,6 +936,11 @@ class AgentToolCallORM(Base):
         CheckConstraint(
             "duration_ms IS NULL OR duration_ms >= 0",
             name="ck_agent_tool_call_duration",
+        ),
+        CheckConstraint(
+            "(input_preview IS NOT NULL OR input_preview_truncated = false) AND "
+            "(output_preview IS NOT NULL OR output_preview_truncated = false)",
+            name="ck_agent_tool_call_preview_flags",
         ),
         CheckConstraint(
             "(status = 'reserved' AND started_at IS NULL AND completed_at IS NULL "

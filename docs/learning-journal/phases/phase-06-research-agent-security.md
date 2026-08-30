@@ -48,6 +48,13 @@ Composer。`.agent-welcome` 已改为浅色紧凑引导卡，Chat 创建页不�
 事实落地而对 ToolExecution 查询返回 404，UI 仅显示安全错误；新 Turn 的 E2E 请求为 200，纯前端不伪造
 历史数据。视觉 token 刷新仍留给 8.4，不能据此宣称 Slice 8 或最终视觉重设计全部完成。
 
+2026-08-30 的产品回归修复把中心活动从“仅当前 Turn 的独立底栏”改为按 `turn_run_id` 内联到每轮消息：
+历史 REST Event/ToolExecution 会随会话恢复，当前 Turn 再与 SSE 按 sequence 合并。每次 Tool 调用提供可
+折叠的 8 KiB 输入与 16 KiB 输出脱敏预览，敏感键和常见凭据形式在 Runtime 边界移除；旧调用不补造内容。
+“研究过程”只映射白名单业务事件，不暴露模型隐藏思维链。消息去除可见角色标题，用户气泡靠右、助手正文
+自然左流，并加入支持 reduced-motion 的轻量运行状态动画。真实会话走查恢复 4 个历史 Turn、9 个 Tool
+折叠项和 4 个过程折叠项，控制台无错误。
+
 Slice 8 的全站视觉 token 与可访问性刷新子切片 8.4 完成日期：2026-08-28；白色纸面、弱边框/阴影与
 低干扰网格已覆盖主要页面，Review workbench、RAG ask strip 和 Agent welcome 收敛为浅色纸面 + 朱红
 状态线，仅 Project 创建引导区保留深色。关键功能小字提升至 11–12px，数字元数据采用 tabular nums；
@@ -546,7 +553,8 @@ GET  /api/v1/artifacts/{artifact_id}
 - Session 创建请求只绑定 URL 中的 Project；Message 请求只接受用户内容和有限公开选项。专用 Session
   Capability API 只引用当前 owner 可见的 Catalog/Skill ID 和 Schema 允许的安全参数；owner、最终
   Tool/Skill/MCP allowlist、Sandbox、SDK Thread 和内部 Context/Policy 仍由服务端解析与固化；
-- ToolExecution 默认只返回脱敏摘要，管理员诊断信息不暴露给普通用户；
+- ToolExecution 默认只返回脱敏摘要和有界公开预览；raw payload、内部 artifact、endpoint、Prompt 与
+  管理员诊断信息不暴露给普通用户；
 - Artifact 下载再次校验 owner、Project、隔离/扫描状态和内容处置策略。
 
 ### Event

@@ -9,13 +9,15 @@ from literature_agent.domain.agent_usage import AgentToolCall, AgentTurnUsage
 
 @dataclass(frozen=True, slots=True)
 class ToolCallReservationRequest:
-    """Tool 调用预留；只携带稳定身份、版本和哈希。"""
+    """Tool 调用预留；携带稳定身份、哈希与有界脱敏输入预览。"""
 
     invocation_id: str
     tool_name: str
     input_schema_hash: str
     args_hash: str
     input_size_bytes: int
+    input_preview: str | None = None
+    input_preview_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +56,8 @@ class AgentUsageControl(Protocol):
         *,
         output_size_bytes: int,
         result_hash: str,
+        output_preview: str | None = None,
+        output_preview_truncated: bool = False,
     ) -> AgentToolCall: ...
     async def fail_tool_call(
         self,
@@ -62,4 +66,6 @@ class AgentUsageControl(Protocol):
         *,
         error_code: str,
         safe_message: str,
+        output_preview: str | None = None,
+        output_preview_truncated: bool = False,
     ) -> AgentToolCall: ...

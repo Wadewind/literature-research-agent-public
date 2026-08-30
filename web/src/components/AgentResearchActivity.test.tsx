@@ -6,7 +6,7 @@ import type { AgentToolExecutionsResponse } from "../api/types";
 import AgentResearchActivity from "./AgentResearchActivity";
 
 describe("AgentResearchActivity", () => {
-  it("只展示脱敏 ToolExecution 与 Usage/Budget 摘要", () => {
+  it("用可折叠记录展示脱敏 Tool 输入输出与 Usage/Budget 摘要", () => {
     const toolExecutions = {
       usage: {
         max_model_calls: 8,
@@ -33,7 +33,11 @@ describe("AgentResearchActivity", () => {
         args_hash: "b".repeat(64),
         status: "succeeded",
         input_size_bytes: 24,
+        input_preview: '{\n  "query": "路径规划"\n}',
+        input_preview_truncated: false,
         output_size_bytes: 128,
+        output_preview: "返回 3 条证据摘要",
+        output_preview_truncated: false,
         result_hash: "c".repeat(64),
         error_code: null,
         safe_message: "返回 3 条证据摘要",
@@ -62,7 +66,11 @@ describe("AgentResearchActivity", () => {
     expect(html).toContain("工具调用");
     expect(html).toContain("3 / 12");
     expect(html).toContain("search_project_evidence");
+    expect(html).toContain("路径规划");
     expect(html).toContain("返回 3 条证据摘要");
+    expect(html).toContain("工具输入");
+    expect(html).toContain("工具输出");
+    expect(html).toContain("<details");
     expect(html).toContain("研究任务已开始");
     expect(html).toContain("研究环境未能启动");
     expect(html).toContain("runtime_sandbox_metadata_invalid");

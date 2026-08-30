@@ -362,7 +362,11 @@ export interface AgentToolExecution {
   args_hash: string;
   status: string;
   input_size_bytes: number;
+  input_preview: string | null;
+  input_preview_truncated: boolean;
   output_size_bytes: number | null;
+  output_preview: string | null;
+  output_preview_truncated: boolean;
   result_hash: string | null;
   error_code: string | null;
   safe_message: string | null;

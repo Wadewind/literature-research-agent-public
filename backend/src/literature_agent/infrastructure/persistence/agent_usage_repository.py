@@ -130,6 +130,8 @@ class SqlalchemyAgentUsageRepository(AgentUsageRepository):
                 .values(
                     status=value.status.value,
                     output_size_bytes=value.output_size_bytes,
+                    output_preview=value.output_preview,
+                    output_preview_truncated=value.output_preview_truncated,
                     result_hash=value.result_hash,
                     error_code=value.error_code,
                     safe_message=value.safe_message,

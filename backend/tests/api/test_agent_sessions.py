@@ -154,6 +154,7 @@ class _Service:
             input_schema_hash="a" * 64,
             args_hash="b" * 64,
             input_size_bytes=24,
+            input_preview='{"query":"路径规划"}',
         )
         return AgentToolExecutionsView(usage, (call,))
 
@@ -261,6 +262,7 @@ async def test_tool_execution_api_returns_only_safe_usage_and_hash_summary() -> 
     payload = response.model_dump(mode="json")
     assert payload["usage"]["max_tool_output_bytes"] == 64 * 1024
     assert payload["items"][0]["args_hash"] == "b" * 64
+    assert payload["items"][0]["input_preview"] == '{"query":"路径规划"}'
     serialized = response.model_dump_json()
     for forbidden in ("result_payload", "raw_args", "endpoint", "prompt", "secret"):
         assert forbidden not in serialized.lower()

@@ -76,7 +76,11 @@ from literature_agent.domain.agent_answer import (
     INSUFFICIENT_AGENT_EVIDENCE_TEXT,
     extract_agent_evidence_claims,
 )
-from literature_agent.domain.agent_usage import AgentToolCallStatus
+from literature_agent.domain.agent_usage import (
+    AGENT_TOOL_INPUT_PREVIEW_BYTES,
+    AGENT_TOOL_OUTPUT_PREVIEW_BYTES,
+    AgentToolCallStatus,
+)
 from literature_agent.domain.research_agent import (
     PolicySnapshot,
     RuntimeSessionBinding,
@@ -88,6 +92,7 @@ from literature_agent.domain.runtime_execution import (
     RuntimeExecutionPermit,
 )
 from literature_agent.domain.tool_execution import ToolErrorKind, canonical_tool_args
+from literature_agent.infrastructure.agent.agent_tool_preview import build_tool_preview
 
 _TURN_METADATA_KEY = "agent_runtime_turn_id"
 _SESSION_METADATA_KEY = "agent_runtime_session_id"
@@ -333,6 +338,11 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
                 "runtime_tool_args_invalid",
                 "Runtime Tool 参数不是有限 JSON",
             ) from exc
+        input_preview = build_tool_preview(
+            request.tool_call.get("args", {}),
+            max_bytes=AGENT_TOOL_INPUT_PREVIEW_BYTES,
+            pretty=True,
+        )
         call = None
         claimed = False
         try:
@@ -344,6 +354,8 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
                     input_schema_hash=_tool_schema_hash(request.tool),
                     args_hash=hashlib.sha256(args_bytes).hexdigest(),
                     input_size_bytes=len(args_bytes),
+                    input_preview=input_preview.text,
+                    input_preview_truncated=input_preview.truncated,
                 ),
             )
             replayable = name in context.replayable_tool_names
@@ -362,6 +374,12 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
             result_bytes = _tool_result_bytes(result)
             if len(result_bytes) > budget.max_tool_output_bytes:
                 raise AgentUsageError("agent_tool_output_too_large", "Tool 输出超过安全上限")
+            output_preview_value = _tool_result_preview_value(result)
+            output_preview = build_tool_preview(
+                output_preview_value,
+                max_bytes=AGENT_TOOL_OUTPUT_PREVIEW_BYTES,
+                pretty=not isinstance(output_preview_value, str),
+            )
             failure = _tool_result_failure(name, result)
             if failure is not None and call is not None and claimed:
                 await _record_tool_failure(
@@ -370,6 +388,8 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
                     call.reservation_key,
                     failure[0],
                     failure[1],
+                    output_preview=output_preview.text,
+                    output_preview_truncated=output_preview.truncated,
                 )
                 return result
             await self._control.succeed_tool_call(
@@ -377,6 +397,8 @@ class _PersistentUsageMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
                 call.reservation_key,
                 output_size_bytes=len(result_bytes),
                 result_hash=hashlib.sha256(result_bytes).hexdigest(),
+                output_preview=output_preview.text,
+                output_preview_truncated=output_preview.truncated,
             )
             return result
         except TimeoutError as exc:
@@ -1774,6 +1796,13 @@ def _tool_result_bytes(result: ToolMessage | Command[Any]) -> bytes:
     raise AgentUsageError("agent_tool_result_unsupported", "Tool 结果类型无法形成稳定摘要")
 
 
+def _tool_result_preview_value(result: ToolMessage | Command[Any]) -> object:
+    """公开预览只取模型本来可见的 ToolMessage content，不暴露内部 artifact。"""
+    if isinstance(result, ToolMessage):
+        return result.content
+    return "（Tool 结果没有可公开内容）"
+
+
 def _tool_result_failure(
     name: str,
     result: ToolMessage | Command[Any],
@@ -1859,6 +1888,9 @@ async def _record_tool_failure(
     reservation_key: str,
     code: str,
     safe_message: str,
+    *,
+    output_preview: str | None = None,
+    output_preview_truncated: bool = False,
 ) -> None:
     with suppress(AgentUsageError):
         await usage_control.fail_tool_call(
@@ -1866,6 +1898,8 @@ async def _record_tool_failure(
             reservation_key,
             error_code=code,
             safe_message=safe_message,
+            output_preview=output_preview,
+            output_preview_truncated=output_preview_truncated,
         )
 
 

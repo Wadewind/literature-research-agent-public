@@ -53,7 +53,7 @@ def test_turn_usage_freezes_lean_profile_and_starts_deadline_once() -> None:
     assert replayed == started
 
 
-def test_tool_call_is_hash_only_and_has_safe_terminal_summary() -> None:
+def test_tool_call_keeps_hashes_and_bounded_safe_previews() -> None:
     call = create_agent_tool_call(
         turn_run_id="turn-1",
         invocation_id="call-1",
@@ -62,6 +62,8 @@ def test_tool_call_is_hash_only_and_has_safe_terminal_summary() -> None:
         input_schema_hash="a" * 64,
         args_hash="b" * 64,
         input_size_bytes=42,
+        input_preview='{"command":"git status --short"}',
+        input_preview_truncated=False,
         now=_NOW,
     )
 
@@ -73,6 +75,8 @@ def test_tool_call_is_hash_only_and_has_safe_terminal_summary() -> None:
     succeeded = running.succeed(
         output_size_bytes=512,
         result_hash="c" * 64,
+        output_preview="无输出",
+        output_preview_truncated=False,
         now=_NOW + timedelta(milliseconds=25),
     )
 
@@ -80,6 +84,8 @@ def test_tool_call_is_hash_only_and_has_safe_terminal_summary() -> None:
     assert succeeded.duration_ms == 20
     assert succeeded.output_size_bytes == 512
     assert succeeded.result_hash == "c" * 64
+    assert succeeded.input_preview == '{"command":"git status --short"}'
+    assert succeeded.output_preview == "无输出"
     assert succeeded.error_code is None
 
 

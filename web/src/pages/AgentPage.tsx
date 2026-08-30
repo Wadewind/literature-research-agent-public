@@ -1,12 +1,12 @@
 import {
-  Fragment,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type FormEvent,
 } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
@@ -29,6 +29,7 @@ import type {
   ReviewListItem,
   ReviewOutput,
   Run,
+  RunEvent,
   SkillProfile,
   SkillProfileSelection,
 } from "../api/types";
@@ -43,6 +44,7 @@ import {
 import { canQueryAgentAttachments } from "../agent/sessionQueries";
 import { agentWorkspaceKey } from "../agent/interactionIdentity";
 import { eligibleEvidenceMatrices } from "../agent/matrixEligibility";
+import { groupMessagesByTurn, mergeRunEvents } from "../agent/turnTimeline";
 import {
   agentEventLabel,
   agentTurnFailureSummary,
@@ -66,7 +68,6 @@ import AgentResearchActivity from "../components/AgentResearchActivity";
 import AgentResizeSeparator from "../components/AgentResizeSeparator";
 import AgentSessionRail from "../components/AgentSessionRail";
 import AgentTurnOutputs from "../components/AgentTurnOutputs";
-import AgentTurnFailure from "../components/AgentTurnFailure";
 import PageBar from "../components/PageBar";
 import { isCancellable, isTerminal, statusLabel } from "../runs/runStatus";
 import { useRunEvents } from "../runs/useRunEvents";
@@ -211,12 +212,21 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     enabled: Boolean(sessionId && canInteract),
   });
 
-  const messages = messagesQuery.data ?? [];
+  const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data]);
   const latestMessage = messages.at(-1);
   const candidateTurnRunId =
     canInteract
       ? submittedRunId ?? sessionQuery.data?.active_turn_run_id ?? latestMessage?.turn_run_id
       : undefined;
+  const activityRunIds = useMemo(() => {
+    const runIds = [...new Set(messages.map((message) => message.turn_run_id))];
+    if (candidateTurnRunId && !runIds.includes(candidateTurnRunId)) runIds.push(candidateTurnRunId);
+    return runIds;
+  }, [candidateTurnRunId, messages]);
+  const turnGroups = useMemo(
+    () => groupMessagesByTurn(messages, candidateTurnRunId),
+    [candidateTurnRunId, messages],
+  );
   const runQuery = useQuery({
     queryKey: ["run", candidateTurnRunId],
     queryFn: () => apiFetch<Run>(`/api/v1/runs/${candidateTurnRunId}`),
@@ -236,15 +246,25 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
       apiFetch<AgentArtifact[]>(`/api/v1/agent-turn-runs/${candidateTurnRunId}/artifacts`),
     enabled: Boolean(candidateTurnRunId),
   });
-  const toolExecutionsQuery = useQuery({
-    queryKey: ["agent-tool-executions", candidateTurnRunId],
-    queryFn: () => apiFetch<AgentToolExecutionsResponse>(
-      `/api/v1/agent-turn-runs/${candidateTurnRunId}/tool-executions`,
-    ),
-    enabled: Boolean(candidateTurnRunId),
-    refetchInterval: () => candidateTurnRunId && !isTerminal(runQuery.data?.status ?? "")
-      ? 2_000
-      : false,
+  const toolExecutionQueries = useQueries({
+    queries: activityRunIds.map((runId) => ({
+      queryKey: ["agent-tool-executions", runId],
+      queryFn: () => apiFetch<AgentToolExecutionsResponse>(
+        `/api/v1/agent-turn-runs/${runId}/tool-executions`,
+      ),
+      enabled: canInteract,
+      refetchInterval: runId === candidateTurnRunId && !isTerminal(runQuery.data?.status ?? "")
+        ? 2_000
+        : false,
+    })),
+  });
+  const eventQueries = useQueries({
+    queries: activityRunIds.map((runId) => ({
+      queryKey: ["agent-run-events", runId],
+      queryFn: () => apiFetch<RunEvent[]>(`/api/v1/runs/${runId}/events?limit=500`),
+      enabled: canInteract,
+      staleTime: runId === candidateTurnRunId ? 0 : 60_000,
+    })),
   });
   const manifestQuery = useQuery({
     queryKey: ["agent-artifact-manifest", candidateTurnRunId],
@@ -271,6 +291,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
     void queryClient.invalidateQueries({ queryKey: ["agent-turn", candidateTurnRunId] });
     void queryClient.invalidateQueries({ queryKey: ["agent-artifacts", candidateTurnRunId] });
     void queryClient.invalidateQueries({ queryKey: ["agent-tool-executions", candidateTurnRunId] });
+    void queryClient.invalidateQueries({ queryKey: ["agent-run-events", candidateTurnRunId] });
     void queryClient.invalidateQueries({ queryKey: ["agent-artifact-manifest", candidateTurnRunId] });
   }, [
     candidateTurnRunId,
@@ -474,17 +495,35 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   }
 
   const project = projectQuery.data;
-  const failedEvent = [...eventStream.events]
-    .reverse()
-    .find((event) => event.event_type === "run_failed");
-  const turnFailure = runQuery.data?.status === "failed"
-    ? agentTurnFailureSummary(failedEvent)
-    : null;
+  const turnActivities = new Map(activityRunIds.map((runId, index) => {
+    const persistedEvents = eventQueries[index]?.data ?? [];
+    const mergedEvents = mergeRunEvents(
+      persistedEvents,
+      runId === candidateTurnRunId ? eventStream.events : [],
+    );
+    const visibleEvents = mergedEvents.flatMap((event) => {
+      const label = agentEventLabel(event.event_type);
+      return label ? [{ ...event, label }] : [];
+    });
+    const failedEvent = [...mergedEvents]
+      .reverse()
+      .find((event) => event.event_type === "run_failed");
+    const failure = failedEvent || (runId === candidateTurnRunId && runQuery.data?.status === "failed")
+      ? agentTurnFailureSummary(failedEvent)
+      : null;
+    return [runId, {
+      events: visibleEvents,
+      toolExecutions: toolExecutionQueries[index]?.data,
+      loading: Boolean(eventQueries[index]?.isPending || toolExecutionQueries[index]?.isPending),
+      error: Boolean(eventQueries[index]?.isError || toolExecutionQueries[index]?.isError),
+      failure,
+      active: runId === activeTurnRunId,
+    }] as const;
+  }));
+  const currentActivity = candidateTurnRunId ? turnActivities.get(candidateTurnRunId) : undefined;
+  const turnFailure = currentActivity?.failure ?? null;
   const skillLocked = isSkillProfileLocked(messages.length);
-  const researchEvents = eventStream.events.flatMap((event) => {
-    const label = agentEventLabel(event.event_type);
-    return label ? [{ ...event, label }] : [];
-  });
+  const researchEvents = currentActivity?.events ?? [];
   const assistantMessages = messages.filter((message) => message.role === "assistant");
   const availableMatrices = eligibleEvidenceMatrices(reviewsQuery.data ?? []);
   const capabilityLoading = mcpCatalogQuery.isPending || mcpProfileQuery.isPending ||
@@ -584,39 +623,49 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
               <div className="agent-message-timeline" aria-live="polite">
                 {messagesQuery.isPending && <p className="muted">正在恢复消息历史…</p>}
                 {messagesQuery.isError && <p className="error-text">{errorMessage(messagesQuery.error)}</p>}
-                {messages.length === 0 && (
+                {messages.length === 0 && !activeTurnRunId && (
                   <div className="agent-empty-turn"><h3>准备第一轮研究</h3><p>选择 Evidence Matrix，然后提出一个需要比较、综合或验证的研究问题。</p></div>
                 )}
-                {messages.map((message) => (
-                  <Fragment key={message.message_id}>
-                    <article className={`message message-${message.role}`}>
-                      <header><strong>{message.role === "user" ? "你" : "研究助手"}</strong><time>{new Date(message.created_at).toLocaleTimeString()}</time></header>
-                      <p>{message.content}</p>
-                      {message.claims?.map((claim, claimIndex) => (
-                        <div className="agent-inline-claim" key={`${message.message_id}:${claimIndex}`}>
-                          <span className="mono">E{String(claimIndex + 1).padStart(2, "0")}</span>
-                          {claim.citations.map((citation) => (
-                            <button key={citation.evidence_id} type="button" className="citation-marker" onClick={() => setSelectedEvidence(citation)}>
-                              p.{citation.page_start ?? "?"}
-                            </button>
+                {turnGroups.map((group) => {
+                  const activity = turnActivities.get(group.turnRunId);
+                  return (
+                    <section className="agent-turn-thread" key={group.turnRunId}>
+                      {group.messages.map((message) => (
+                        <article
+                          aria-label={message.role === "user" ? "你的消息" : "研究助手消息"}
+                          className={`message message-${message.role}`}
+                          key={message.message_id}
+                        >
+                          <p>{message.content}</p>
+                          {message.claims?.map((claim, claimIndex) => (
+                            <div className="agent-inline-claim" key={`${message.message_id}:${claimIndex}`}>
+                              <span className="mono">E{String(claimIndex + 1).padStart(2, "0")}</span>
+                              {claim.citations.map((citation) => (
+                                <button key={citation.evidence_id} type="button" className="citation-marker" onClick={() => setSelectedEvidence(citation)}>
+                                  p.{citation.page_start ?? "?"}
+                                </button>
+                              ))}
+                            </div>
                           ))}
-                        </div>
+                          <time className="agent-message-time" dateTime={message.created_at}>
+                            {new Date(message.created_at).toLocaleTimeString()}
+                          </time>
+                        </article>
                       ))}
-                    </article>
-                    {turnFailure && candidateTurnRunId === message.turn_run_id && message.role === "user" && (
-                      <AgentTurnFailure runId={candidateTurnRunId} summary={turnFailure} />
-                    )}
-                  </Fragment>
-                ))}
+                      {activity && (
+                        <AgentResearchActivity
+                          events={activity.events}
+                          toolExecutions={activity.toolExecutions}
+                          loading={activity.loading}
+                          error={activity.error}
+                          active={activity.active}
+                          failure={activity.failure}
+                        />
+                      )}
+                    </section>
+                  );
+                })}
               </div>
-
-              <AgentResearchActivity
-                events={researchEvents}
-                toolExecutions={toolExecutionsQuery.data}
-                loading={toolExecutionsQuery.isPending && Boolean(candidateTurnRunId)}
-                error={toolExecutionsQuery.isError}
-                failure={turnFailure}
-              />
 
               <form className="agent-composer" onSubmit={submitMessage}>
                 <div className="agent-composer-settings" aria-label="研究设置">

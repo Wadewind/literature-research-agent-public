@@ -11,6 +11,8 @@ AGENT_TURN_WALL_CLOCK_SECONDS = 300
 AGENT_TOOL_TIMEOUT_SECONDS = 60
 AGENT_EXECUTE_TIMEOUT_SECONDS = 60
 AGENT_MAX_TOOL_OUTPUT_BYTES = 64 * 1024
+AGENT_TOOL_INPUT_PREVIEW_BYTES = 8 * 1024
+AGENT_TOOL_OUTPUT_PREVIEW_BYTES = 16 * 1024
 AGENT_MAX_REPEATED_TOOL_CALLS = 2
 AGENT_MAX_INPUT_TOKENS_PER_MODEL_CALL = 60_000
 AGENT_MAX_OUTPUT_TOKENS_PER_MODEL_CALL = 4_096
@@ -165,7 +167,7 @@ class AgentTurnUsage:
 
 @dataclass(frozen=True, slots=True)
 class AgentToolCall:
-    """不含 raw args/result/endpoint 的 Tool invocation 业务摘要。"""
+    """不含 raw payload/endpoint 的 Tool invocation 与有界脱敏预览。"""
 
     reservation_key: str
     turn_run_id: str
@@ -185,6 +187,10 @@ class AgentToolCall:
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    input_preview: str | None = None
+    input_preview_truncated: bool = False
+    output_preview: str | None = None
+    output_preview_truncated: bool = False
 
     def __post_init__(self) -> None:
         _require_non_empty(
@@ -220,6 +226,22 @@ class AgentToolCall:
             not self.safe_message.strip() or len(self.safe_message) > 500
         ):
             raise ValueError("Tool 安全错误说明非法")
+        _validate_preview(
+            self.input_preview,
+            self.input_preview_truncated,
+            AGENT_TOOL_INPUT_PREVIEW_BYTES,
+            "输入",
+        )
+        _validate_preview(
+            self.output_preview,
+            self.output_preview_truncated,
+            AGENT_TOOL_OUTPUT_PREVIEW_BYTES,
+            "输出",
+        )
+        if self.status in {AgentToolCallStatus.RESERVED, AgentToolCallStatus.RUNNING} and (
+            self.output_preview is not None or self.output_preview_truncated
+        ):
+            raise ValueError("未结束 Tool 调用不能包含输出预览")
         self._validate_state()
 
     def _validate_state(self) -> None:
@@ -290,6 +312,8 @@ class AgentToolCall:
         *,
         output_size_bytes: int,
         result_hash: str,
+        output_preview: str | None = None,
+        output_preview_truncated: bool = False,
         now: datetime | None = None,
     ) -> AgentToolCall:
         if self.status is not AgentToolCallStatus.RUNNING or self.started_at is None:
@@ -300,6 +324,8 @@ class AgentToolCall:
             status=AgentToolCallStatus.SUCCEEDED,
             output_size_bytes=output_size_bytes,
             result_hash=result_hash,
+            output_preview=output_preview,
+            output_preview_truncated=output_preview_truncated,
             duration_ms=_duration_ms(self.started_at, value),
             completed_at=value,
             updated_at=value,
@@ -310,6 +336,8 @@ class AgentToolCall:
         *,
         error_code: str,
         safe_message: str,
+        output_preview: str | None = None,
+        output_preview_truncated: bool = False,
         now: datetime | None = None,
     ) -> AgentToolCall:
         if self.status is not AgentToolCallStatus.RUNNING or self.started_at is None:
@@ -322,6 +350,8 @@ class AgentToolCall:
             status=AgentToolCallStatus.FAILED,
             error_code=error_code,
             safe_message=safe_message,
+            output_preview=output_preview,
+            output_preview_truncated=output_preview_truncated,
             duration_ms=_duration_ms(self.started_at, value),
             completed_at=value,
             updated_at=value,
@@ -401,6 +431,8 @@ def create_agent_tool_call(
     input_schema_hash: str,
     args_hash: str,
     input_size_bytes: int,
+    input_preview: str | None = None,
+    input_preview_truncated: bool = False,
     now: datetime | None = None,
 ) -> AgentToolCall:
     """创建稳定 Tool reservation；原始参数不进入领域事实。"""
@@ -424,6 +456,8 @@ def create_agent_tool_call(
         completed_at=None,
         created_at=value,
         updated_at=value,
+        input_preview=input_preview,
+        input_preview_truncated=input_preview_truncated,
     )
 
 
@@ -431,6 +465,20 @@ def _duration_ms(started_at: datetime, completed_at: datetime) -> int:
     if completed_at < started_at:
         raise ValueError("Tool 完成时间不能早于开始时间")
     return int((completed_at - started_at).total_seconds() * 1_000)
+
+
+def _validate_preview(
+    preview: str | None,
+    truncated: bool,
+    max_bytes: int,
+    label: str,
+) -> None:
+    if preview is None:
+        if truncated:
+            raise ValueError(f"Tool {label}预览为空时不能标记截断")
+        return
+    if not preview.strip() or len(preview.encode("utf-8")) > max_bytes:
+        raise ValueError(f"Tool {label}预览非法")
 
 
 def _require_non_empty(**values: str) -> None:

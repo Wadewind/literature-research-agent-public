@@ -600,7 +600,7 @@ class AgentSessionService[TSession: Session]:
     async def list_tool_executions(
         self, actor: ActorContext, run_id: str
     ) -> AgentToolExecutionsView:
-        """返回脱敏 Tool 摘要和持久化预算，不读取内部 result_payload。"""
+        """返回脱敏 Tool 摘要、有界公开预览和持久化预算。"""
         async with self._session_factory() as session:
             agent_repo = self._agent_repo_factory(session)
             turn = await agent_repo.get_turn_scoped(run_id, actor.owner_id)

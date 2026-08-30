@@ -140,6 +140,8 @@ class _UsageControl:
             input_schema_hash=request.input_schema_hash,
             args_hash=request.args_hash,
             input_size_bytes=request.input_size_bytes,
+            input_preview=request.input_preview,
+            input_preview_truncated=request.input_preview_truncated,
         )
         self.calls[request.invocation_id] = value
         return value
@@ -151,14 +153,27 @@ class _UsageControl:
         return started
 
     async def succeed_tool_call(
-        self, turn_run_id, reservation_key, *, output_size_bytes, result_hash
+        self,
+        turn_run_id,
+        reservation_key,
+        *,
+        output_size_bytes,
+        result_hash,
+        output_preview=None,
+        output_preview_truncated=False,
     ):
         value = next(v for v in self.calls.values() if v.reservation_key == reservation_key)
         if value.status is AgentToolCallStatus.SUCCEEDED:
             assert value.output_size_bytes == output_size_bytes
             assert value.result_hash == result_hash
+            assert value.output_preview == output_preview
             return value
-        succeeded = value.succeed(output_size_bytes=output_size_bytes, result_hash=result_hash)
+        succeeded = value.succeed(
+            output_size_bytes=output_size_bytes,
+            result_hash=result_hash,
+            output_preview=output_preview,
+            output_preview_truncated=output_preview_truncated,
+        )
         self.calls[value.invocation_id] = succeeded
         self.succeeded_calls.append(value.invocation_id)
         return succeeded
@@ -170,8 +185,10 @@ class _UsageControl:
         *,
         error_code,
         safe_message,
+        output_preview=None,
+        output_preview_truncated=False,
     ):
-        del turn_run_id, safe_message
+        del turn_run_id, safe_message, output_preview, output_preview_truncated
         value = next(v for v in self.calls.values() if v.reservation_key == reservation_key)
         self.failed_calls.append((value.invocation_id, error_code))
         return value
@@ -633,7 +650,10 @@ async def test_persistent_usage_wraps_model_and_project_tool_boundaries() -> Non
     await middleware.awrap_tool_call(request, cached_handler)
     await middleware.awrap_tool_call(request, cached_handler)
 
-    assert usage.calls["project-search-1"].status is AgentToolCallStatus.SUCCEEDED
+    recorded = usage.calls["project-search-1"]
+    assert recorded.status is AgentToolCallStatus.SUCCEEDED
+    assert recorded.input_preview is not None and "图神经网络" in recorded.input_preview
+    assert recorded.output_preview == '{"result_hash":"a"}'
     assert effects == ["effect-or-cache-read", "effect-or-cache-read"]
 
 
