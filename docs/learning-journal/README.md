@@ -118,6 +118,11 @@ Phase 6 完成后的一次 Real Review 排查进一步暴露了“业务审计�
 [错误可观测性与 Run 诊断反思](reflections/error-observability-and-run-diagnostics.md)；当前状态为
 `Proposed / Deferred`，不改变 Phase 6 已完成结论。
 
+Phase 6 后的 Project 工作区产品演进新增了
+[Project 文献库 arXiv 搜索与引入](modules/project-arxiv-library-search.md)：来源发现现在可从文献库独立
+发起，并复用既有受限 Adapter 与 Ingestion 管线；`/reviews` 的用户可见名称调整为“文献研究”，
+Evidence Matrix 提升为详情页主要分析结果。`review.v1` 的自动检索与历史重放语义保持不变。
+
 项目也对“单人线性开发全部进入 `main` 是否合理”进行了独立复盘：当前可运行、可回退的切片提交可以
 保留，后续项目则优先采用稳定 `main`、短功能分支、自审 PR 和 Tag 里程碑。具体权衡与推荐流程见
 [单人项目中的 main、功能分支与提交历史](reflections/solo-development-branching-and-commit-strategy.md)。

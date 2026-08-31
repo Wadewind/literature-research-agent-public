@@ -6,6 +6,16 @@
 - 需求讨论：2026-08-22 已完成第一轮收敛
 - 关联决策：[ADR-0003：Phase 3 固定文献综述 Workflow](../decisions/0003-phase-3-fixed-review-workflow.md)
 
+### 2026-08-31 产品表达演进
+
+Project 工作区将 `/reviews` 的用户可见名称调整为“文献研究”。Evidence Matrix 是固定 Workflow 的主要
+分析结果，Markdown 综述是后续产物，不再用最终文件名称概括整条检索、导入、解析、索引和证据整理链路。
+同时，Project 文献库新增独立的 arXiv 搜索与引入入口，复用既有受限 Adapter 和 Ingestion 管线。
+
+本次演进不改变 `review.v1` 的持久状态机与历史重放语义：旧 Profile 仍会自动搜索并导入来源。独立文献库
+检索产生普通 Project Paper 与 Ingestion Run，不创建 Review Run；未来若新增“只消费项目既有文献”的
+Review Profile，必须另行版本化契约，不能静默改变 `review.v1`。
+
 ## 1. 阶段目标
 
 本阶段在 Phase 2 已完成的文献导入、索引、检索、Evidence 和引用校验能力之上，实现一个固定、可持久化、可暂停恢复的文献综述 Workflow。

@@ -236,7 +236,7 @@ export function AppSidebarView({
     ? [
         { mode: "library", label: "文献库", to: `/projects/${projectId}`, icon: "library" },
         { mode: "chat", label: "文献问答", to: chatHomePath(projectId), icon: "chat" },
-        { mode: "reviews", label: "综述", to: `/projects/${projectId}/reviews`, icon: "reviews" },
+        { mode: "reviews", label: "文献研究", to: `/projects/${projectId}/reviews`, icon: "reviews" },
         { mode: "agent", label: "研究助手", to: `/projects/${projectId}/agent`, icon: "agent" },
       ]
     : [];

@@ -192,7 +192,7 @@ function OutlineWorkbench({
           </div>
           {allowed.has("feedback") && <label className="feedback-field">反馈后重新生成<small>反馈只针对服务端当前大纲，不会包含上方未保存的结构化编辑。</small><textarea rows={3} maxLength={4000} value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="说明希望补充、删减或重排的内容"/><button type="button" disabled={mutation.isPending || !feedback.trim()} onClick={() => submit("feedback", { feedback })}>提交反馈并暂停等待新版本</button></label>}
           {mutation.isError && <p className="error-text">{errorMessage(mutation.error)}。如 Request 已过期，请刷新后使用最新版本。</p>}
-          {mutation.isSuccess && <p className="success-text">输入已持久化，Workflow 已重新排队。</p>}
+          {mutation.isSuccess && <p className="success-text">输入已保存，研究流程已重新排队。</p>}
         </div>
       )}
     </div>
@@ -251,8 +251,16 @@ export default function ReviewResults({
   const invalidSectionCount = (sectionsQuery.data?.length ?? 0) - sections.length;
   return (
     <div className="review-results-flow">
+      <section className="section-block review-matrix-primary" aria-labelledby="matrix-title">
+        <div className="section-title-row"><div><p className="project-library-kicker">主要分析结果</p><h2 id="matrix-title">Evidence Matrix</h2><p className="section-description">按论文和分析维度整理结论、限制与可回查证据。</p></div><span className="section-count">{String(rows.length).padStart(2, "0")}</span></div>
+        {matrixQuery.isPending && <p className="muted">正在读取 Evidence Matrix…</p>}
+        {matrixQuery.isError && !isNotReady(matrixQuery.error) && <p className="error-text">{errorMessage(matrixQuery.error)}</p>}
+        {!matrixQuery.isPending && (!matrixQuery.isError || isNotReady(matrixQuery.error)) && !matrixQuery.data && <div className="empty-state compact"><h3>Evidence Matrix 尚未生成</h3><p>来源完成解析和索引后，系统才会固定本次任务的证据边界。</p></div>}
+        {rows.length > 0 && <div className="matrix-table-wrap"><table className="matrix-table"><thead><tr><th>Paper</th><th>维度</th><th>结论 / 限制</th><th>Evidence</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.paper_id}:${row.dimension_key}`}><td className="mono">{row.paper_id.slice(0, 8)}</td><td>{row.dimension_key}</td><td>{row.status === "insufficient_evidence" ? <span className="badge badge-warn">证据不足</span> : <><p>{row.finding}</p>{row.limitations && <small>限制：{row.limitations}</small>}</>}</td><td><div className="evidence-chip-row">{row.evidence_ids.map((id) => <EvidenceLocator key={id} projectId={projectId} evidenceId={id}/>)}</div></td></tr>)}</tbody></table></div>}
+      </section>
+
       <section className="section-block" aria-labelledby="outline-title">
-        <div className="section-title-row"><div><p className="eyebrow">HUMAN CHECKPOINT</p><h2 id="outline-title">结构化大纲</h2></div><span className="section-count">{String(outlineSections(outlineQuery.data).length).padStart(2, "0")}</span></div>
+        <div className="section-title-row"><div><p className="project-library-kicker">人工确认节点</p><h2 id="outline-title">结构化大纲</h2></div><span className="section-count">{String(outlineSections(outlineQuery.data).length).padStart(2, "0")}</span></div>
         {outlineQuery.isPending && <p className="muted">正在读取大纲…</p>}
         {outlineQuery.isError && !isNotReady(outlineQuery.error) && <p className="error-text">{errorMessage(outlineQuery.error)}</p>}
         {!outlineQuery.isPending && (
@@ -268,16 +276,8 @@ export default function ReviewResults({
         )}
       </section>
 
-      <section className="section-block" aria-labelledby="matrix-title">
-        <div className="section-title-row"><div><p className="eyebrow">EVIDENCE FIRST</p><h2 id="matrix-title">Evidence Matrix</h2></div><span className="section-count">{String(rows.length).padStart(2, "0")}</span></div>
-        {matrixQuery.isPending && <p className="muted">正在读取 Evidence Matrix…</p>}
-        {matrixQuery.isError && !isNotReady(matrixQuery.error) && <p className="error-text">{errorMessage(matrixQuery.error)}</p>}
-        {!matrixQuery.isPending && (!matrixQuery.isError || isNotReady(matrixQuery.error)) && !matrixQuery.data && <div className="empty-state compact"><h3>Matrix 尚未提交</h3><p>来源全部进入就绪或稳定失败后，系统才会固定 Evidence 边界。</p></div>}
-        {rows.length > 0 && <div className="matrix-table-wrap"><table className="matrix-table"><thead><tr><th>Paper</th><th>维度</th><th>结论 / 限制</th><th>Evidence</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.paper_id}:${row.dimension_key}`}><td className="mono">{row.paper_id.slice(0, 8)}</td><td>{row.dimension_key}</td><td>{row.status === "insufficient_evidence" ? <span className="badge badge-warn">证据不足</span> : <><p>{row.finding}</p>{row.limitations && <small>限制：{row.limitations}</small>}</>}</td><td><div className="evidence-chip-row">{row.evidence_ids.map((id) => <EvidenceLocator key={id} projectId={projectId} evidenceId={id}/>)}</div></td></tr>)}</tbody></table></div>}
-      </section>
-
       <section className="section-block" aria-labelledby="sections-title">
-        <div className="section-title-row"><div><p className="eyebrow">SECTION CLAIMS</p><h2 id="sections-title">章节与引用</h2></div><span className="section-count">{String(sections.length).padStart(2, "0")}</span></div>
+        <div className="section-title-row"><div><p className="project-library-kicker">基于证据写作</p><h2 id="sections-title">章节与引用</h2></div><span className="section-count">{String(sections.length).padStart(2, "0")}</span></div>
         {sectionsQuery.isPending && <p className="muted">正在读取章节与 Evidence 绑定…</p>}
         {sectionsQuery.isError && <p className="error-text">{errorMessage(sectionsQuery.error)}</p>}
         {invalidSectionCount > 0 && <p className="error-text">{invalidSectionCount} 个 Section Output 不符合 section.v1 展示契约，已拒绝部分投影。</p>}
@@ -286,10 +286,10 @@ export default function ReviewResults({
       </section>
 
       <section className="section-block" aria-labelledby="artifacts-title">
-        <div className="section-title-row"><div><p className="eyebrow">PERSISTED OUTPUTS</p><h2 id="artifacts-title">Artifacts</h2></div><span className="section-count">{String(artifactsQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
-        {artifactsQuery.isPending && <p className="muted">正在读取 Artifact 清单…</p>}
+        <div className="section-title-row"><div><p className="project-library-kicker">最终产物</p><h2 id="artifacts-title">研究文件</h2></div><span className="section-count">{String(artifactsQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
+        {artifactsQuery.isPending && <p className="muted">正在读取研究文件…</p>}
         {artifactsQuery.isError && <p className="error-text">{errorMessage(artifactsQuery.error)}</p>}
-        {!artifactsQuery.isPending && !artifactsQuery.isError && artifactsQuery.data?.length === 0 && <div className="empty-state compact"><h3>Artifact 尚未导出</h3><p>引用校验和一致性检查完成后，六类固定文件会显示在这里。</p></div>}
+        {!artifactsQuery.isPending && !artifactsQuery.isError && artifactsQuery.data?.length === 0 && <div className="empty-state compact"><h3>研究文件尚未导出</h3><p>引用校验和一致性检查完成后，固定产物会显示在这里。</p></div>}
         <ul className="artifact-list">{artifactsQuery.data?.map((artifact) => <li key={artifact.artifact_id}><span><strong>{artifact.artifact_type.replaceAll("_", " ")}</strong><small>{artifact.media_type} · {(artifact.size_bytes / 1024).toFixed(1)} KiB · SHA-256 {artifact.content_hash.slice(0, 12)}…</small></span><a className="button-link" href={artifactContentUrl(projectId, runId, artifact.artifact_id)} download>下载</a></li>)}</ul>
       </section>
     </div>

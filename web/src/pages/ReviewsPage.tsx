@@ -64,22 +64,28 @@ export default function ReviewsPage() {
   };
 
   if (projectQuery.isError) {
-    return <div className="page-flow"><PageBar breadcrumbs={[{ label: "研究项目", to: "/" }]} title="综述" /><section className="notice"><p className="error-text">{errorMessage(projectQuery.error)}</p><Link to="/">返回项目</Link></section></div>;
+    return <div className="page-flow"><PageBar breadcrumbs={[{ label: "研究项目", to: "/" }]} title="文献研究" /><section className="notice"><p className="error-text">{errorMessage(projectQuery.error)}</p><Link to="/">返回项目</Link></section></div>;
   }
 
   return (
-    <div className="page-flow">
+    <div className="page-flow literature-research-page">
       <PageBar
-        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: project?.name ?? "正在读取项目…", to: `/projects/${projectId}` }]}
-        title="综述"
-        actions={<span className="page-bar-stat"><strong>{reviewsQuery.data?.length ?? "—"}</strong> 个 Review</span>}
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "文献研究" }]}
+        title={project?.name ?? "正在读取项目…"}
+        actions={<span className="page-bar-stat"><strong>{reviewsQuery.data?.length ?? "—"}</strong> 个研究任务</span>}
       />
 
       <section className="review-workbench">
-        <div>
-          <p className="eyebrow">NEW REVIEW</p>
-          <h2>定义这次综述的问题</h2>
-          <p>系统将按固定 Workflow 搜索并自动导入 arXiv 来源；大纲确认将在后续阶段出现。</p>
+        <div className="review-workbench-intro">
+          <p className="project-library-kicker">固定研究流程</p>
+          <h2>从研究问题到证据矩阵</h2>
+          <p>系统将补充 arXiv 来源，等待解析与索引，整理跨论文 Evidence Matrix，再生成大纲和简要综述。</p>
+          <ol className="review-path-summary" aria-label="研究任务主要阶段">
+            <li><span>01</span>收集与准备来源</li>
+            <li><span>02</span>提取并组织证据</li>
+            <li><span>03</span>生成研究产物</li>
+          </ol>
+          <Link className="text-link" to={`/projects/${projectId}?add=search`}>先到文献库搜索并引入论文 →</Link>
         </div>
         <form className="review-create-form" onSubmit={submit}>
           <label htmlFor="research-question">研究问题</label>
@@ -93,26 +99,28 @@ export default function ReviewsPage() {
             placeholder="例如：可靠的长时 AI Workflow 如何处理暂停、恢复与重复投递？"
             required
           />
-          {archived && <p className="readonly-note">该 Project 已归档。历史 Review 仍可查看，但不能创建新的 Workflow。</p>}
+          <small>任务会保留来源、Evidence Matrix、结构化大纲和最终文件，过程可恢复、可取消。</small>
+          {archived && <p className="readonly-note">该项目已归档。历史研究任务仍可查看，但不能创建新任务。</p>}
           {createMutation.isError && <p className="error-text">{errorMessage(createMutation.error)}。修改问题前可直接重试，系统会复用本次幂等意图。</p>}
           <button type="submit" disabled={archived || !researchQuestion.trim() || createMutation.isPending}>
-            {createMutation.isPending ? "正在创建…" : "开始文献综述"}<span aria-hidden="true">→</span>
+            {createMutation.isPending ? "正在创建…" : "开始文献研究"}<span aria-hidden="true">→</span>
           </button>
         </form>
       </section>
 
       <section className="section-block" aria-labelledby="review-list-title">
-        <div className="section-title-row"><div><p className="eyebrow">RUN LEDGER</p><h2 id="review-list-title">Review 历史</h2></div><span className="section-count">{String(reviewsQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
-        {reviewsQuery.isPending && <div className="skeleton-block">正在读取 Review…</div>}
+        <div className="section-title-row"><div><p className="project-library-kicker">研究记录</p><h2 id="review-list-title">研究任务</h2></div><span className="section-count">{String(reviewsQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
+        {reviewsQuery.isPending && <div className="skeleton-block">正在读取研究任务…</div>}
         {reviewsQuery.isError && <p className="notice error-text">{errorMessage(reviewsQuery.error)}</p>}
         {reviewsQuery.data?.length === 0 && (
-          <div className="empty-state"><span className="empty-glyph" aria-hidden="true">⇢</span><h3>还没有文献综述</h3><p>在上方写下一个可研究的问题，创建第一条固定 Workflow。</p></div>
+          <div className="empty-state"><span className="empty-glyph" aria-hidden="true">⇢</span><h3>还没有研究任务</h3><p>在上方写下研究问题，系统会从来源准备推进到 Evidence Matrix 和最终产物。</p></div>
         )}
         <div className="review-list">
           {reviewsQuery.data?.map((review) => (
             <Link key={review.run_id} className="review-list-row" to={`/projects/${projectId}/reviews/${review.run_id}`}>
               <span className="review-date">{new Date(review.created_at).toLocaleDateString()}</span>
               <span className="review-question"><strong>{review.research_question}</strong><small className="mono">{review.run_id.slice(0, 8)}</small></span>
+              <span className="review-matrix-state">{review.evidence_matrix ? <><strong>{review.evidence_matrix.row_count}</strong><small>条 Matrix 记录</small></> : <small>等待 Evidence Matrix</small>}</span>
               <span><span className={reviewBadge(review.status)}>{statusLabel(review.status)}</span></span>
               <span className="review-current-stage">{stageLabel(review.current_stage)}<span aria-hidden="true">→</span></span>
             </Link>

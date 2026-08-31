@@ -64,6 +64,18 @@ export interface UploadResult {
   paper_archived: boolean;
 }
 
+export interface ArxivSearchResult {
+  arxiv_id: string;
+  arxiv_version: string;
+  versioned_id: string;
+  title: string;
+  abstract: string;
+  authors: string[];
+  categories: string[];
+  published_at: string;
+  updated_at: string;
+}
+
 export interface ProjectPaperResult {
   project_id: string;
   paper_id: string;

@@ -8,10 +8,13 @@ from dataclasses import dataclass
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from literature_agent.application.ports.arxiv_gateway import ArxivGateway
 from literature_agent.application.ports.event_notifier import EventNotifier
 from literature_agent.application.ports.run_queue import RunQueue
 from literature_agent.application.ports.storage import Storage
+from literature_agent.infrastructure.arxiv import HttpxArxivGateway
 from literature_agent.infrastructure.config import Settings
+from literature_agent.infrastructure.fake_arxiv import FixtureArxivGateway
 from literature_agent.infrastructure.persistence.database import (
     create_engine,
     create_session_factory,
@@ -40,6 +43,7 @@ class AppState:
     storage: Storage
     queue: RunQueue
     event_notifier: EventNotifier
+    arxiv_gateway: ArxivGateway
     browser_ticket_secret: bytes
 
 
@@ -60,6 +64,12 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
     storage = LocalFileStorage(settings.storage_root)
     queue = ArqRunQueue(settings.redis_url)
     event_notifier = ValkeyEventNotifier(settings.redis_url)
+    if settings.arxiv_backend == "fake":
+        arxiv_gateway: ArxivGateway = FixtureArxivGateway()
+    elif settings.arxiv_backend == "httpx":
+        arxiv_gateway = HttpxArxivGateway(max_file_bytes=settings.max_upload_size_bytes)
+    else:
+        raise ValueError(f"不支持的 arxiv_backend: {settings.arxiv_backend}")
     state = AppState(
         settings=settings,
         engine=engine,
@@ -67,6 +77,7 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
         storage=storage,
         queue=queue,
         event_notifier=event_notifier,
+        arxiv_gateway=arxiv_gateway,
         browser_ticket_secret=secrets.token_bytes(32),
     )
     try:
@@ -75,6 +86,8 @@ async def app_lifespan(app: FastAPI) -> AsyncIterator[dict[str, AppState]]:
         app.state.app_state = state
         yield {"app_state": state}
     finally:
+        if isinstance(arxiv_gateway, HttpxArxivGateway):
+            await arxiv_gateway.aclose()
         await event_notifier.aclose()
         await queue.aclose()
         await engine.dispose()

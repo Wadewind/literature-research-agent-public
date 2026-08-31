@@ -7,9 +7,9 @@
 
 ```text
 Project
-  ├─ 文献库：收录、解析、索引与版本固定
+  ├─ 文献库：上传、个人库复用、在线检索引入、解析、索引与版本固定
   ├─ 文献问答：对 Project / 单篇 / 选中文献做独立 RAG 问答
-  ├─ 综述：运行固定、可暂停恢复的 Review Workflow
+  ├─ 文献研究：运行固定、可暂停恢复的 Review Workflow，Evidence Matrix 是主要分析结果，综述是末端产物
   └─ 研究助手：在 AgentSession 中持续研究
 ```
 
@@ -34,7 +34,7 @@ Project 工作区 canonical 路由为：
 ## 3. 共享应用壳与轻页头
 
 全站使用固定 `AppSidebar`；进入 `/projects/:projectId/*` 后，Sidebar 读取 owner-scoped Project 查询并增加
-当前项目分区。项目的“文献库 / 文献问答 / 综述 / 研究助手”四个入口只在这个分区呈现，Library 页面不再
+当前项目分区。项目的“文献库 / 文献问答 / 文献研究 / 研究助手”四个入口只在这个分区呈现，Library 页面不再
 复制模式 tabs 或三卡入口：
 
 - Sidebar 桌面默认宽 232px，展开时可在 216–288px 内小范围调整，用户也可折叠为 56px icon rail；
@@ -74,6 +74,16 @@ Conversation rail | 新建问答与范围选择 | Scope / Evidence Margin
 
 文献库不再读取或渲染 Conversation 历史，也不直接创建 Conversation。论文行的“询问此篇”和选中论文
 操作只导航到 `/chat` 并携带预选参数。
+
+文献来源发现属于 Project 文献库，而不是 Review 最终产物：
+
+- “添加文献”统一提供上传 PDF、从个人文献库收录、在线搜索论文三种入口；
+- 在线搜索只接受受限检索表达式，结果必须由服务端 arXiv Adapter 返回，客户端不能提交任意 PDF URL；
+- 用户选择结果后，服务端根据已校验的版本化 arXiv ID 构造官方 PDF 地址，复用既有 Ingestion Run、
+  内容哈希、幂等与解析/索引管线；
+- 搜索与下载前先验证 owner、Project 和归档状态，外部 HTTP 不发生在数据库事务内；
+- `/reviews` 路由保持兼容，但用户可见名称统一为“文献研究”。`review.v1` 仍保留自动检索导入行为，
+  以保证既有 Run 和固定 Workflow Profile 可重放；独立文献库检索不伪装成 Review Run。
 
 ## 5. 文献问答详情工作区
 

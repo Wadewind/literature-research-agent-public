@@ -72,7 +72,7 @@ describe("AppSidebar", () => {
     expect(html).toContain("事实性评估方法");
     expect(html).toContain("文献库");
     expect(html).toContain("文献问答");
-    expect(html).toContain("综述");
+    expect(html).toContain("文献研究");
     expect(html).toMatch(/aria-current="page"[^>]*>.*研究助手/s);
   });
 

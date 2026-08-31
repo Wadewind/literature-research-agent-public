@@ -2,10 +2,11 @@
 
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
 import type {
+  ArxivSearchResult,
   IndexStatus,
   PaperListItem,
   Project,
@@ -23,11 +24,18 @@ function formatSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-type IngestMode = "upload" | "reuse";
+type IngestMode = "upload" | "reuse" | "search";
+
+const ARXIV_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+});
 
 export default function LibraryPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [intent, setIntent] = useState<UploadIntent | null>(null);
@@ -36,8 +44,20 @@ export default function LibraryPage() {
   const [editing, setEditing] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
-  const [ingestOpen, setIngestOpen] = useState(false);
-  const [ingestMode, setIngestMode] = useState<IngestMode>("upload");
+  const [arxivQuery, setArxivQuery] = useState("");
+  const [lastArxivImport, setLastArxivImport] = useState<UploadResult | null>(null);
+  const ingestParameter = searchParams.get("add");
+  const ingestOpen = ingestParameter !== null;
+  const ingestMode: IngestMode =
+    ingestParameter === "reuse" || ingestParameter === "search"
+      ? ingestParameter
+      : "upload";
+  const showIngestMode = (mode: IngestMode | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (mode === null) next.delete("add");
+    else next.set("add", mode);
+    setSearchParams(next, { replace: true });
+  };
 
   const projectQuery = useQuery({
     queryKey: ["project", projectId],
@@ -62,8 +82,11 @@ export default function LibraryPage() {
 
   const paperCount = papersQuery.data?.length;
   useEffect(() => {
-    if (paperCount === 0) setIngestOpen(true);
-  }, [paperCount]);
+    if (paperCount !== 0 || searchParams.has("add")) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("add", "upload");
+    setSearchParams(next, { replace: true });
+  }, [paperCount, searchParams, setSearchParams]);
 
   const refreshLibraries = () => {
     void queryClient.invalidateQueries({ queryKey: ["papers", projectId] });
@@ -102,6 +125,29 @@ export default function LibraryPage() {
         }),
       }),
     onSuccess: refreshLibraries,
+  });
+  const arxivSearchMutation = useMutation({
+    mutationFn: (query: string) => {
+      const params = new URLSearchParams({ q: query, max_results: "10" });
+      return apiFetch<ArxivSearchResult[]>(
+        `/api/v1/projects/${projectId}/arxiv/search?${params.toString()}`,
+      );
+    },
+  });
+  const arxivImportMutation = useMutation({
+    mutationFn: ({ paper, key }: { paper: ArxivSearchResult; key: string }) =>
+      apiFetch<UploadResult>(`/api/v1/projects/${projectId}/arxiv/import`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify({ versioned_arxiv_id: paper.versioned_id }),
+      }),
+    onSuccess: (result) => {
+      setLastArxivImport(result);
+      refreshLibraries();
+    },
   });
   const removeMutation = useMutation({
     mutationFn: (paperId: string) =>
@@ -158,6 +204,11 @@ export default function LibraryPage() {
     event.preventDefault();
     if (projectName.trim()) updateMutation.mutate();
   };
+  const onArxivSearch = (event: FormEvent) => {
+    event.preventDefault();
+    const query = arxivQuery.trim();
+    if (query) arxivSearchMutation.mutate(query);
+  };
 
   const project = projectQuery.data;
   const archived = Boolean(project?.archived_at);
@@ -213,7 +264,7 @@ export default function LibraryPage() {
       />
 
       {archived && (
-        <p className="readonly-note">该 Project 当前只读：历史问答、综述、研究会话与引用仍可查看，不能修改文献或创建新的研究执行。</p>
+        <p className="readonly-note">该项目当前只读：历史问答、文献研究、研究会话与引用仍可查看，不能修改文献或创建新的研究执行。</p>
       )}
 
       {editing && !archived && (
@@ -252,7 +303,7 @@ export default function LibraryPage() {
               aria-expanded={ingestOpen}
               aria-controls="project-ingest-panel"
               disabled={archived}
-              onClick={() => setIngestOpen((current) => !current)}
+              onClick={() => showIngestMode(ingestOpen ? null : "upload")}
             >
               {ingestOpen ? "收起添加" : "添加文献"}
               <span aria-hidden="true">{ingestOpen ? "−" : "+"}</span>
@@ -267,7 +318,7 @@ export default function LibraryPage() {
                 type="button"
                 aria-pressed={ingestMode === "upload"}
                 aria-controls="project-upload-panel"
-                onClick={() => setIngestMode("upload")}
+                onClick={() => showIngestMode("upload")}
               >
                 上传 PDF
               </button>
@@ -275,9 +326,17 @@ export default function LibraryPage() {
                 type="button"
                 aria-pressed={ingestMode === "reuse"}
                 aria-controls="project-reuse-panel"
-                onClick={() => setIngestMode("reuse")}
+                onClick={() => showIngestMode("reuse")}
               >
                 从个人文献库收录
+              </button>
+              <button
+                type="button"
+                aria-pressed={ingestMode === "search"}
+                aria-controls="project-search-panel"
+                onClick={() => showIngestMode("search")}
+              >
+                在线搜索论文
               </button>
             </div>
             {ingestMode === "upload" ? (
@@ -291,7 +350,7 @@ export default function LibraryPage() {
                 {uploadMutation.isError && <p className="error-text">{errorMessage(uploadMutation.error)}</p>}
                 {lastUpload && <UploadNotice result={lastUpload} projectId={projectId} />}
               </div>
-            ) : (
+            ) : ingestMode === "reuse" ? (
               <div id="project-reuse-panel" className="project-ingest-content">
                 <div className="project-ingest-copy">
                   <h3>收录已有文献</h3>
@@ -302,6 +361,74 @@ export default function LibraryPage() {
                 <div className="reuse-list">{available.map((paper) => <div key={paper.paper_id}><span><strong><PaperTitle paper={paper} /></strong><small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "处理中"} · {formatSize(paper.version.size_bytes)}</small></span><button type="button" className="button-quiet" disabled={archived || addMutation.isPending} onClick={() => addMutation.mutate(paper)}>+收录</button></div>)}</div>
                 {addMutation.isError && <p className="error-text">{errorMessage(addMutation.error)}</p>}
                 <Link className="text-link" to="/library">查看完整个人文献库 →</Link>
+              </div>
+            ) : (
+              <div id="project-search-panel" className="project-arxiv-panel">
+                <div className="project-ingest-copy">
+                  <h3>搜索并引入论文</h3>
+                  <p>当前仅检索 arXiv。选择论文后，系统会下载官方 PDF，并进入同一套解析与索引流程。</p>
+                </div>
+                <form className="project-arxiv-search-form" onSubmit={onArxivSearch}>
+                  <label htmlFor="project-arxiv-query">检索词</label>
+                  <div>
+                    <input
+                      id="project-arxiv-query"
+                      name="arxiv-query"
+                      type="search"
+                      autoComplete="off"
+                      value={arxivQuery}
+                      onChange={(event) => setArxivQuery(event.target.value)}
+                      placeholder="例如：reinforcement learning path planning…"
+                      disabled={archived || arxivSearchMutation.isPending}
+                    />
+                    <button
+                      type="submit"
+                      disabled={archived || !arxivQuery.trim() || arxivSearchMutation.isPending}
+                    >
+                      {arxivSearchMutation.isPending ? "正在搜索…" : "搜索 arXiv"}
+                    </button>
+                  </div>
+                </form>
+                {arxivSearchMutation.isError ? (
+                  <p className="error-text">{errorMessage(arxivSearchMutation.error)}</p>
+                ) : null}
+                {arxivSearchMutation.data?.length === 0 ? (
+                  <p className="reuse-empty">没有找到匹配论文，请尝试更具体或更简短的检索词。</p>
+                ) : null}
+                {arxivSearchMutation.data && arxivSearchMutation.data.length > 0 ? (
+                  <ol className="project-arxiv-results">
+                    {arxivSearchMutation.data.map((paper, index) => {
+                      const importing =
+                        arxivImportMutation.isPending &&
+                        arxivImportMutation.variables?.paper.versioned_id === paper.versioned_id;
+                      return (
+                        <li key={paper.versioned_id}>
+                          <span className="source-rank">{String(index + 1).padStart(2, "0")}</span>
+                          <div>
+                            <h4>{paper.title}</h4>
+                            <p>{paper.authors.slice(0, 3).join("、")}{paper.authors.length > 3 ? " 等" : ""}</p>
+                            <small>
+                              arXiv {paper.versioned_id} · {ARXIV_DATE_FORMATTER.format(new Date(paper.published_at))} · {paper.categories.slice(0, 3).join(" / ")}
+                            </small>
+                            <details><summary>查看摘要</summary><p>{paper.abstract}</p></details>
+                          </div>
+                          <button
+                            type="button"
+                            className="button-quiet"
+                            disabled={archived || arxivImportMutation.isPending}
+                            onClick={() => arxivImportMutation.mutate({ paper, key: crypto.randomUUID() })}
+                          >
+                            {importing ? "正在引入…" : "引入项目"}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                ) : null}
+                {arxivImportMutation.isError ? (
+                  <p className="error-text">{errorMessage(arxivImportMutation.error)}</p>
+                ) : null}
+                {lastArxivImport ? <UploadNotice result={lastArxivImport} projectId={projectId} /> : null}
               </div>
             )}
           </section>
