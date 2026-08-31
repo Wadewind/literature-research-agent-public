@@ -160,7 +160,7 @@ async def test_pending_source_pauses_outside_langgraph(monkeypatch) -> None:
     ]
 
 
-async def test_review_v2_searches_candidates_then_pauses_before_import() -> None:
+async def test_review_v2_retries_source_pause_before_import() -> None:
     runs = FakeRunRepository()
     reviews = FakeReviewRepository()
     run = replace(
@@ -245,8 +245,11 @@ async def test_review_v2_searches_candidates_then_pauses_before_import() -> None
     )
 
     await executor.execute(run, "corr-v2")
+    # 检索事实已提交、暂停事务失败后的 Worker 重试仍必须重新进入 HITL，
+    # 不能因为阶段已经推进到 import_arxiv_papers 就导入全部候选。
+    await executor.execute(run, "corr-v2-retry")
 
-    assert selection.calls == 1
+    assert selection.calls == 2
     assert arxiv.import_calls == 0
 
 

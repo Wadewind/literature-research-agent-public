@@ -79,8 +79,8 @@ class ReviewRepository(Protocol):
         """条件式推进最终 Artifact 指针和 Review Stage。"""
         ...
 
-    async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
-        """有界列出等待论文依赖的 Review Run ID，供内部对账使用。"""
+    async def list_dependency_reconcile_run_ids(self, limit: int) -> list[str]:
+        """有界列出等待依赖或需要收敛来源状态的 Review Run ID。"""
         ...
 
     async def add_step(self, step: RunStep) -> RunStep:

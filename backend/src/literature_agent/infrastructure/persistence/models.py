@@ -1930,7 +1930,7 @@ class ReviewOutputORM(Base):
         CheckConstraint("version >= 1", name="ck_review_outputs_version_positive"),
         CheckConstraint(
             "output_type IN ('search_strategy','evidence_matrix','outline','section',"
-            "'consistency_report','final_review')",
+            "'consistency_report','final_review','source_candidates')",
             name="ck_review_outputs_type",
         ),
         UniqueConstraint(

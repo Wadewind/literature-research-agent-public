@@ -28,7 +28,7 @@ from literature_agent.domain.review import (
     create_review_source,
     create_run_step,
 )
-from literature_agent.domain.run import RunType, create_run
+from literature_agent.domain.run import RunStatus, RunType, create_run
 from literature_agent.infrastructure.persistence.chunk_set_repository import (
     SqlalchemyChunkSetRepository,
 )
@@ -314,6 +314,71 @@ async def test_latest_sections_are_filtered_versioned_and_scoped(session, projec
         ("section:results", 1),
     ]
     assert await repo.list_latest_section_outputs_scoped(run.run_id, project, "user-2") == []
+
+
+async def test_source_candidates_output_satisfies_database_constraint(
+    session, project: str
+) -> None:
+    """review.v2 的候选快照必须能写入 PostgreSQL，不能在 HITL 前触发重试。"""
+    run, _ = await _seed_review(session, project)
+    repo = SqlalchemyReviewRepository(session)
+    output = create_review_output(
+        review_run_id=run.run_id,
+        output_type=ReviewOutputType.SOURCE_CANDIDATES,
+        output_key="source-candidates",
+        version=1,
+        schema_version="source-candidates.v1",
+        payload={"candidates": []},
+        idempotency_key=f"{run.run_id}:source-candidates:v1",
+    )
+
+    await repo.add_output(output)
+    await session.commit()
+
+    assert output in await repo.list_outputs_scoped(run.run_id, project, "user-1")
+
+
+async def test_cancelled_review_with_unsettled_source_is_reconcile_candidate(
+    session, project: str
+) -> None:
+    """取消后的未收敛来源仍必须进入后台对账集合。"""
+    run, _ = await _seed_review(session, project)
+    repo = SqlalchemyReviewRepository(session)
+    await repo.add_source(
+        create_review_source(
+            review_run_id=run.run_id,
+            arxiv_id="2608.00001",
+            arxiv_version="v1",
+            rank=1,
+            metadata_snapshot={"title": "候选论文"},
+        )
+    )
+    assert await SqlalchemyRunRepository(session).update_status(
+        run.run_id,
+        RunStatus.QUEUED,
+        RunStatus.CANCELLED,
+        run.event_sequence + 1,
+    )
+    await session.commit()
+
+    assert run.run_id in await repo.list_dependency_reconcile_run_ids(20)
+
+
+async def test_waiting_review_without_sources_remains_reconcile_candidate(
+    session, project: str
+) -> None:
+    """等待态的零来源异常仍须进入对账，以便稳定失败而不是永久悬挂。"""
+    run, _ = await _seed_review(session, project)
+    assert await SqlalchemyRunRepository(session).update_status(
+        run.run_id,
+        RunStatus.QUEUED,
+        RunStatus.WAITING_DEPENDENCY,
+        run.event_sequence + 1,
+    )
+    await session.commit()
+
+    repo = SqlalchemyReviewRepository(session)
+    assert run.run_id in await repo.list_dependency_reconcile_run_ids(20)
 
 
 async def test_database_constraints_prevent_duplicate_effects(session, project: str) -> None:

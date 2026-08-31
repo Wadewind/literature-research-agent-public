@@ -27,7 +27,12 @@ from literature_agent.application.review_source_selection_service import (
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.arxiv import ArxivSearchQuery
 from literature_agent.domain.exceptions import NoReviewablePapersError, RunNotFoundError
-from literature_agent.domain.review import ReviewSourceStatus, ReviewStage
+from literature_agent.domain.review import (
+    HumanInputAction,
+    HumanInputRequestKind,
+    ReviewSourceStatus,
+    ReviewStage,
+)
 from literature_agent.domain.run import Run, RunStatus, RunType
 from literature_agent.infrastructure.workflow.postgres_checkpoint import PostgresCheckpointStore
 from literature_agent.metrics import metrics, observe_review_stage
@@ -129,19 +134,28 @@ class ReviewExecutor[TSession: Session]:
                         rank_offset=len(sources),
                     ),
                 )
-                sources = await self._sources(run.run_id, project_id, owner_id)
-                if any(item.status is ReviewSourceStatus.DISCOVERED for item in sources):
-                    await self._source_selection.pause(
-                        run_id=run.run_id,
-                        project_id=project_id,
-                        owner_id=owner_id,
-                        correlation_id=correlation_id,
-                    )
-                    return
-                if not any(item.status is ReviewSourceStatus.READY for item in sources):
-                    raise NoReviewablePapersError
             elif not auto_search and snapshot.current_stage is ReviewStage.SEARCH_ARXIV:
                 await self._advance_to_import(run.run_id, project_id, owner_id)
+            sources = await self._sources(run.run_id, project_id, owner_id)
+            if (
+                auto_search
+                and any(item.status is ReviewSourceStatus.DISCOVERED for item in sources)
+                and not await self._source_selection_resolved(
+                    run.run_id, project_id, owner_id
+                )
+            ):
+                await self._source_selection.pause(
+                    run_id=run.run_id,
+                    project_id=project_id,
+                    owner_id=owner_id,
+                    correlation_id=correlation_id,
+                )
+                return
+            if not any(
+                item.status in {ReviewSourceStatus.READY, ReviewSourceStatus.DISCOVERED}
+                for item in sources
+            ):
+                raise NoReviewablePapersError
         else:
             raise RunNotFoundError(run.run_id)
         await observe_review_stage(
@@ -153,6 +167,8 @@ class ReviewExecutor[TSession: Session]:
                 correlation_id=correlation_id,
             ),
         )
+        if not await self._is_running(run.run_id, owner_id):
+            return
         sources = await self._sources(run.run_id, project_id, owner_id)
         if any(
             item.status in {ReviewSourceStatus.DISCOVERED, ReviewSourceStatus.IMPORTING}
@@ -238,6 +254,27 @@ class ReviewExecutor[TSession: Session]:
         async with self._session_factory() as session:
             return await self._review_repo_factory(session).get_latest_resolved_human_input_scoped(
                 run_id, project_id, owner_id
+            )
+
+    async def _source_selection_resolved(
+        self, run_id: str, project_id: str, owner_id: str
+    ) -> bool:
+        resolved = await self._latest_input(run_id, project_id, owner_id)
+        if resolved is None:
+            return False
+        request, human_input = resolved
+        return (
+            request.request_kind is HumanInputRequestKind.SOURCE_SELECTION
+            and human_input.action is HumanInputAction.SELECT_SOURCES
+        )
+
+    async def _is_running(self, run_id: str, owner_id: str) -> bool:
+        async with self._session_factory() as session:
+            run = await self._run_repo_factory(session).get_by_id(run_id)
+            return (
+                run is not None
+                and run.owner_id == owner_id
+                and run.status is RunStatus.RUNNING
             )
 
     async def _advance_to_import(self, run_id, project_id, owner_id) -> None:

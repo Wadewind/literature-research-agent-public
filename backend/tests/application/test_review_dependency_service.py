@@ -208,8 +208,10 @@ async def test_pause_enters_waiting_without_resetting_outbox() -> None:
 async def test_ready_chunk_set_updates_source_dependencies_and_resumes() -> None:
     """PaperVersion 出现 ready ChunkSet 后，所有事实与 schedule_again 同事务推进。"""
     h = Harness()
-    run_id = await h.seed_review()
+    run_id = await h.seed_review(source_count=2)
     source, _paper, version, ingestion = await h.bind_importing_source(run_id)
+    sources = await h.reviews.list_sources_scoped(run_id, "project-1", "owner-1")
+    await h.reviews.save_source(sources[1].reject())
     await h.runs.update_status(ingestion.run_id, RunStatus.RUNNING, RunStatus.SUCCEEDED, 2)
     from literature_agent.domain.parse_profile import ParseProfile
     from literature_agent.domain.parse_revision import create_parse_revision
@@ -262,6 +264,47 @@ async def test_ready_chunk_set_updates_source_dependencies_and_resumes() -> None
         h.reviews, later, ready_count=1, failed_count=0
     )
     assert h.reviews.review_runs[run_id].current_stage is ReviewStage.PROPOSE_OUTLINE
+
+
+async def test_cancel_requested_parent_syncs_ready_source_without_resume() -> None:
+    """取消不级联删除子 Run，但应同步其 ready 事实并终结父 Run。"""
+    h = Harness()
+    run_id = await h.seed_review(source_count=2)
+    source, _paper, version, ingestion = await h.bind_importing_source(run_id)
+    await h.runs.update_status(ingestion.run_id, RunStatus.RUNNING, RunStatus.SUCCEEDED, 2)
+    from literature_agent.domain.parse_profile import ParseProfile
+    from literature_agent.domain.parse_revision import create_parse_revision
+
+    profile = ParseProfile("fake", "1", {})
+    revision = create_parse_revision(
+        version.version_id,
+        profile.parser_name,
+        profile.parser_version,
+        profile.profile_hash,
+        profile.config,
+    ).mark_succeeded(datetime.now(UTC))
+    await h.revisions.add(revision)
+    await h.versions.set_current_parse_revision(version.version_id, revision.revision_id)
+    chunk_set = create_chunk_set(revision.revision_id, "profile-hash")
+    await h.chunk_sets.add(chunk_set.mark_ready(datetime.now(UTC)))
+    await h.runs.update_status(run_id, RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED, 3)
+
+    assert await h.reconciler().reconcile_waiting() == 1
+
+    parent = await h.runs.get_by_id(run_id)
+    assert parent is not None and parent.status is RunStatus.CANCELLED
+    refreshed = await h.reviews.get_source_scoped_for_update(
+        source.source_id, run_id, "project-1", "owner-1"
+    )
+    assert refreshed is not None and refreshed.status is ReviewSourceStatus.READY
+    sources = await h.reviews.list_sources_scoped(run_id, "project-1", "owner-1")
+    assert sources[1].status is ReviewSourceStatus.REJECTED
+    assert [event.event_type for event in h.events._events] == [
+        "review_source_ready",
+        "run_cancelled",
+    ]
+    outbox = await h.outbox.get_by_run_id(run_id)
+    assert outbox is not None and outbox.status is OutboxStatus.DISPATCHED
 
 
 async def test_partial_failure_waits_for_all_sources_then_resumes() -> None:

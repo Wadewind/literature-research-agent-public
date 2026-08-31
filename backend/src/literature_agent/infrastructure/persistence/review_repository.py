@@ -2,7 +2,7 @@
 
 from typing import cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -336,15 +336,35 @@ class SqlalchemyReviewRepository(ReviewRepository):
         )
         return result.rowcount == 1
 
-    async def list_waiting_dependency_run_ids(self, limit: int) -> list[str]:
-        """按创建顺序有界列出等待依赖的 Review Run。"""
+    async def list_dependency_reconcile_run_ids(self, limit: int) -> list[str]:
+        """列出等待依赖或取消后仍有未收敛来源的 Review Run。"""
         result = await self._session.execute(
             select(ReviewRunORM.run_id)
             .join(RunORM, RunORM.run_id == ReviewRunORM.run_id)
+            .outerjoin(
+                ReviewSourceORM, ReviewSourceORM.review_run_id == ReviewRunORM.run_id
+            )
             .where(
                 RunORM.run_type == RunType.REVIEW.value,
-                RunORM.status == RunStatus.WAITING_DEPENDENCY.value,
+                or_(
+                    RunORM.status == RunStatus.WAITING_DEPENDENCY.value,
+                    and_(
+                        RunORM.status.in_(
+                            [
+                                RunStatus.CANCEL_REQUESTED.value,
+                                RunStatus.CANCELLED.value,
+                            ]
+                        ),
+                        ReviewSourceORM.status.in_(
+                            [
+                                ReviewSourceStatus.DISCOVERED.value,
+                                ReviewSourceStatus.IMPORTING.value,
+                            ]
+                        ),
+                    ),
+                ),
             )
+            .group_by(ReviewRunORM.run_id, RunORM.run_id, RunORM.created_at)
             .order_by(RunORM.created_at, RunORM.run_id)
             .limit(limit)
         )

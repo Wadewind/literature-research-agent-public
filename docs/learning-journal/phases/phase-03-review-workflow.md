@@ -35,6 +35,12 @@ Review Profile，必须另行版本化契约，不能静默改变 `review.v1`。
 - 摘要来自 arXiv 元数据；页数优先从作者提交的 arXiv comment（如 `18 pages`）提取。comment 未声明时
   显示“页数待下载后确认”，筛选前不为补齐页数而下载 PDF，也不得因此自动导入或丢弃候选；
 - 来源确认后复用既有解析、索引、Evidence Matrix、大纲 HITL、章节写作、引用校验与导出链路。
+- 候选检索事实与来源筛选暂停分属不同短事务；暂停事务失败并重试时，执行器必须再次验证来源筛选的
+  已解决事实，不能仅凭 `current_stage=import_arxiv_papers` 绕过 HITL；`source_candidates` 必须属于数据库
+  允许的 ReviewOutput 类型。
+- 导入阶段采用协作式取消：每篇论文及下载、缓存、注册边界都重新读取父 Run 状态；确认取消后不得再
+  启动新的下载或子 Run。已经创建且可被项目复用的 Ingestion/Indexing Run 不盲目级联取消，其完成事实
+  仍可用于同步 ReviewSource 的最终状态。
 
 ```text
 研究问题 + 0–3 个 Project PaperVersion + 候选检索策略

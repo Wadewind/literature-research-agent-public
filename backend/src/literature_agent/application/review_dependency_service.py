@@ -198,7 +198,7 @@ class ReviewDependencyReconciler[TSession: Session]:
         async with self._session_factory() as session:
             candidates = await self._review_repo_factory(
                 session
-            ).list_waiting_dependency_run_ids(self._batch_size)
+            ).list_dependency_reconcile_run_ids(self._batch_size)
         completed = 0
         for run_id in candidates:
             try:
@@ -221,11 +221,20 @@ class ReviewDependencyReconciler[TSession: Session]:
                 run = await run_repo.get_by_id_for_update(run_id, visible.owner_id)
                 if (
                     run is None
-                    or run.status is not RunStatus.WAITING_DEPENDENCY
+                    or run.status
+                    not in {
+                        RunStatus.WAITING_DEPENDENCY,
+                        RunStatus.CANCEL_REQUESTED,
+                        RunStatus.CANCELLED,
+                    }
                     or run.run_type != RunType.REVIEW.value
                 ):
                     await session.rollback()
                     return False
+                cancelling = run.status in {
+                    RunStatus.CANCEL_REQUESTED,
+                    RunStatus.CANCELLED,
+                }
                 review_repo = self._review_repo_factory(session)
                 review = await review_repo.get_review_run_scoped(
                     run.run_id, run.project_id, run.owner_id
@@ -243,7 +252,11 @@ class ReviewDependencyReconciler[TSession: Session]:
                     if source.status in {
                         ReviewSourceStatus.READY,
                         ReviewSourceStatus.FAILED,
+                        ReviewSourceStatus.REJECTED,
                     }:
+                        continue
+                    if cancelling and source.status is ReviewSourceStatus.DISCOVERED:
+                        await review_repo.save_source(source.reject())
                         continue
                     ready_chunk_set, failure_code = await self._evaluate_source(
                         session, current, source, dependencies
@@ -300,11 +313,39 @@ class ReviewDependencyReconciler[TSession: Session]:
                 await self._advance_run_dependencies(
                     session, review_repo, dependencies, current
                 )
+                if cancelling:
+                    if current.status is RunStatus.CANCEL_REQUESTED:
+                        current.transition_to(RunStatus.CANCELLED)
+                        if not await run_repo.update_status(
+                            run.run_id,
+                            RunStatus.CANCEL_REQUESTED,
+                            RunStatus.CANCELLED,
+                            current.event_sequence + 1,
+                        ):
+                            raise RunConcurrentModificationError(run.run_id)
+                        await self._event_repo_factory(session).add(
+                            create_event(
+                                run_id=run.run_id,
+                                sequence=current.event_sequence,
+                                event_type="run_cancelled",
+                                actor_type="system",
+                                correlation_id=f"dependency-reconcile:{run.run_id}",
+                                payload={},
+                            )
+                        )
+                    await session.commit()
+                    await notify_run_event(self._event_notifier, run_id)
+                    return True
                 sources = await review_repo.list_sources_scoped(
                     run.run_id, run.project_id, run.owner_id
                 )
                 terminal = all(
-                    source.status in {ReviewSourceStatus.READY, ReviewSourceStatus.FAILED}
+                    source.status
+                    in {
+                        ReviewSourceStatus.READY,
+                        ReviewSourceStatus.FAILED,
+                        ReviewSourceStatus.REJECTED,
+                    }
                     for source in sources
                 )
                 if not terminal:
@@ -317,10 +358,13 @@ class ReviewDependencyReconciler[TSession: Session]:
                 ready_count = sum(
                     source.status is ReviewSourceStatus.READY for source in sources
                 )
+                failed_count = sum(
+                    source.status is ReviewSourceStatus.FAILED for source in sources
+                )
                 minimum = self._minimum_ready_papers(review)
                 if ready_count >= minimum:
                     await self._complete_wait_step_and_advance_stage(
-                        review_repo, review, ready_count, len(sources) - ready_count
+                        review_repo, review, ready_count, failed_count
                     )
                     await self._waiting_resume_service.resume_in_session(
                         session=session,
@@ -331,7 +375,7 @@ class ReviewDependencyReconciler[TSession: Session]:
                         correlation_id=f"dependency-reconcile:{run.run_id}",
                         payload={
                             "ready_source_count": ready_count,
-                            "failed_source_count": len(sources) - ready_count,
+                            "failed_source_count": failed_count,
                         },
                     )
                 else:
@@ -601,8 +645,8 @@ class ReviewDependencyReconciler[TSession: Session]:
     ) -> Run:
         if not await self._run_repo_factory(session).update_status(
             run.run_id,
-            RunStatus.WAITING_DEPENDENCY,
-            RunStatus.WAITING_DEPENDENCY,
+            run.status,
+            run.status,
             run.event_sequence + 1,
         ):
             raise RunConcurrentModificationError(run.run_id)

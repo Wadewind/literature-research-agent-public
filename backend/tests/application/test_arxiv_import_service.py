@@ -27,7 +27,7 @@ from literature_agent.domain.review import (
     ReviewStepKey,
     create_review_run,
 )
-from literature_agent.domain.run import RunType, create_run
+from literature_agent.domain.run import RunStatus, RunType, create_run
 from literature_agent.infrastructure.fake_arxiv import FixtureArxivGateway
 from tests.fakes.fake_chunk_set_repository import FakeChunkSetRepository
 from tests.fakes.fake_event_repository import FakeEventRepository
@@ -378,6 +378,48 @@ async def test_temporary_download_failure_remains_retryable() -> None:
             correlation_id="corr-1",
         )
     assert ctx["reviews"].sources[0].status is ReviewSourceStatus.DISCOVERED
+
+
+@pytest.mark.asyncio
+async def test_cancel_requested_stops_before_next_download_and_confirms_cancel() -> None:
+    first, second = _paper("2401.00001", rank=1), _paper("2401.00002", rank=2)
+    ctx = await _fixture([first, second])
+    ctx["gateway"].downloads[first.pdf_url] = DownloadedPdf.from_content(
+        b"%PDF-first", "application/pdf"
+    )
+    ctx["gateway"].downloads[second.pdf_url] = DownloadedPdf.from_content(
+        b"%PDF-second", "application/pdf"
+    )
+    await ctx["service"].search_sources(
+        actor=ActorContext(owner_id="owner-1"),
+        project_id=ctx["project"].project_id,
+        review_run_id=ctx["run"].run_id,
+        query=ArxivSearchQuery("all:agents", max_results=2),
+        correlation_id="corr-1",
+    )
+    running = ctx["run"].transition_to(RunStatus.RUNNING)
+    await ctx["runs"].add(running)
+    assert await ctx["runs"].update_status(
+        running.run_id,
+        RunStatus.RUNNING,
+        RunStatus.CANCEL_REQUESTED,
+        running.event_sequence + 1,
+    )
+
+    summary = await ctx["service"].import_sources(
+        actor=ActorContext(owner_id="owner-1"),
+        project_id=ctx["project"].project_id,
+        review_run_id=ctx["run"].run_id,
+        correlation_id="corr-cancel",
+    )
+
+    assert summary.imported == 0
+    assert ctx["gateway"].download_calls == []
+    cancelled = await ctx["runs"].get_by_id(ctx["run"].run_id)
+    assert cancelled is not None and cancelled.status is RunStatus.CANCELLED
+    assert [
+        event.event_type for event in await ctx["events"].list_by_run(ctx["run"].run_id)
+    ][-1] == "run_cancelled"
 
 
 @pytest.mark.asyncio

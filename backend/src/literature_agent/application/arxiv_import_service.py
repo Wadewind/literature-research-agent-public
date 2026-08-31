@@ -234,8 +234,19 @@ class ArxivProjectImportService[TSession: Session]:
                 consumed_version_ids.add(version.version_id)
                 downloaded_bytes += version.size_bytes
 
+        if await self._confirm_cancel_if_requested(
+            actor, project_id, review_run_id, correlation_id
+        ):
+            return ArxivImportSummary(len(sources), 0, 0, 0, downloaded_bytes)
+
         imported = ready = failed = 0
         for source in sources:
+            if await self._confirm_cancel_if_requested(
+                actor, project_id, review_run_id, correlation_id
+            ):
+                return ArxivImportSummary(
+                    len(sources), imported, ready, failed, downloaded_bytes
+                )
             if source.status is ReviewSourceStatus.REJECTED:
                 continue
             if source.status in {ReviewSourceStatus.IMPORTING, ReviewSourceStatus.READY}:
@@ -254,12 +265,24 @@ class ArxivProjectImportService[TSession: Session]:
                     - downloaded_bytes,
                 )
                 downloaded_bytes += len(downloaded.content)
+                if await self._confirm_cancel_if_requested(
+                    actor, project_id, review_run_id, correlation_id
+                ):
+                    return ArxivImportSummary(
+                        len(sources), imported, ready, failed, downloaded_bytes
+                    )
                 # owner + sha256 是唯一进入 key 的可变部分；不使用 arXiv/title。
                 storage_key = _cache_storage_key(actor.owner_id, downloaded.content_hash)
                 # 写入发生在数据库事务之外。并发/事务失败留下可安全复用和对账的缓存，
                 # 不做可能删除其他执行者对象的补偿删除。
                 await self._storage.write(storage_key, downloaded.content)
-                was_ready, created_run_id = await self._register_download(
+                if await self._confirm_cancel_if_requested(
+                    actor, project_id, review_run_id, correlation_id
+                ):
+                    return ArxivImportSummary(
+                        len(sources), imported, ready, failed, downloaded_bytes
+                    )
+                registered = await self._register_download(
                     actor=actor,
                     project_id=project_id,
                     review_run_id=review_run_id,
@@ -268,12 +291,23 @@ class ArxivProjectImportService[TSession: Session]:
                     storage_key=storage_key,
                     correlation_id=correlation_id,
                 )
+                if registered is None:
+                    return ArxivImportSummary(
+                        len(sources), imported, ready, failed, downloaded_bytes
+                    )
+                was_ready, created_run_id = registered
                 imported += 1
                 ready += int(was_ready)
                 await notify_run_event(self._event_notifier, review_run_id)
                 if created_run_id is not None:
                     await notify_run_event(self._event_notifier, created_run_id)
             except ArxivError as exc:
+                if await self._confirm_cancel_if_requested(
+                    actor, project_id, review_run_id, correlation_id
+                ):
+                    return ArxivImportSummary(
+                        len(sources), imported, ready, failed, downloaded_bytes
+                    )
                 if exc.temporary:
                     # Adapter 已完成受限重试；仍为临时错误时交给 Run 重试，
                     # 不把可恢复故障固化成单篇永久失败。
@@ -294,6 +328,10 @@ class ArxivProjectImportService[TSession: Session]:
             failed=failed,
             downloaded_bytes=downloaded_bytes,
         )
+        if await self._confirm_cancel_if_requested(
+            actor, project_id, review_run_id, correlation_id
+        ):
+            return summary
         if await self._complete_import(
             actor=actor,
             project_id=project_id,
@@ -404,11 +442,20 @@ class ArxivProjectImportService[TSession: Session]:
         downloaded: DownloadedPdf,
         storage_key: str,
         correlation_id: str,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None] | None:
         async with self._session_factory() as session:
             parent_run, review_repo = await self._lock_review_scope(
                 session, actor, project_id, review_run_id
             )
+            if parent_run.status is RunStatus.CANCEL_REQUESTED:
+                await self._confirm_cancellation_in_session(
+                    session, parent_run, review_repo, correlation_id
+                )
+                await session.commit()
+                await notify_run_event(self._event_notifier, review_run_id)
+                return None
+            if parent_run.status is RunStatus.CANCELLED:
+                return None
             source = await review_repo.get_source_scoped_for_update(
                 source_id, review_run_id, project_id, actor.owner_id
             )
@@ -590,6 +637,63 @@ class ArxivProjectImportService[TSession: Session]:
             )
             await session.commit()
             return ready_chunk_set is not None, created_run_id
+
+    async def _confirm_cancel_if_requested(
+        self,
+        actor: ActorContext,
+        project_id: str,
+        review_run_id: str,
+        correlation_id: str,
+    ) -> bool:
+        changed = False
+        async with self._session_factory() as session:
+            parent_run, review_repo = await self._lock_review_scope(
+                session, actor, project_id, review_run_id
+            )
+            if parent_run.status is RunStatus.CANCEL_REQUESTED:
+                await self._confirm_cancellation_in_session(
+                    session, parent_run, review_repo, correlation_id
+                )
+                await session.commit()
+                changed = True
+            elif parent_run.status is RunStatus.CANCELLED:
+                return True
+        if changed:
+            await notify_run_event(self._event_notifier, review_run_id)
+        return changed
+
+    async def _confirm_cancellation_in_session(
+        self,
+        session: TSession,
+        parent_run: Run,
+        review_repo: ReviewRepository,
+        correlation_id: str,
+    ) -> None:
+        """停止尚未开始的候选，并把协作式取消原子确认为终态。"""
+        sources = await review_repo.list_sources_scoped(
+            parent_run.run_id, parent_run.project_id, parent_run.owner_id
+        )
+        for source in sources:
+            if source.status is ReviewSourceStatus.DISCOVERED:
+                await review_repo.save_source(source.reject())
+        parent_run.transition_to(RunStatus.CANCELLED)
+        if not await self._run_repo_factory(session).update_status(
+            parent_run.run_id,
+            RunStatus.CANCEL_REQUESTED,
+            RunStatus.CANCELLED,
+            parent_run.event_sequence + 1,
+        ):
+            raise RunConcurrentModificationError(parent_run.run_id)
+        await self._event_repo_factory(session).add(
+            create_event(
+                run_id=parent_run.run_id,
+                sequence=parent_run.event_sequence,
+                event_type="run_cancelled",
+                actor_type="system",
+                correlation_id=correlation_id,
+                payload={},
+            )
+        )
 
     @staticmethod
     async def _completed_search(
