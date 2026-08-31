@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" agent="agent-service-public" version="24.7.17">
+  <diagram id="system-architecture" name="系统架构">
+    <mxGraphModel dx="1440" dy="920" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1440" pageHeight="920" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="可靠文献研究与 Research Agent 系统" style="text;html=1;strokeColor=none;fillColor=none;fontSize=28;fontStyle=1;fontColor=#172033;" vertex="1" parent="1">
+          <mxGeometry x="350" y="24" width="740" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="PostgreSQL 保存业务事实 · Queue / Checkpoint / Sandbox 各自承担 Runtime 职责" style="text;html=1;strokeColor=none;fillColor=none;fontSize=14;fontColor=#5B6B82;" vertex="1" parent="1">
+          <mxGeometry x="340" y="66" width="760" height="28" as="geometry" />
+        </mxCell>
+
+        <mxCell id="web" value="React / Vite Web&#xa;Project · Library · RAG&#xa;Review · Research Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F1FF;strokeColor=#3777C8;fontColor=#173B66;fontSize=15;fontStyle=1;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="125" width="220" height="132" as="geometry" />
+        </mxCell>
+
+        <mxCell id="api" value="FastAPI API&#xa;Route / Identity / DTO&#xa;REST · SSE · noVNC Gateway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF7F2;strokeColor=#2B8A66;fontColor=#164D3A;fontSize=15;fontStyle=1;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="125" width="240" height="132" as="geometry" />
+        </mxCell>
+
+        <mxCell id="postgres" value="PostgreSQL + pgvector&#xa;Run · Event · Message · Evidence&#xa;PaperVersion · Artifact · Runtime facts&#xa;FTS / vector / Checkpoint tables" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0ECFF;strokeColor=#7157B8;fontColor=#3F2D72;fontSize=14;fontStyle=1;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="105" width="290" height="160" as="geometry" />
+        </mxCell>
+
+        <mxCell id="worker" value="ARQ Worker / Application Services" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E7;strokeColor=#D59226;fontColor=#70480B;fontSize=16;fontStyle=1;strokeWidth=2;verticalAlign=top;spacingTop=12;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="340" width="270" height="318" as="geometry" />
+        </mxCell>
+        <mxCell id="ingestion" value="Ingestion / Indexing&#xa;Docling · pypdf · Embedding" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E2B65F;fontColor=#5C4312;fontSize=13;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="375" y="410" width="220" height="62" as="geometry" />
+        </mxCell>
+        <mxCell id="rag-review" value="RAG / Review Workflow&#xa;Evidence · Citation · LangGraph" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E2B65F;fontColor=#5C4312;fontSize=13;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="375" y="492" width="220" height="62" as="geometry" />
+        </mxCell>
+        <mxCell id="agent-runtime" value="Research Agent Runtime&#xa;reconcile · execute · resume · collect" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E2B65F;fontColor=#5C4312;fontSize=13;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="375" y="574" width="220" height="62" as="geometry" />
+        </mxCell>
+
+        <mxCell id="valkey" value="Valkey / ARQ&#xa;Job(run_id) · Pub/Sub wake-up&#xa;不是业务事实来源" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0F0;strokeColor=#C94B52;fontColor=#70262A;fontSize=14;fontStyle=1;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="340" width="250" height="118" as="geometry" />
+        </mxCell>
+
+        <mxCell id="storage" value="Artifact / File Storage&#xa;PDF · Review Artifact&#xa;WorkspaceSnapshot · Agent Artifact" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF7FA;strokeColor=#32849A;fontColor=#164957;fontSize=14;fontStyle=1;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="520" width="250" height="132" as="geometry" />
+        </mxCell>
+
+        <mxCell id="providers" value="外部 Provider（显式 Real 模式）&#xa;Chat / Embedding · arXiv HTTP&#xa;普通测试使用 Fake / Mock" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F7FA;strokeColor=#74849A;fontColor=#344054;fontSize=14;fontStyle=1;strokeWidth=2;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="390" width="220" height="142" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sandbox" value="Session 专属 OpenSandbox" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F8EE;strokeColor=#6B9B42;fontColor=#35521E;fontSize=16;fontStyle=1;strokeWidth=2;verticalAlign=top;spacingTop=12;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="320" width="340" height="340" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-execute" value="execute&#xa;固定镜像 / 资源与时间上限" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8CB56A;fontColor=#35521E;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1065" y="390" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-mcp" value="MCP Servers&#xa;Playwright / Search" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8CB56A;fontColor=#35521E;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1215" y="390" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-browser" value="Chromium + noVNC&#xa;Turn 边界人工接管" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8CB56A;fontColor=#35521E;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1065" y="485" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-workspace" value="/workspace&#xa;Snapshot / Candidate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8CB56A;fontColor=#35521E;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1215" y="485" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox-boundary" value="无宿主目录 · 无数据库 / Docker Socket · 无平台 Secret" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F1DD;strokeColor=#8CB56A;fontColor=#35521E;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1065" y="585" width="290" height="48" as="geometry" />
+        </mxCell>
+
+        <mxCell id="internet" value="Public Internet&#xa;HTTP(S) egress&#xa;拒绝 private / metadata / host LAN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F7FA;strokeColor=#74849A;fontColor=#344054;fontSize=13;fontStyle=1;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="720" width="220" height="92" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend" value="实线：请求 / 控制 / 数据读写    ·    虚线：实时通知或人工控制通道    ·    大型内容进入 Storage，Graph State 只保存稳定 ID" style="text;html=1;strokeColor=none;fillColor=none;fontSize=12;fontColor=#5B6B82;" vertex="1" parent="1">
+          <mxGeometry x="250" y="855" width="940" height="28" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-web-api" value="REST / SSE / noVNC WS" labelX="312" labelY="112" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#506784;strokeWidth=2;startArrow=classic;endArrow=classic;" edge="1" parent="1" source="web" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-api-pg" value="短事务：Run / Event / Outbox" labelX="645" labelY="112" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#506784;strokeWidth=2;startArrow=classic;endArrow=classic;" edge="1" parent="1" source="api" target="postgres">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-pg-worker" value="认领 / 提交 / Checkpoint" labelX="675" labelY="322" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#506784;strokeWidth=2;startArrow=classic;endArrow=classic;" edge="1" parent="1" source="postgres" target="worker">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="845" y="300" />
+              <mxPoint x="500" y="300" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-worker-valkey" value="run_id Job" labelX="660" labelY="383" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#506784;strokeWidth=2;startArrow=classic;endArrow=classic;" edge="1" parent="1" source="worker" target="valkey">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-worker-storage" value="Artifact I/O" labelX="660" labelY="568" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#506784;strokeWidth=2;startArrow=classic;endArrow=classic;" edge="1" parent="1" source="worker" target="storage">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-worker-providers" value="事务外 HTTP / Model / Parser" labelX="285" labelY="302" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#506784;strokeWidth=2;startArrow=none;endArrow=classic;" edge="1" parent="1" source="worker" target="providers">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="420" y="310" />
+              <mxPoint x="165" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-worker-sandbox" value="SDK control + lease / fence" labelX="825" labelY="682" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#506784;strokeWidth=2;startArrow=classic;endArrow=classic;" edge="1" parent="1" source="worker" target="sandbox">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="485" y="690" />
+              <mxPoint x="1210" y="690" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-api-sandbox" value="noVNC ticket gateway" labelX="1060" labelY="274" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#3777C8;strokeWidth=2;dashed=1;startArrow=classic;endArrow=classic;" edge="1" parent="1" source="api" target="sandbox">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="470" y="282" />
+              <mxPoint x="1010" y="282" />
+              <mxPoint x="1210" y="300" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-sandbox-internet" value="public-egress.v1" labelX="1310" labelY="698" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#6B9B42;strokeWidth=2;startArrow=none;endArrow=classic;" edge="1" parent="1" source="sandbox" target="internet">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
