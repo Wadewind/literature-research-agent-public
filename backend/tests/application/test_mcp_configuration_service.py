@@ -341,7 +341,7 @@ async def test_tool_execution_is_replayed_and_events_exclude_arguments_and_resul
         )
     assert changed_tool.value.code == "runtime_mcp_invocation_conflict"
 
-    for index in range(3, 13):
+    for index in range(3, 31):
         assert (
             await service.begin(
                 posted.run_id,
@@ -356,19 +356,19 @@ async def test_tool_execution_is_replayed_and_events_exclude_arguments_and_resul
             posted.run_id,
             "fixture-search_search",
             arguments,
-            invocation_id="call-13-private",
+            invocation_id="call-31-private",
         )
     assert budget.value.code == "runtime_mcp_tool_budget_exceeded"
 
     async with scenario.factory() as session:
         effects = await SqlalchemyToolExecutionRepository(session).list_by_turn(posted.run_id)
         events = await SqlalchemyEventRepository(session).list_by_run(posted.run_id)
-    assert len(effects) == 12
+    assert len(effects) == 30
     assert all(effect.attempt_count == 1 for effect in effects)
-    assert len({effect.effect_id for effect in effects}) == 12
-    assert len({effect.args_hash for effect in effects}) == 12
+    assert len({effect.effect_id for effect in effects}) == 30
+    assert len({effect.args_hash for effect in effects}) == 30
     tool_events = [event for event in events if event.event_type.startswith("agent_tool_")]
-    assert sum(event.event_type == "agent_tool_started" for event in tool_events) == 12
+    assert sum(event.event_type == "agent_tool_started" for event in tool_events) == 30
     assert sum(event.event_type == "agent_tool_completed" for event in tool_events) == 2
     event_text = json.dumps(
         [event.payload for event in tool_events], ensure_ascii=False, sort_keys=True

@@ -260,7 +260,7 @@ async def test_two_turns_reuse_runtime_session_and_persist_staged_candidates(db_
         ]
         assert outbox is not None
         assert usage is not None
-        assert (usage.max_model_calls, usage.max_tool_calls) == (8, 12)
+        assert (usage.max_model_calls, usage.max_tool_calls) == (20, 30)
         assert usage.deadline_at is None
     first_outcome = await runner.execute(first.run_id, "worker-1")
     if first_outcome is not ExecutionOutcome.COMPLETED:

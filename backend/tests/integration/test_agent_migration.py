@@ -451,7 +451,7 @@ def test_agent_migration_upgrade_downgrade_upgrade_and_check() -> None:
             "ck_agent_attachment_state_fields",
             "ck_agent_message_attachment_ordinal",
         } <= attachment_constraints()
-        run_alembic("downgrade", "-1")
+        run_alembic("downgrade", "e4a7c2f9b6d1")
         assert not has_column("papers", "title")
         assert not has_column("papers", "title_source")
         assert has_column("agent_policy_snapshots", "network_profile_hash")
