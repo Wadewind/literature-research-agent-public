@@ -23,6 +23,8 @@ function formatSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+type IngestMode = "upload" | "reuse";
+
 export default function LibraryPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
@@ -34,6 +36,8 @@ export default function LibraryPage() {
   const [editing, setEditing] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
+  const [ingestOpen, setIngestOpen] = useState(false);
+  const [ingestMode, setIngestMode] = useState<IngestMode>("upload");
 
   const projectQuery = useQuery({
     queryKey: ["project", projectId],
@@ -55,6 +59,11 @@ export default function LibraryPage() {
     setProjectName(projectQuery.data.name);
     setProjectDescription(projectQuery.data.description);
   }, [projectQuery.data]);
+
+  const paperCount = papersQuery.data?.length;
+  useEffect(() => {
+    if (paperCount === 0) setIngestOpen(true);
+  }, [paperCount]);
 
   const refreshLibraries = () => {
     void queryClient.invalidateQueries({ queryKey: ["papers", projectId] });
@@ -158,6 +167,19 @@ export default function LibraryPage() {
     projectArchiveMutation.error ??
     updateMutation.error ??
     paperArchiveMutation.error;
+  const toggleProjectArchive = () => {
+    if (!archived && !window.confirm("归档后项目将变为只读，确定继续吗？")) return;
+    projectArchiveMutation.mutate(archived);
+  };
+  const togglePaperArchive = (paper: PaperListItem) => {
+    const restore = Boolean(paper.archived_at);
+    if (!restore && !window.confirm("这会归档个人文献库中的对应资产，确定继续吗？")) return;
+    paperArchiveMutation.mutate({ paperId: paper.paper_id, restore });
+  };
+  const removePaper = (paperId: string) => {
+    if (!window.confirm("确定将这篇文献移出当前项目吗？个人文献库中的资产会保留。")) return;
+    removeMutation.mutate(paperId);
+  };
 
   if (projectQuery.isError) {
     return (
@@ -172,17 +194,21 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="page-flow">
+    <div className="page-flow project-library-page">
       <PageBar
-        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: project?.name ?? "正在读取项目…", to: `/projects/${projectId}` }]}
-        title="文献库"
+        breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "文献库" }]}
+        title={project?.name ?? "正在读取项目…"}
         actions={<div className="page-bar-action-group">
           {archived ? <span className="badge badge-warn">已归档</span> : null}
-          <span className="page-bar-stat"><strong>{papersQuery.data?.length ?? "—"}</strong> 篇文献</span>
-          <button type="button" className="button-quiet" disabled={projectArchiveMutation.isPending} onClick={() => projectArchiveMutation.mutate(archived)}>
-            {archived ? "恢复 Project" : "归档 Project"}
-          </button>
           {!archived && <button type="button" className="button-plain" onClick={() => setEditing((value) => !value)}>修改信息</button>}
+          <button
+            type="button"
+            className={archived ? "button-quiet" : "button-plain project-archive-action"}
+            disabled={projectArchiveMutation.isPending}
+            onClick={toggleProjectArchive}
+          >
+            {archived ? "恢复项目" : "归档项目"}
+          </button>
         </div>}
       />
 
@@ -200,42 +226,89 @@ export default function LibraryPage() {
 
       {actionError && <p className="notice error-text">{errorMessage(actionError)}</p>}
 
-      <section className="ingest-grid" aria-disabled={archived}>
-        <div className="ingest-panel primary-ingest">
-          <p className="eyebrow">UPLOAD / AUTO REUSE</p><h2>上传 PDF</h2><p>系统会计算内容哈希。若个人文献库已有相同文件，将直接复用解析结果。</p>
-          <label className="file-drop"><input type="file" accept="application/pdf,.pdf" onChange={onFileChange} disabled={archived} /><span className="file-glyph" aria-hidden="true">PDF</span><strong>{file?.name ?? "选择一份 PDF"}</strong><small>{file ? formatSize(file.size) : archived ? "归档 Project 不可上传" : "支持点击选择"}</small></label>
-          <button type="button" onClick={() => file && intent && uploadMutation.mutate({ file, key: intent.key })} disabled={archived || !file || !intent || uploadMutation.isPending}>{uploadMutation.isPending ? "正在提交…" : "导入到当前项目"}<span aria-hidden="true">→</span></button>
-          {uploadMutation.isError && <p className="error-text">{errorMessage(uploadMutation.error)}</p>}
-          {lastUpload && <UploadNotice result={lastUpload} projectId={projectId} />}
-        </div>
-        <div className="ingest-panel reuse-panel">
-          <p className="eyebrow">FROM PERSONAL LIBRARY</p><h2>收录已有文献</h2><p>不再上传，也不重复解析。</p>
-          {libraryQuery.isPending && <p className="muted">正在检查个人文献库…</p>}
-          {available.length === 0 && !libraryQuery.isPending && <div className="reuse-empty">暂无可收录的其他文献</div>}
-          <div className="reuse-list">{available.map((paper) => <div key={paper.paper_id}><span><strong><PaperTitle paper={paper} /></strong><small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "处理中"} · {formatSize(paper.version.size_bytes)}</small></span><button type="button" className="button-quiet" disabled={archived || addMutation.isPending} onClick={() => addMutation.mutate(paper)}>+收录</button></div>)}</div>
-          {addMutation.isError && <p className="error-text">{errorMessage(addMutation.error)}</p>}
-          <Link className="text-link" to="/library">查看完整个人文献库 →</Link>
-        </div>
-      </section>
-
       <section className="section-block">
-        <div className="section-title-row"><div><p className="eyebrow">EVIDENCE SOURCES</p><h2>已收录文献</h2></div><span className="section-count">{String(papersQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
-        <div className="library-chat-handoff">
-          <p>{selection.paperIds.length > 0 ? `已选择 ${selection.paperIds.length} 篇文献，可带入文献问答继续确认范围。` : "勾选论文可带入单篇或多篇文献问答；不选择则使用整个 Project。"}</p>
+        <div className="section-title-row project-library-heading">
           <div>
-            <Link className="button-link" to={chatHomePath(projectId)}>询问整个 Project</Link>
-            <Link
-              className={`button-link button-outline ${selection.paperIds.length === 0 ? "disabled" : ""}`}
-              aria-disabled={selection.paperIds.length === 0}
-              tabIndex={selection.paperIds.length === 0 ? -1 : undefined}
-              to={selection.paperIds.length > 0 ? chatPreselectionPath(projectId, selection.paperIds) : chatHomePath(projectId)}
+            <p className="project-library-kicker">项目文献库</p>
+            <h2>已收录文献</h2>
+          </div>
+          <span className="section-count">{papersQuery.data?.length ?? "—"} 篇</span>
+        </div>
+        <div className="library-chat-handoff">
+          <p>{selection.paperIds.length > 0 ? `已选择 ${selection.paperIds.length} 篇文献，可直接带入文献问答。` : "勾选文献可进行单篇或多篇问答。"}</p>
+          <div>
+            <Link className="button-link project-library-primary-action" to={chatHomePath(projectId)}>询问整个项目</Link>
+            {selection.paperIds.length > 0 ? (
+              <Link
+                className="button-link button-outline"
+                to={chatPreselectionPath(projectId, selection.paperIds)}
+              >
+                询问选中（{selection.paperIds.length}）
+              </Link>
+            ) : null}
+            <button
+              type="button"
+              className="button-quiet project-ingest-toggle"
+              aria-expanded={ingestOpen}
+              aria-controls="project-ingest-panel"
+              disabled={archived}
+              onClick={() => setIngestOpen((current) => !current)}
             >
-              询问选中（{selection.paperIds.length}）
-            </Link>
+              {ingestOpen ? "收起添加" : "添加文献"}
+              <span aria-hidden="true">{ingestOpen ? "−" : "+"}</span>
+            </button>
           </div>
         </div>
+
+        {ingestOpen ? (
+          <section id="project-ingest-panel" className="project-ingest-panel" aria-label="添加文献">
+            <div className="project-ingest-tabs" role="group" aria-label="添加方式">
+              <button
+                type="button"
+                aria-pressed={ingestMode === "upload"}
+                aria-controls="project-upload-panel"
+                onClick={() => setIngestMode("upload")}
+              >
+                上传 PDF
+              </button>
+              <button
+                type="button"
+                aria-pressed={ingestMode === "reuse"}
+                aria-controls="project-reuse-panel"
+                onClick={() => setIngestMode("reuse")}
+              >
+                从个人文献库收录
+              </button>
+            </div>
+            {ingestMode === "upload" ? (
+              <div id="project-upload-panel" className="project-ingest-content">
+                <div className="project-ingest-copy">
+                  <h3>上传 PDF</h3>
+                  <p>系统会计算内容哈希；如有相同文件，将直接复用已有解析结果。</p>
+                </div>
+                <label className="file-drop"><input type="file" accept="application/pdf,.pdf" onChange={onFileChange} disabled={archived} /><span className="file-glyph" aria-hidden="true">PDF</span><strong>{file?.name ?? "选择一份 PDF"}</strong><small>{file ? formatSize(file.size) : archived ? "归档项目不可上传" : "支持点击选择"}</small></label>
+                <button type="button" onClick={() => file && intent && uploadMutation.mutate({ file, key: intent.key })} disabled={archived || !file || !intent || uploadMutation.isPending}>{uploadMutation.isPending ? "正在提交…" : "导入到当前项目"}<span aria-hidden="true">→</span></button>
+                {uploadMutation.isError && <p className="error-text">{errorMessage(uploadMutation.error)}</p>}
+                {lastUpload && <UploadNotice result={lastUpload} projectId={projectId} />}
+              </div>
+            ) : (
+              <div id="project-reuse-panel" className="project-ingest-content">
+                <div className="project-ingest-copy">
+                  <h3>收录已有文献</h3>
+                  <p>不再上传，也不重复解析。</p>
+                </div>
+                {libraryQuery.isPending && <p className="muted">正在检查个人文献库…</p>}
+                {available.length === 0 && !libraryQuery.isPending && <div className="reuse-empty">暂无可收录的其他文献</div>}
+                <div className="reuse-list">{available.map((paper) => <div key={paper.paper_id}><span><strong><PaperTitle paper={paper} /></strong><small title={paper.version.display_filename}>{paper.version.display_filename} · {paper.version.parse_ready ? "已解析" : "处理中"} · {formatSize(paper.version.size_bytes)}</small></span><button type="button" className="button-quiet" disabled={archived || addMutation.isPending} onClick={() => addMutation.mutate(paper)}>+收录</button></div>)}</div>
+                {addMutation.isError && <p className="error-text">{errorMessage(addMutation.error)}</p>}
+                <Link className="text-link" to="/library">查看完整个人文献库 →</Link>
+              </div>
+            )}
+          </section>
+        ) : null}
+
         {papersQuery.isError && <p className="notice error-text">{errorMessage(papersQuery.error)}</p>}
-        {papersQuery.data?.length === 0 && <div className="empty-state compact"><h3>这个项目还没有文献</h3><p>上传新 PDF，或从右侧收录个人文献库中的已有文献。</p></div>}
+        {papersQuery.data?.length === 0 && <p className="project-library-empty-note">当前项目还没有文献，请从上方选择一种方式添加。</p>}
         {papersQuery.data && papersQuery.data.length > 0 && (
           <div className="project-paper-list">{papersQuery.data.map((paper, index) => (
             <PaperRow
@@ -248,8 +321,8 @@ export default function LibraryPage() {
               onToggle={() => setSelection((current) => toggleScopePaper(current, paper.paper_id))}
               onAsk={() => navigate(chatPreselectionPath(projectId, [paper.paper_id]))}
               removing={removeMutation.isPending && removeMutation.variables === paper.paper_id}
-              onRemove={() => removeMutation.mutate(paper.paper_id)}
-              onArchive={() => paperArchiveMutation.mutate({ paperId: paper.paper_id, restore: Boolean(paper.archived_at) })}
+              onRemove={() => removePaper(paper.paper_id)}
+              onArchive={() => togglePaperArchive(paper)}
             />
           ))}</div>
         )}
@@ -295,7 +368,18 @@ function PaperRow({ paper, index, projectId, archivedProject, selected, removing
       <label className="paper-select" title="选择用于多篇问答"><input type="checkbox" checked={selected} onChange={onToggle} disabled={archivedProject || paperArchived} /><span>{String(index + 1).padStart(2, "0")}</span></label>
       <div className="paper-identity"><div className="identity-title"><h3><PaperTitle paper={paper} /></h3>{paperArchived && <span className="badge badge-warn">个人库已归档</span>}</div><p><span className="paper-filename" title={paper.version.display_filename}>{paper.version.display_filename}</span><span>{formatSize(paper.version.size_bytes)}</span><span className="mono">VER {paper.version.version_id.slice(0, 8)}</span></p></div>
       <div className="paper-state"><span className={`status-dot ${indexReady ? "ready" : "working"}`} /><span>{indexText}</span>{indexQuery.data?.indexing_run_id && !indexReady && <Link to={`/runs/${indexQuery.data.indexing_run_id}`}>查看索引 Run</Link>}</div>
-      <div className="paper-actions"><button className="button-ask-inline" type="button" disabled={archivedProject || paperArchived} onClick={onAsk}>询问此篇</button><a href={`/api/v1/projects/${projectId}/paper-versions/${paper.version.version_id}/file`} target="_blank" rel="noreferrer">原文</a>{paper.version.parse_ready && <Link to={`/projects/${projectId}/versions/${paper.version.version_id}/document`}>结构预览</Link>}<button className="button-text-warn" type="button" disabled={archivedProject} onClick={onArchive}>{paperArchived ? "恢复个人库资产" : "归档个人库资产"}</button><button className="button-text-danger" type="button" disabled={archivedProject || removing} onClick={onRemove}>{removing ? "移除中" : "移出项目"}</button></div>
+      <div className="paper-actions">
+        <button className="button-ask-inline" type="button" disabled={archivedProject || paperArchived} onClick={onAsk}>询问此篇</button>
+        <a href={`/api/v1/projects/${projectId}/paper-versions/${paper.version.version_id}/file`} target="_blank" rel="noreferrer">原文</a>
+        {paper.version.parse_ready && <Link to={`/projects/${projectId}/versions/${paper.version.version_id}/document`}>结构预览</Link>}
+        <details className="paper-more-actions">
+          <summary>更多</summary>
+          <div className="paper-more-menu">
+            <button className="button-text-warn" type="button" disabled={archivedProject} onClick={onArchive}>{paperArchived ? "恢复个人库资产" : "归档个人库资产"}</button>
+            <button className="button-text-danger" type="button" disabled={archivedProject || removing} onClick={onRemove}>{removing ? "移除中…" : "移出项目"}</button>
+          </div>
+        </details>
+      </div>
     </article>
   );
 }
