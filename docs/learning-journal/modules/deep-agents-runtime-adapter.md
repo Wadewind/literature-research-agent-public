@@ -72,9 +72,16 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   标题、世界知识、外部来源、Browser/文件/`execute` 结果和操作说明可以与引用 Claim 共存并进入
   PostgreSQL，但未标记正文不获得平台 Evidence 背书。2026-08-31 的真实 Turn 发现模型会在格式说明中
   复述 `[evidence:…]`，从而把普通说明误判成非法引用；当前 Runtime 与 Application 提交边界都会先把
-  `…`、`...`、`<id>` 等明确元语法占位符改写为普通“Evidence 标记”文字。真实 Evidence ID 格式错误、
-  重复 ID 或标记不在行尾仍然 fail-closed，Application 继续负责显式 Evidence 的 Run/Project 授权、
-  Citation Validator 与事务提交；
+  `…`、`...`、`<id>` 等明确元语法占位符改写为普通“Evidence 标记”文字。后续真实失败又证明“一个物理
+  行只能有一个 Claim”不适合直接约束模型：现在相邻真实标记会合并，同一行中可完整消费的多组
+  Claim/标记会拆成规范行，并在 Runtime 与 Application 两个边界保存同一规范正文。真实 Evidence ID
+  格式错误、单个标记内部重复 ID、标记后未引用尾文或其他歧义仍然 fail-closed；Application 继续负责
+  显式 Evidence 的 Run/Project 授权、Citation Validator 与事务提交；
+- Graph v7 通过 Deep Agents 原生 `ToolStrategy` 增加 `finalize_research_answer` 终止协议。协议只包含有界
+  `grounded_claim`、`analysis`、`artifact_receipt` 内容块，框架校验后写入 checkpoint
+  `structured_response`，Adapter 确定性渲染为既有消息和引用格式。该控制调用不进入 ToolNode、不写业务
+  数据库且不占普通 Tool 预算，但仍受模型预算和执行 lease/fence 保护；普通搜索、Browser、文件、成果
+  Tool 的可见性与预算不变。模型直接返回普通文本时仍使用兼容解析，因此结构化终止不是新的单点失败；
 - 每轮 HumanMessage 在正文前附加 `ContextSnapshot.created_at` 的 UTC 时间基准，使“今年”等相对日期不依赖
   模型训练时间；它不复制历史消息或改变 Deep Agents 的上下文/压缩职责；
 - 切片 4 当时未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，
@@ -185,6 +192,10 @@ Runtime 的回归证明模型可见并能执行 `mkdir`。相关 Infrastructure 
 2026-08-31 的 Evidence 占位符修复回归：Deep Agents Runtime 与 Agent Turn Executor 两个完整测试文件
 `82 passed in 60.48s`；领域契约与 Skill v2 定向测试 `26 passed`，数据库原子提交用例 `1 passed`；
 Ruff、Pyright 和 `git diff --check` 均通过。测试未调用真实模型或公网。
+
+同日引用排版兼容与结构化终止协议回归：领域契约 `30 passed`；Deep Agents Adapter `68 passed`，覆盖
+零普通 Tool 预算下的结构化终止、纯文本回退以及与 Project/execute Tool 共存；Agent Turn Executor
+`17 passed`，覆盖规范化正文、Claim/Citation 原子提交。以上均为离线或本机测试，不调用真实模型与公网。
 
 ## 代码入口
 

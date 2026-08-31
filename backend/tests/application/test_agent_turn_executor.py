@@ -603,7 +603,9 @@ async def test_mixed_runtime_result_preserves_message_and_commits_only_explicit_
     )
     assistant_content = (
         "## 综合研究结果\n"
-        f"该结论有证据支持 [evidence:{evidence.evidence_id}]\n"
+        f"该结论有证据支持 [evidence:{evidence.evidence_id}]"
+        f"[evidence:{evidence.evidence_id}] "
+        f"第二条结论同样有证据 [evidence:{evidence.evidence_id}]\n"
         "外部检索结果：https://arxiv.org/abs/2401.00001\n"
         "已生成 research-note.md，可在成果区下载。\n"
         "标注 [evidence:…] 的部分来自本项目证据。"
@@ -611,6 +613,7 @@ async def test_mixed_runtime_result_preserves_message_and_commits_only_explicit_
     normalized_assistant_content = (
         "## 综合研究结果\n"
         f"该结论有证据支持 [evidence:{evidence.evidence_id}]\n"
+        f"第二条结论同样有证据 [evidence:{evidence.evidence_id}]\n"
         "外部检索结果：https://arxiv.org/abs/2401.00001\n"
         "已生成 research-note.md，可在成果区下载。\n"
         "标注 Evidence 标记 的部分来自本项目证据。"
@@ -665,9 +668,15 @@ async def test_mixed_runtime_result_preserves_message_and_commits_only_explicit_
         assert claim_set is not None
         assert claim_set.claim_set_id == assistant.claim_set_id
         claims = await claim_repo.list_claims(claim_set.claim_set_id)
-        assert [claim.text for claim in claims] == ["该结论有证据支持"]
+        assert [claim.text for claim in claims] == [
+            "该结论有证据支持",
+            "第二条结论同样有证据",
+        ]
         assert await claim_repo.list_citations(claims[0].claim_id) == [
             Citation(claims[0].claim_id, evidence.evidence_id)
+        ]
+        assert await claim_repo.list_citations(claims[1].claim_id) == [
+            Citation(claims[1].claim_id, evidence.evidence_id)
         ]
         cross_turn_evidence = create_evidence(
             run_id=scenario.matrix.review_run_id,

@@ -31,7 +31,7 @@ from literature_agent.application.ports.workspace_snapshot_publisher import (
 from literature_agent.domain.agent_answer import (
     INSUFFICIENT_AGENT_EVIDENCE_TEXT,
     extract_agent_evidence_claims,
-    normalize_agent_evidence_placeholders,
+    normalize_agent_evidence_markup,
 )
 from literature_agent.domain.answer_schema import RagAnswerOutput
 from literature_agent.domain.citation_validator import validate_citations
@@ -137,9 +137,7 @@ class AgentTurnExecutor[TSession: Session]:
         result = await self._runtime.collect_turn_result(run.run_id)
         if result.turn_run_id != run.run_id:
             self._raise_runtime_scope_mismatch()
-        assistant_content = normalize_agent_evidence_placeholders(
-            result.assistant_content
-        )
+        assistant_content = normalize_agent_evidence_markup(result.assistant_content)
         citation_contract_enabled = bool(
             result.evidence_ids
             or "[evidence:" in assistant_content

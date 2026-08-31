@@ -12,6 +12,7 @@ AGENT_CLAIM_MAX_CHARS = 2_000
 AGENT_CLAIM_MAX_EVIDENCE = 10
 _CLAIM_LINE = re.compile(r"^(?P<text>.+?) \[evidence:(?P<ids>[^\[\]]+)\]$")
 _TRAILING_EVIDENCE = re.compile(r"^(?P<text>.+?)\s*\[evidence:(?P<ids>[^\[\]]+)\]$")
+_EVIDENCE_MARKER = re.compile(r"\[evidence:(?P<ids>[^\[\]]+)\]")
 _EVIDENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 _MARKDOWN_PREFIX = re.compile(r"^(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")
 _EVIDENCE_PLACEHOLDER = re.compile(
@@ -28,9 +29,72 @@ def normalize_agent_evidence_placeholders(content: str) -> str:
     return _EVIDENCE_PLACEHOLDER.sub("Evidence 标记", content)
 
 
+def normalize_agent_evidence_markup(content: str) -> str:
+    """确定性整理等价 Evidence 排版；有歧义的行保持原样交给严格校验拒绝。"""
+    placeholder_safe = normalize_agent_evidence_placeholders(content)
+    return "\n".join(
+        _normalize_agent_evidence_line(line) for line in placeholder_safe.splitlines()
+    )
+
+
+def _normalize_agent_evidence_line(line: str) -> str:
+    if "[evidence:" not in line:
+        return line
+    matches = list(_EVIDENCE_MARKER.finditer(line))
+    if not matches:
+        return line
+
+    first = matches[0]
+    claim_text = line[: first.start()].strip()
+    evidence_ids = _normalized_evidence_ids(first.group("ids"))
+    if not claim_text or evidence_ids is None:
+        return line
+
+    claims: list[tuple[str, list[str]]] = []
+    previous = first
+    for marker in matches[1:]:
+        between = line[previous.end() : marker.start()].strip()
+        marker_ids = _normalized_evidence_ids(marker.group("ids"))
+        if marker_ids is None:
+            return line
+        if between:
+            claims.append((claim_text, evidence_ids))
+            claim_text = between
+            evidence_ids = marker_ids
+        else:
+            evidence_ids = _deduplicated((*evidence_ids, *marker_ids))
+            if len(evidence_ids) > AGENT_CLAIM_MAX_EVIDENCE:
+                return line
+        previous = marker
+
+    if line[previous.end() :].strip():
+        return line
+    claims.append((claim_text, evidence_ids))
+    if len(claims) > AGENT_ANSWER_MAX_CLAIMS:
+        return line
+    return "\n".join(
+        f"{text} [evidence:{','.join(ids)}]" for text, ids in claims
+    )
+
+
+def _normalized_evidence_ids(raw_ids: str) -> list[str] | None:
+    evidence_ids = [item.strip() for item in raw_ids.split(",")]
+    if (
+        not evidence_ids
+        or any(not _EVIDENCE_ID.fullmatch(item) for item in evidence_ids)
+        or len(evidence_ids) != len(set(evidence_ids))
+    ):
+        return None
+    return evidence_ids if len(evidence_ids) <= AGENT_CLAIM_MAX_EVIDENCE else None
+
+
+def _deduplicated(values: tuple[str, ...] | list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
 def canonicalize_agent_answer(content: str) -> str:
     """从 Runtime 富文本中只保留可验证 Claim，并规范为产品消息契约。"""
-    normalized = content.strip()
+    normalized = normalize_agent_evidence_markup(content).strip()
     if len(content) > AGENT_ANSWER_MAX_CHARS:
         raise AgentAnswerContractError("Agent 回答超过字符上限")
     if normalized == INSUFFICIENT_AGENT_EVIDENCE_TEXT:
@@ -69,7 +133,7 @@ def canonicalize_agent_answer(content: str) -> str:
 
 def extract_agent_evidence_claims(content: str) -> tuple[RagAnswerOutput, tuple[str, ...]]:
     """从混合富文本中提取显式引用 Claim，不改写未标记的模型正文。"""
-    normalized = content.strip()
+    normalized = normalize_agent_evidence_markup(content).strip()
     if len(content) > AGENT_ANSWER_MAX_CHARS:
         raise AgentAnswerContractError("Agent 回答超过字符上限")
     if normalized == INSUFFICIENT_AGENT_EVIDENCE_TEXT:

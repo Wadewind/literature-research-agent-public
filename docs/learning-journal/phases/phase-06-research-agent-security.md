@@ -847,6 +847,21 @@ Thread 的 ToolMessage。旧 v3 Turn 不被原地升级，详细证据见 Real �
 `evidence-led-synthesis` v2 改用真实 ID 示例并禁止输出占位符，v1 继续保留以解析已锁定 Session。
 `runtime_output_invalid` 同时获得不泄漏模型原文的前端专用提示。历史失败 Run 不被原地改写。
 
+同日第二个真实失败 Turn 暴露出“每个物理行只能有一个 Claim、只能有一个尾部标记”过度依赖模型排版。
+本切片把不改变授权语义的两类写法确定性规范化：相邻的多个真实 Evidence 标记合并为同一 Claim 的去重
+ID 列表；同一物理行中连续出现的多组“非空 Claim + 真实 Evidence 标记”拆成多条规范 Claim。只有整行
+能够被完整消费且每个 ID 都符合既有语法、每条 Claim 与引用数都不超限时才规范化；标记后存在未引用
+尾文、空 Claim、非法 ID 或无法消除的歧义仍然 fail-closed。Runtime 与 Application 保存规范化后的正文，
+避免 Runtime 校验结果与 PostgreSQL 产品消息再次解析时产生偏差。
+
+同时引入 `finalize_research_answer` 作为优先但非强制的结构化终止协议。它由 Deep Agents 原生
+`ToolStrategy` 提供，只接收有界的 Claim 文本与 Evidence ID，不进入 ToolNode、不访问外部系统、不写
+业务数据库，也不占用普通 Tool 调用预算；模型调用预算、Runtime lease/fence 与最终 Citation Validator
+仍照常生效。合法结构化结果写入 checkpoint 的 `structured_response`，Runtime 再确定性渲染为既有产品
+消息与 Claim/Citation 契约。Provider 不支持该协议或模型直接返回文本时继续走兼容解析，不因缺少结构化
+调用失败。终止协议属于 Graph State/输出契约变化，因此新执行使用新的 Graph revision；已完成或失败的
+历史 Run 不原地改写。
+
 2026-08-30 Real 对话回归修复了同一条 Workspace 成果链的两个契约缺口：每次新建或复用 Sandbox Lease
 都会幂等创建 `/workspace/outputs`，系统提示要求正式成果先写入该目录；`artifact_path_invalid` 在保留
 Rejected Candidate 与失败 ToolCall 审计后，以有界错误 ToolMessage 返回模型继续纠正，不再直接终止

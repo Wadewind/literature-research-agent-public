@@ -6,6 +6,7 @@ from literature_agent.domain.agent_answer import (
     AgentAnswerContractError,
     canonicalize_agent_answer,
     extract_agent_evidence_claims,
+    normalize_agent_evidence_markup,
     normalize_agent_evidence_placeholders,
     parse_agent_answer,
 )
@@ -120,6 +121,54 @@ def test_normalize_agent_evidence_placeholders_keeps_malformed_real_marker() -> 
     assert normalize_agent_evidence_placeholders(content) == content
     with pytest.raises(AgentAnswerContractError):
         extract_agent_evidence_claims(content)
+
+
+def test_normalize_agent_evidence_markup_merges_adjacent_real_markers() -> None:
+    content = normalize_agent_evidence_markup(
+        "强化学习可用于动态路径规划 [evidence:e-1][evidence:e-2,e-1]"
+    )
+
+    output, evidence_ids = extract_agent_evidence_claims(content)
+
+    assert content == "强化学习可用于动态路径规划 [evidence:e-1,e-2]"
+    assert output.claims[0].evidence_ids == ["e-1", "e-2"]
+    assert evidence_ids == ("e-1", "e-2")
+
+
+def test_normalize_agent_evidence_markup_splits_multiple_claims_on_one_line() -> None:
+    content = normalize_agent_evidence_markup(
+        "值函数方法包括 DQN [evidence:e-1] 策略梯度方法包括 PPO [evidence:e-2]"
+    )
+
+    output, evidence_ids = extract_agent_evidence_claims(content)
+
+    assert content == (
+        "值函数方法包括 DQN [evidence:e-1]\n"
+        "策略梯度方法包括 PPO [evidence:e-2]"
+    )
+    assert [claim.text for claim in output.claims] == [
+        "值函数方法包括 DQN",
+        "策略梯度方法包括 PPO",
+    ]
+    assert evidence_ids == ("e-1", "e-2")
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "合法论述 [evidence:e-1] 后面还有未引用内容",
+        "合法论述 [evidence:e-1][evidence:非法 id]",
+        "[evidence:e-1] 缺少论述",
+    ],
+)
+def test_normalize_agent_evidence_markup_keeps_ambiguous_or_invalid_lines_for_rejection(
+    content: str,
+) -> None:
+    normalized = normalize_agent_evidence_markup(content)
+
+    assert normalized == content
+    with pytest.raises(AgentAnswerContractError):
+        extract_agent_evidence_claims(normalized)
 
 
 def test_canonicalize_agent_answer_keeps_only_valid_grounded_markdown_claims() -> None:
