@@ -29,6 +29,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - Project 工作区现在用“文献库 / 文献问答 / 综述 / 研究助手”区分三种产品模式。Research Agent 使用
   独立 `AgentSession/AgentTurnRun`，不会把 RAG Conversation 冒充为持续 Agent Thread，也不复制官方
   Deep Agents UI 的数据层。
+- Research Agent 无 Session 时复用 Chat/Review 的“功能标题—中央选择—底部输入”工作台骨架。中央三张
+  方向卡只把研究缺口、方法比较或证据核查写入本地会话标题草稿；底部 Composer 才是唯一创建入口，
+  提交前不会创建 Session 或运行 Agent。项目索引就绪数在 Composer 中说明可用上下文，Evidence Matrix、
+  附件和研究能力继续留在进入 Session 后配置，避免入口页提前堆叠高级设置；归档 Project 禁止创建。
 - Review List 读取紧凑的 Project-scoped API；Create 的本地 state 只保存研究问题与幂等意图，成功后
   才清空。列表仅在至少一个 Review 非终态时以 5 秒间隔刷新，空列表和全终态列表关闭轮询。Detail
   并行读取详情和 Sources，`useRunEvents(runId)` 收到业务 Event 后只失效 `review`、`reviews` 与
@@ -126,6 +130,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - **Agent UI 不接 SDK 数据层**：产品 Session、Message、Run、Evidence 和 candidate 都来自平台 API；
   Deep Agents Thread/Checkpoint/内部文件不进入浏览器。这样保留原生 Agent 上下文管理，同时不绕过
   owner/Project 权限、业务恢复和审计事实。
+- **研究助手入口只创建持续上下文**：方向模板用于降低空白页启动成本，但选择模板只修改标题草稿，
+  不等同于发送研究问题或执行 Turn。会话创建与首轮能力/证据配置保持两个明确动作，既沿用全站统一的
+  工作台结构，也保留 Agent Session 与一次性 Chat/Review Run 的产品差异。
 - **能力配置是安全的产品语言**：界面只展示平台维护的能力名称、声明参数和研究方法，不暴露 MCP
   endpoint/transport/command/env、SDK Thread、Sandbox 或 Secret。Skill 在第一条产品消息后只读；MCP
   可按既有 Profile/Policy 契约调整，未保存草稿会阻止发送。
@@ -340,6 +347,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - 2026-08-31 的 Review Detail 产品化调整新增四阶段投影和维度标签测试，前端全量为 40 files /
   202 passed，production build 通过；真实完成任务与取消中任务的浏览器走查确认结果优先、四阶段进度、
   论文标题、中文维度、编号引用和默认收起的执行信息均正确，两种状态无横向溢出或 Vite 错误浮层。
+- 2026-08-31 的 Research Agent 创建入口统一为中央研究方向与底部 Composer；前端全量为 40 files /
+  202 passed，production build 与 `git diff --check` 通过。1280×720 本地只读走查确认三张方向卡、
+  14 篇就绪索引提示和创建操作同屏，中央区域没有独立滚动，卡片与 Composer 间距约 34px，页面无横向
+  溢出或 Vite 错误浮层；走查未创建 Session、未发送 Turn。
 
 ## 60 秒面试说明
 

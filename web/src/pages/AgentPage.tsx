@@ -78,6 +78,27 @@ interface AgentWorkspaceProps {
   sessionId: string;
 }
 
+const AGENT_SESSION_STARTERS = [
+  {
+    title: "研究缺口分析",
+    label: "缺口分析",
+    code: "GAP",
+    description: "识别现有证据覆盖不足、结论冲突和后续研究机会。",
+  },
+  {
+    title: "研究方法对比",
+    label: "方法比较",
+    code: "COMPARE",
+    description: "跨论文比较方法、实验设置、适用边界与关键取舍。",
+  },
+  {
+    title: "关键结论核查",
+    label: "证据核查",
+    code: "VERIFY",
+    description: "围绕一个关键判断回查项目索引、原文证据和引用链。",
+  },
+] as const;
+
 interface AgentMessageItemProps {
   message: AgentMessage;
   onCitation: (citation: CitationSummary) => void;
@@ -552,6 +573,7 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
   }
 
   const project = projectQuery.data;
+  const archived = Boolean(project?.archived_at);
   const turnActivities = new Map(activityRunIds.map((runId, index) => {
     const persistedEvents = eventQueries[index]?.data ?? [];
     const mergedEvents = mergeRunEvents(
@@ -604,37 +626,76 @@ function AgentWorkspace({ projectId, sessionId }: AgentWorkspaceProps) {
       <ResearchWorkspaceFrame
         kind="agent"
         inspectorOpen={inspectorOpen}
-        main={<section className="agent-conversation" aria-label="研究助手对话">
+        main={<section className={`agent-conversation ${!sessionId ? "agent-start-main" : ""}`} aria-label="研究助手对话">
           {!sessionId ? (
-            <div className="agent-welcome">
-              <span className="agent-welcome-mark" aria-hidden="true">A·01</span>
-              <p className="eyebrow">START A RESEARCH THREAD</p>
-              <h2>让项目材料成为持续研究上下文</h2>
-              <p>创建会话后，通过简洁输入区选择证据、附件与研究能力。</p>
+            <>
+              <header className="chat-heading chat-create-heading agent-start-heading">
+                <div>
+                  <h2>把复杂研究留在一个持续会话里</h2>
+                  <p>跨轮次使用项目索引、Evidence Matrix、附件与受控研究能力。</p>
+                </div>
+              </header>
               <form
-                className="agent-start-form"
+                className="agent-start-flow"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  createSessionMutation.mutate();
+                  if (!archived) createSessionMutation.mutate();
                 }}
               >
-                <label className="sr-only" htmlFor="agent-session-title">新会话标题</label>
-                <input
-                  id="agent-session-title"
-                  value={newSessionTitle}
-                  maxLength={200}
-                  autoComplete="off"
-                  onChange={(event) => setNewSessionTitle(event.target.value)}
-                  placeholder="例如：研究缺口分析…"
-                />
-                <button type="submit" disabled={createSessionMutation.isPending}>
-                  {createSessionMutation.isPending ? "正在创建…" : "新建研究会话"}
-                </button>
+                <div className="chat-create-stage agent-start-stage">
+                  <section className="chat-create-card agent-start-card" aria-labelledby="agent-start-title">
+                    <div className="question-starters-heading">
+                      <div>
+                        <p className="eyebrow">RESEARCH DIRECTIONS</p>
+                        <h3 id="agent-start-title">选择一个研究起点</h3>
+                      </div>
+                      <span>点击后可继续修改会话名称</span>
+                    </div>
+                    <div className="question-starter-grid">
+                      {AGENT_SESSION_STARTERS.map((starter) => (
+                        <button
+                          key={starter.code}
+                          className={`question-starter agent-session-starter ${newSessionTitle === starter.title ? "is-selected" : ""}`}
+                          type="button"
+                          disabled={archived}
+                          onClick={() => setNewSessionTitle(starter.title)}
+                        >
+                          <span className="question-starter-meta"><span>{starter.label}</span><small>{starter.code}</small></span>
+                          <strong>{starter.description}</strong>
+                          <span className="question-starter-arrow" aria-hidden="true">→</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                  {archived ? <p className="readonly-note agent-start-feedback">该项目已归档，历史研究会话仍可查看，但不能创建新会话。</p> : null}
+                  {createSessionMutation.isError ? (
+                    <p className="error-text agent-start-feedback">{errorMessage(createSessionMutation.error)}</p>
+                  ) : null}
+                </div>
+
+                <div className="conversation-composer chat-create-composer agent-start-composer">
+                  <label className="sr-only" htmlFor="agent-session-title">新会话标题</label>
+                  <input
+                    id="agent-session-title"
+                    value={newSessionTitle}
+                    maxLength={200}
+                    autoComplete="off"
+                    disabled={archived}
+                    onChange={(event) => setNewSessionTitle(event.target.value)}
+                    placeholder="为研究会话命名，例如：强化学习路径规划的研究缺口…"
+                  />
+                  <div className="conversation-composer-toolbar">
+                    <div className="chat-create-composer-context agent-start-context">
+                      <span className="context-chip">项目索引 · {projectContextQuery.data?.ready_index_count ?? "—"} 篇就绪</span>
+                      <small>创建后可选择 Evidence Matrix、附件和研究能力。</small>
+                    </div>
+                    <button type="submit" disabled={archived || createSessionMutation.isPending}>
+                      {createSessionMutation.isPending ? "正在创建…" : "创建会话"}<span aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </div>
               </form>
-              {createSessionMutation.isError ? (
-                <p className="error-text">{errorMessage(createSessionMutation.error)}</p>
-              ) : null}
-            </div>
+            </>
           ) : (
             <>
               <header className="agent-chat-heading">
