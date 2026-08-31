@@ -64,7 +64,7 @@ class SearchStrategyResult:
 
 
 class ReviewSearchStrategyService[TSession: Session]:
-    """只实现 review.v1 固定策略，不提供通用策略 Agent。"""
+    """为固定 Review Workflow 生成可审计的检索与分析策略。"""
 
     def __init__(
         self,
@@ -146,7 +146,7 @@ class ReviewSearchStrategyService[TSession: Session]:
                 or run.owner_id != owner_id
                 or run.run_type != RunType.REVIEW.value
                 or run.status is not RunStatus.RUNNING
-                or review.workflow_version != "review.v1"
+                or review.workflow_version not in {"review.v1", "review.v2"}
                 or review.model_profile_version not in SUPPORTED_MODEL_PROFILE_VERSIONS
                 or review.prompt_versions.get("search_strategy") != PROMPT_VERSION
             ):

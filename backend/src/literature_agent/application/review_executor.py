@@ -2,6 +2,8 @@
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import replace
+from datetime import UTC, datetime
 from typing import TypeVar
 
 from literature_agent.application.arxiv_import_service import ArxivProjectImportService
@@ -19,6 +21,9 @@ from literature_agent.application.review_search_strategy_service import (
     ReviewSearchStrategyService,
 )
 from literature_agent.application.review_section_service import ReviewSectionService
+from literature_agent.application.review_source_selection_service import (
+    ReviewSourceSelectionService,
+)
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.arxiv import ArxivSearchQuery
 from literature_agent.domain.exceptions import NoReviewablePapersError, RunNotFoundError
@@ -55,6 +60,7 @@ class ReviewExecutor[TSession: Session]:
         outline_decision_service: ReviewOutlineDecisionService,
         section_service: ReviewSectionService,
         export_service: ReviewExportService,
+        source_selection_service: ReviewSourceSelectionService,
         checkpoint_store: PostgresCheckpointStore,
     ) -> None:
         self._session_factory = session_factory
@@ -68,6 +74,7 @@ class ReviewExecutor[TSession: Session]:
         self._outline_decision = outline_decision_service
         self._sections = section_service
         self._export = export_service
+        self._source_selection = source_selection_service
         self._checkpoints = checkpoint_store
 
     async def execute(self, run: Run, correlation_id: str) -> None:
@@ -88,20 +95,55 @@ class ReviewExecutor[TSession: Session]:
             ),
         )
         snapshot = await self._review_snapshot(run.run_id, project_id, owner_id)
-        query = ArxivSearchQuery(
-            strategy.output.payload["arxiv_query"],
-            max_results=int(snapshot.config_snapshot.get("source_limit", 10)),
-        )
-        await observe_review_stage(
-            ReviewStage.SEARCH_ARXIV,
-            self._arxiv.search_sources(
-                actor=actor,
-                project_id=project_id,
-                review_run_id=run.run_id,
-                query=query,
-                correlation_id=correlation_id,
-            ),
-        )
+        sources = await self._sources(run.run_id, project_id, owner_id)
+        if snapshot.workflow_version == "review.v1":
+            query = ArxivSearchQuery(
+                strategy.output.payload["arxiv_query"],
+                max_results=int(snapshot.config_snapshot.get("source_limit", 10)),
+            )
+            await observe_review_stage(
+                ReviewStage.SEARCH_ARXIV,
+                self._arxiv.search_sources(
+                    actor=actor,
+                    project_id=project_id,
+                    review_run_id=run.run_id,
+                    query=query,
+                    correlation_id=correlation_id,
+                ),
+            )
+        elif snapshot.workflow_version == "review.v2":
+            auto_search = bool(snapshot.config_snapshot.get("auto_search_candidates"))
+            if auto_search and snapshot.current_stage is ReviewStage.SEARCH_ARXIV:
+                query = ArxivSearchQuery(
+                    strategy.output.payload["arxiv_query"],
+                    max_results=int(snapshot.config_snapshot.get("candidate_limit", 10)),
+                )
+                await observe_review_stage(
+                    ReviewStage.SEARCH_ARXIV,
+                    self._arxiv.search_sources(
+                        actor=actor,
+                        project_id=project_id,
+                        review_run_id=run.run_id,
+                        query=query,
+                        correlation_id=correlation_id,
+                        rank_offset=len(sources),
+                    ),
+                )
+                sources = await self._sources(run.run_id, project_id, owner_id)
+                if any(item.status is ReviewSourceStatus.DISCOVERED for item in sources):
+                    await self._source_selection.pause(
+                        run_id=run.run_id,
+                        project_id=project_id,
+                        owner_id=owner_id,
+                        correlation_id=correlation_id,
+                    )
+                    return
+                if not any(item.status is ReviewSourceStatus.READY for item in sources):
+                    raise NoReviewablePapersError
+            elif not auto_search and snapshot.current_stage is ReviewStage.SEARCH_ARXIV:
+                await self._advance_to_import(run.run_id, project_id, owner_id)
+        else:
+            raise RunNotFoundError(run.run_id)
         await observe_review_stage(
             ReviewStage.IMPORT_ARXIV_PAPERS,
             self._arxiv.import_sources(
@@ -165,7 +207,7 @@ class ReviewExecutor[TSession: Session]:
             initial = ReviewGraphState(
                 review_run_id=run.run_id,
                 project_id=project_id,
-                workflow_version="review.v1",
+                workflow_version=snapshot.workflow_version,
                 research_question=snapshot.research_question,
                 search_strategy_output_id=strategy.output.output_id,
                 review_source_ids=[item.source_id for item in sources],
@@ -197,3 +239,26 @@ class ReviewExecutor[TSession: Session]:
             return await self._review_repo_factory(session).get_latest_resolved_human_input_scoped(
                 run_id, project_id, owner_id
             )
+
+    async def _advance_to_import(self, run_id, project_id, owner_id) -> None:
+        async with self._session_factory() as session:
+            repo = self._review_repo_factory(session)
+            review = await repo.get_review_run_scoped_for_update(
+                run_id, project_id, owner_id
+            )
+            if review is None:
+                raise RunNotFoundError(run_id)
+            if review.current_stage is ReviewStage.IMPORT_ARXIV_PAPERS:
+                return
+            if review.current_stage is not ReviewStage.SEARCH_ARXIV:
+                raise RunNotFoundError(run_id)
+            advanced = replace(
+                review,
+                current_stage=ReviewStage.IMPORT_ARXIV_PAPERS,
+                updated_at=datetime.now(UTC),
+            )
+            if not await repo.advance_review_stage(
+                advanced, expected_stage=ReviewStage.SEARCH_ARXIV.value
+            ):
+                raise RunNotFoundError(run_id)
+            await session.commit()

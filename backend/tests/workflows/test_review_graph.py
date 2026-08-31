@@ -115,7 +115,7 @@ async def test_workflow_version_mismatch_is_permanent_data_error() -> None:
 
     runtime = ReviewWorkflowRuntime(ReviewGraphFactory(node), InMemorySaver())
     state = _state("run-1")
-    state["workflow_version"] = "review.v2"
+    state["workflow_version"] = "review.v3"
     with pytest.raises(CheckpointDataError):
         await runtime.start(state)
 

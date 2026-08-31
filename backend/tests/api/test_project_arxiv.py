@@ -93,6 +93,7 @@ async def test_search_returns_public_metadata_without_pdf_url(client) -> None:
             "categories": ["cs.RO"],
             "published_at": "2026-08-31T00:00:00Z",
             "updated_at": "2026-08-31T00:00:00Z",
+            "page_count": None,
         }
     ]
 

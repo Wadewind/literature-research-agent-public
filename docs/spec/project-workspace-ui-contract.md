@@ -85,6 +85,10 @@ Conversation rail | 新建问答与范围选择 | Scope / Evidence Margin
 - `/reviews` 路由保持兼容，但用户可见名称统一为“文献研究”。`review.v1` 仍保留自动检索导入行为，
   以保证既有 Run 和固定 Workflow Profile 可重放；独立文献库检索不伪装成 Review Run。
 
+新建任务使用 `review.v2`：文献研究首页负责选择本次使用的 0–3 篇 Project 论文，并控制是否在不足上限时
+检索 arXiv 候选；0 篇且关闭候选检索时不能开始。候选结果在文献研究详情中作为来源筛选 HITL 展示，用户
+确认后才允许下载和导入。文献库继续承担长期 Project Paper 管理，不为 Workflow 临时候选增加页面状态。
+
 ## 5. 文献问答详情工作区
 
 `/chat/:conversationId` 使用桌面 viewport 三栏：

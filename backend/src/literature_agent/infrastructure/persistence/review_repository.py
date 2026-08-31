@@ -14,6 +14,7 @@ from literature_agent.domain.review import (
     HumanInput,
     HumanInputAction,
     HumanInputRequest,
+    HumanInputRequestKind,
     HumanInputRequestStatus,
     ReviewDependency,
     ReviewDependencyStatus,
@@ -22,6 +23,7 @@ from literature_agent.domain.review import (
     ReviewOutputType,
     ReviewRun,
     ReviewSource,
+    ReviewSourceKind,
     ReviewSourceStatus,
     ReviewStage,
     ReviewStepKey,
@@ -122,6 +124,7 @@ def _source_to_domain(value: ReviewSourceORM) -> ReviewSource:
         failure_code=value.failure_code,
         created_at=value.created_at,
         updated_at=value.updated_at,
+        source_kind=ReviewSourceKind(value.source_kind),
     )
 
 
@@ -165,6 +168,7 @@ def _request_to_domain(value: HumanInputRequestORM) -> HumanInputRequest:
         resolved_input_id=value.resolved_input_id,
         created_at=value.created_at,
         resolved_at=value.resolved_at,
+        request_kind=HumanInputRequestKind(value.request_kind),
     )
 
 
@@ -431,6 +435,7 @@ class SqlalchemyReviewRepository(ReviewRepository):
             ReviewSourceORM(
                 source_id=source.source_id,
                 review_run_id=source.review_run_id,
+                source_kind=source.source_kind.value,
                 arxiv_id=source.arxiv_id,
                 arxiv_version=source.arxiv_version,
                 rank=source.rank,
@@ -686,6 +691,7 @@ class SqlalchemyReviewRepository(ReviewRepository):
                 request_id=request.request_id,
                 review_run_id=request.review_run_id,
                 request_version=request.request_version,
+                request_kind=request.request_kind.value,
                 outline_output_id=request.outline_output_id,
                 status=request.status.value,
                 allowed_actions=[x.value for x in request.allowed_actions],

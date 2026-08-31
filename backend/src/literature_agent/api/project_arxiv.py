@@ -12,7 +12,12 @@ from literature_agent.application.ingestion_service import IngestionService, Upl
 from literature_agent.application.project_arxiv_library_service import (
     ProjectArxivLibraryService,
 )
-from literature_agent.domain.arxiv import ArxivError, ArxivQueryValidationError, ArxivSearchQuery
+from literature_agent.domain.arxiv import (
+    ArxivError,
+    ArxivQueryValidationError,
+    ArxivSearchQuery,
+    normalize_arxiv_search_input,
+)
 from literature_agent.domain.exceptions import (
     FileValidationError,
     IdempotencyConflictError,
@@ -38,6 +43,7 @@ class ArxivPaperResponse(BaseModel):
     categories: list[str]
     published_at: datetime
     updated_at: datetime
+    page_count: int | None
 
 
 class ImportArxivPaperRequest(BaseModel):
@@ -79,7 +85,9 @@ async def search_arxiv_papers(
         papers = await service.search(
             actor=actor,
             project_id=project_id,
-            query=ArxivSearchQuery(expression=q, max_results=max_results),
+            query=ArxivSearchQuery(
+                expression=normalize_arxiv_search_input(q), max_results=max_results
+            ),
         )
         return [
             ArxivPaperResponse(
@@ -92,6 +100,7 @@ async def search_arxiv_papers(
                 categories=list(paper.categories),
                 published_at=paper.published_at,
                 updated_at=paper.updated_at,
+                page_count=paper.page_count,
             )
             for paper in papers
         ]

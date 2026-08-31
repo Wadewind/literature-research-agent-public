@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 from literature_agent.api.dependencies import ActorDep, CorrelationIdDep
 from literature_agent.application.review_outline_service import HumanOutlineInputService
 from literature_agent.application.review_query_service import ReviewOutputType, ReviewQueryService
+from literature_agent.application.review_source_selection_service import (
+    ReviewSourceSelectionService,
+)
 from literature_agent.application.review_workflow_service import ReviewWorkflowService
 from literature_agent.application.run_service import RunService
 from literature_agent.domain.exceptions import (
@@ -21,11 +24,21 @@ from literature_agent.domain.exceptions import (
     ReviewOutlineScopeError,
     RunNotFoundError,
 )
+from literature_agent.infrastructure.persistence.chunk_set_repository import (
+    SqlalchemyChunkSetRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import SqlalchemyEventRepository
 from literature_agent.infrastructure.persistence.idempotency_repository import (
     SqlalchemyIdempotencyRepository,
 )
 from literature_agent.infrastructure.persistence.outbox_repository import SqlalchemyOutboxRepository
+from literature_agent.infrastructure.persistence.paper_repository import SqlalchemyPaperRepository
+from literature_agent.infrastructure.persistence.paper_version_repository import (
+    SqlalchemyPaperVersionRepository,
+)
+from literature_agent.infrastructure.persistence.project_paper_repository import (
+    SqlalchemyProjectPaperRepository,
+)
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
 )
@@ -37,6 +50,8 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}/reviews", tags=["review
 
 class ReviewCreateRequest(BaseModel):
     research_question: str = Field(min_length=1, max_length=4_000)
+    paper_version_ids: list[str] = Field(default_factory=list, max_length=3)
+    auto_search_candidates: bool = True
 
 
 class OutlineInputRequest(BaseModel):
@@ -45,6 +60,13 @@ class OutlineInputRequest(BaseModel):
     outline_output_id: str = Field(min_length=1)
     action: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceSelectionInputRequest(BaseModel):
+    request_id: str = Field(min_length=1)
+    request_version: int = Field(ge=1)
+    candidate_output_id: str = Field(min_length=1)
+    selected_source_ids: list[str] = Field(default_factory=list, max_length=3)
 
 
 async def get_review_query_service(request: Request) -> ReviewQueryService:
@@ -67,6 +89,10 @@ async def get_review_workflow_service(request: Request) -> ReviewWorkflowService
         outbox_repo_factory=SqlalchemyOutboxRepository,
         idempotency_repo_factory=SqlalchemyIdempotencyRepository,
         review_repo_factory=SqlalchemyReviewRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
         event_notifier=state.event_notifier,
     )
 
@@ -74,6 +100,18 @@ async def get_review_workflow_service(request: Request) -> ReviewWorkflowService
 async def get_outline_input_service(request: Request) -> HumanOutlineInputService:
     state = request.app.state.app_state
     return HumanOutlineInputService(
+        session_factory=state.session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=SqlalchemyReviewRepository,
+        event_repo_factory=SqlalchemyEventRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        event_notifier=state.event_notifier,
+    )
+
+
+async def get_source_selection_service(request: Request) -> ReviewSourceSelectionService:
+    state = request.app.state.app_state
+    return ReviewSourceSelectionService(
         session_factory=state.session_factory,
         run_repo_factory=SqlalchemyRunRepository,
         review_repo_factory=SqlalchemyReviewRepository,
@@ -96,6 +134,9 @@ async def get_review_run_service(request: Request) -> RunService:
 ReviewQueryDep = Annotated[ReviewQueryService, Depends(get_review_query_service)]
 ReviewWorkflowDep = Annotated[ReviewWorkflowService, Depends(get_review_workflow_service)]
 OutlineInputDep = Annotated[HumanOutlineInputService, Depends(get_outline_input_service)]
+SourceSelectionDep = Annotated[
+    ReviewSourceSelectionService, Depends(get_source_selection_service)
+]
 ReviewRunDep = Annotated[RunService, Depends(get_review_run_service)]
 
 
@@ -151,7 +192,13 @@ async def create_review(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 Idempotency-Key 请求头")
     try:
         result = await service.create_review_run(
-            actor, project_id, body.research_question, idempotency_key, correlation_id
+            actor,
+            project_id,
+            body.research_question,
+            idempotency_key,
+            correlation_id,
+            body.paper_version_ids,
+            body.auto_search_candidates,
         )
     except (ProjectNotFoundError, RunNotFoundError):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project 不存在") from None
@@ -237,6 +284,20 @@ async def evidence_matrix(
     )
 
 
+@router.get("/{run_id}/source-candidates")
+async def source_candidates(
+    project_id: str, run_id: str, actor: ActorDep, query: ReviewQueryDep
+) -> dict:
+    return await _output(
+        project_id,
+        run_id,
+        actor,
+        query,
+        ReviewOutputType.SOURCE_CANDIDATES,
+        "source-candidates",
+    )
+
+
 @router.get("/{run_id}/outline")
 async def outline(project_id: str, run_id: str, actor: ActorDep, query: ReviewQueryDep) -> dict:
     return await _output(project_id, run_id, actor, query, ReviewOutputType.OUTLINE, "outline")
@@ -285,6 +346,37 @@ async def submit_outline_input(
         IdempotencyConflictError,
         ValueError,
     ) as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    return _value(asdict(result))
+
+
+@router.post("/{run_id}/source-selection")
+async def submit_source_selection(
+    project_id: str,
+    run_id: str,
+    body: SourceSelectionInputRequest,
+    actor: ActorDep,
+    service: SourceSelectionDep,
+    correlation_id: CorrelationIdDep,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict:
+    if idempotency_key is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 Idempotency-Key 请求头")
+    try:
+        result = await service.submit(
+            run_id=run_id,
+            project_id=project_id,
+            owner_id=actor.owner_id,
+            request_id=body.request_id,
+            request_version=body.request_version,
+            candidate_output_id=body.candidate_output_id,
+            selected_source_ids=body.selected_source_ids,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+        )
+    except RunNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Review 不存在") from None
+    except (HumanInputConflictError, IdempotencyConflictError, ValueError) as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return _value(asdict(result))
 

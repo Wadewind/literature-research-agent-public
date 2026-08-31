@@ -6,6 +6,7 @@ from literature_agent.domain.arxiv import (
     ArxivQueryValidationError,
     ArxivSearchQuery,
     DownloadedPdf,
+    normalize_arxiv_search_input,
     parse_versioned_arxiv_id,
 )
 
@@ -36,6 +37,34 @@ def test_parse_modern_and_legacy_versioned_ids() -> None:
         "v2",
     )
     assert parse_versioned_arxiv_id("hep-th/9901001v1") == ("hep-th/9901001", "v1")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2601.02163", "id:2601.02163"),
+        ("2601.02163v2", "id:2601.02163"),
+        ("https://arxiv.org/abs/2601.02163v2", "id:2601.02163"),
+        ("https://arxiv.org/pdf/2601.02163v2.pdf", "id:2601.02163"),
+        ("hep-th/9901001v1", "id:hep-th/9901001"),
+        ("ti:path planning AND cat:cs.RO", "ti:path planning AND cat:cs.RO"),
+    ],
+)
+def test_normalize_arxiv_search_input(value: str, expected: str) -> None:
+    assert normalize_arxiv_search_input(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://evil.example/abs/2601.02163",
+        "https://arxiv.org/help/2601.02163",
+        "https://arxiv.org/abs/2601.02163?download=1",
+    ],
+)
+def test_normalize_arxiv_search_input_rejects_untrusted_or_invalid_url(value: str) -> None:
+    with pytest.raises(ArxivQueryValidationError):
+        normalize_arxiv_search_input(value)
 
 
 @pytest.mark.parametrize(

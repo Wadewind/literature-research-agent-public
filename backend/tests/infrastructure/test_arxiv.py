@@ -57,7 +57,8 @@ def _entry_with_pdf(identifier: str, pdf_url: str) -> str:
 
 def _feed(*entries: str) -> bytes:
     return (
-        '<feed xmlns="http://www.w3.org/2005/Atom">'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:arxiv="http://arxiv.org/schemas/atom">'
         + "".join(entries)
         + "</feed>"
     ).encode()
@@ -139,6 +140,26 @@ async def test_search_canonicalizes_official_http_pdf_link(
     )
     papers = await gateway.search(ArxivSearchQuery("all:agents"))
     assert papers[0].pdf_url == "https://export.arxiv.org/pdf/2401.00001v1.pdf"
+
+
+@pytest.mark.asyncio
+async def test_search_extracts_declared_page_count_from_arxiv_comment(
+    httpx2_mock: respx.Router, gateway: HttpxArxivGateway
+) -> None:
+    entry = _entry("2401.00001v1").replace(
+        "</entry>", "<arxiv:comment>18 pages, 4 figures</arxiv:comment></entry>"
+    )
+    httpx2_mock.get(API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=_feed(entry),
+            headers={"content-type": "application/atom+xml"},
+        )
+    )
+
+    papers = await gateway.search(ArxivSearchQuery("id:2401.00001"))
+
+    assert papers[0].page_count == 18
 
 
 @pytest.mark.asyncio

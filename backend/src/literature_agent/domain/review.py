@@ -28,6 +28,7 @@ class ReviewStage(StrEnum):
     VALIDATE_REQUEST = "validate_request"
     FORMULATE_SEARCH_STRATEGY = "formulate_search_strategy"
     SEARCH_ARXIV = "search_arxiv"
+    REVIEW_SOURCES = "review_sources"
     IMPORT_ARXIV_PAPERS = "import_arxiv_papers"
     WAIT_FOR_INGESTION = "wait_for_ingestion"
     BUILD_EVIDENCE_MATRIX = "build_evidence_matrix"
@@ -77,6 +78,14 @@ class ReviewSourceStatus(StrEnum):
     IMPORTING = "importing"
     READY = "ready"
     FAILED = "failed"
+    REJECTED = "rejected"
+
+
+class ReviewSourceKind(StrEnum):
+    """Review 来源进入任务时的来源类型。"""
+
+    ARXIV = "arxiv"
+    PROJECT = "project"
 
 
 class ReviewDependencyType(StrEnum):
@@ -99,6 +108,7 @@ class ReviewOutputType(StrEnum):
     """可版本化 Review Output 类型。"""
 
     SEARCH_STRATEGY = "search_strategy"
+    SOURCE_CANDIDATES = "source_candidates"
     EVIDENCE_MATRIX = "evidence_matrix"
     OUTLINE = "outline"
     SECTION = "section"
@@ -120,6 +130,14 @@ class HumanInputAction(StrEnum):
     APPROVE = "approve"
     EDIT = "edit"
     FEEDBACK = "feedback"
+    SELECT_SOURCES = "select_sources"
+
+
+class HumanInputRequestKind(StrEnum):
+    """人工输入节点的业务类型。"""
+
+    OUTLINE = "outline"
+    SOURCE_SELECTION = "source_selection"
 
 
 class ArtifactType(StrEnum):
@@ -230,12 +248,12 @@ class RunStep:
 
 @dataclass(frozen=True, slots=True)
 class ReviewSource:
-    """Review Run 自动纳入的一条 arXiv 来源。"""
+    """Review Run 固定的一条项目来源或 arXiv 候选。"""
 
     source_id: str
     review_run_id: str
-    arxiv_id: str
-    arxiv_version: str
+    arxiv_id: str | None
+    arxiv_version: str | None
     rank: int
     metadata_snapshot: dict
     status: ReviewSourceStatus
@@ -244,6 +262,7 @@ class ReviewSource:
     failure_code: str | None
     created_at: datetime
     updated_at: datetime
+    source_kind: ReviewSourceKind = ReviewSourceKind.ARXIV
 
     def mark_importing(self, paper_id: str, paper_version_id: str) -> "ReviewSource":
         """绑定可信 Paper/Version，并进入等待解析索引的导入状态。"""
@@ -285,6 +304,18 @@ class ReviewSource:
             self,
             status=ReviewSourceStatus.FAILED,
             failure_code=failure_code,
+            updated_at=datetime.now(UTC),
+        )
+
+    def reject(self) -> "ReviewSource":
+        """在下载前拒绝一个 arXiv 候选。"""
+        if self.source_kind is not ReviewSourceKind.ARXIV:
+            raise ValueError("Project 来源不能作为 arXiv 候选拒绝")
+        if self.status is not ReviewSourceStatus.DISCOVERED:
+            raise ValueError("只有 discovered 候选可以拒绝")
+        return replace(
+            self,
+            status=ReviewSourceStatus.REJECTED,
             updated_at=datetime.now(UTC),
         )
 
@@ -344,7 +375,7 @@ class ReviewOutput:
 
 @dataclass(frozen=True, slots=True)
 class HumanInputRequest:
-    """一次版本化的大纲人工输入请求。"""
+    """一次版本化的顺序人工输入请求。"""
 
     request_id: str
     review_run_id: str
@@ -355,6 +386,7 @@ class HumanInputRequest:
     resolved_input_id: str | None
     created_at: datetime
     resolved_at: datetime | None
+    request_kind: HumanInputRequestKind = HumanInputRequestKind.OUTLINE
 
     def resolve(self, human_input_id: str) -> "HumanInputRequest":
         """将开放请求解决一次；重复解决属于非法业务操作。"""
@@ -518,6 +550,39 @@ def create_review_source(
         failure_code=None,
         created_at=now,
         updated_at=now,
+        source_kind=ReviewSourceKind.ARXIV,
+    )
+
+
+def create_project_review_source(
+    *,
+    review_run_id: str,
+    paper_id: str,
+    paper_version_id: str,
+    rank: int,
+    metadata_snapshot: dict,
+) -> ReviewSource:
+    """创建一条已经完成 Project 范围校验和索引校验的来源。"""
+    if not paper_id or not paper_version_id:
+        raise ValueError("Project 来源必须固定 Paper 与 PaperVersion")
+    if rank < 1:
+        raise ValueError("来源 rank 必须从 1 开始")
+    _validate_json_object(metadata_snapshot, "Project 来源快照", _MAX_METADATA_BYTES)
+    now = datetime.now(UTC)
+    return ReviewSource(
+        source_id=str(uuid4()),
+        review_run_id=review_run_id,
+        arxiv_id=None,
+        arxiv_version=None,
+        rank=rank,
+        metadata_snapshot=dict(metadata_snapshot),
+        status=ReviewSourceStatus.READY,
+        paper_id=paper_id,
+        paper_version_id=paper_version_id,
+        failure_code=None,
+        created_at=now,
+        updated_at=now,
+        source_kind=ReviewSourceKind.PROJECT,
     )
 
 
@@ -590,8 +655,9 @@ def create_human_input_request(
     request_version: int,
     outline_output_id: str,
     allowed_actions: list[HumanInputAction | str],
+    request_kind: HumanInputRequestKind | str = HumanInputRequestKind.OUTLINE,
 ) -> HumanInputRequest:
-    """创建一次大纲人工输入请求。"""
+    """创建一次顺序人工输入请求。"""
     if request_version < 1:
         raise ValueError("HumanInputRequest 版本必须从 1 开始")
     actions = tuple(HumanInputAction(action) for action in allowed_actions)
@@ -607,6 +673,7 @@ def create_human_input_request(
         resolved_input_id=None,
         created_at=datetime.now(UTC),
         resolved_at=None,
+        request_kind=HumanInputRequestKind(request_kind),
     )
 
 

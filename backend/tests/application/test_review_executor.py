@@ -138,6 +138,7 @@ async def test_pending_source_pauses_outside_langgraph(monkeypatch) -> None:
         outline_decision_service=unexpected,
         section_service=unexpected,
         export_service=unexpected,
+        source_selection_service=unexpected,
         checkpoint_store=unexpected,
     )
     recorder = Mock()
@@ -157,6 +158,96 @@ async def test_pending_source_pauses_outside_langgraph(monkeypatch) -> None:
         (ReviewStage.IMPORT_ARXIV_PAPERS, "succeeded"),
         (ReviewStage.WAIT_FOR_INGESTION, "succeeded"),
     ]
+
+
+async def test_review_v2_searches_candidates_then_pauses_before_import() -> None:
+    runs = FakeRunRepository()
+    reviews = FakeReviewRepository()
+    run = replace(
+        create_run("project-1", "owner-1", RunType.REVIEW).transition_to(RunStatus.RUNNING),
+        run_id="review-v2",
+    )
+    await runs.add(run)
+    reviews.authorize_run(run.run_id, run.project_id, run.owner_id)
+    review = replace(
+        create_review_run(
+            run_id=run.run_id,
+            research_question="研究问题",
+            workflow_version="review.v2",
+            model_profile_version="review-default.v3",
+            prompt_versions={"search_strategy": "search_strategy.v1"},
+            config_snapshot={
+                "source_limit": 3,
+                "candidate_limit": 10,
+                "auto_search_candidates": True,
+            },
+        ),
+        current_stage=ReviewStage.SEARCH_ARXIV,
+    )
+    await reviews.add_review_run(review)
+    strategy_output = create_review_output(
+        review_run_id=run.run_id,
+        output_type=ReviewOutputType.SEARCH_STRATEGY,
+        output_key="search-strategy",
+        version=1,
+        schema_version="search-strategy.v1",
+        payload={"arxiv_query": "all:agent", "dimensions": []},
+        idempotency_key="review-v2:strategy",
+    )
+
+    class Arxiv:
+        import_calls = 0
+
+        async def search_sources(self, **kwargs):
+            assert kwargs["query"].max_results == 10
+            assert kwargs["rank_offset"] == 0
+            await reviews.add_source(
+                create_review_source(
+                    review_run_id=run.run_id,
+                    arxiv_id="2601.00001",
+                    arxiv_version="v1",
+                    rank=1,
+                    metadata_snapshot={"title": "候选论文"},
+                )
+            )
+            reviews.review_runs[run.run_id] = replace(
+                reviews.review_runs[run.run_id],
+                current_stage=ReviewStage.IMPORT_ARXIV_PAPERS,
+            )
+
+        async def import_sources(self, **_kwargs):
+            self.import_calls += 1
+
+    class Selection:
+        calls = 0
+
+        async def pause(self, **kwargs):
+            self.calls += 1
+            assert kwargs["run_id"] == run.run_id
+
+    arxiv = Arxiv()
+    selection = Selection()
+    unexpected = _Unexpected()
+    executor = ReviewExecutor(
+        session_factory=fake_session,
+        run_repo_factory=lambda _session: runs,
+        review_repo_factory=lambda _session: reviews,
+        strategy_service=_Strategy(strategy_output),
+        arxiv_service=arxiv,
+        dependency_wait_service=unexpected,
+        matrix_service=unexpected,
+        outline_service=unexpected,
+        outline_decision_service=unexpected,
+        section_service=unexpected,
+        export_service=unexpected,
+        source_selection_service=selection,
+        checkpoint_store=unexpected,
+    )
+
+    await executor.execute(run, "corr-v2")
+
+    assert selection.calls == 1
+    assert arxiv.import_calls == 0
 
 
 @pytest.mark.parametrize("source_state", ["failed", "empty"])
@@ -223,6 +314,7 @@ async def test_no_reviewable_sources_fail_without_dependency_wait(source_state: 
         outline_decision_service=unexpected,
         section_service=unexpected,
         export_service=unexpected,
+        source_selection_service=unexpected,
         checkpoint_store=unexpected,
     )
 
@@ -400,6 +492,7 @@ async def test_human_resume_replays_pregraph_services_without_duplicate_external
         outline_decision_service=Decision(),
         section_service=Sections(),
         export_service=export,
+        source_selection_service=_Unexpected(),
         checkpoint_store=_CheckpointStore(),
     )
 
@@ -497,6 +590,7 @@ async def test_corrupt_checkpoint_is_not_replaced_with_new_graph(monkeypatch) ->
         outline_decision_service=unexpected,
         section_service=unexpected,
         export_service=unexpected,
+        source_selection_service=unexpected,
         checkpoint_store=_CheckpointStore(),
     )
 

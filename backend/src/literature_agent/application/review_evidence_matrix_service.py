@@ -52,7 +52,7 @@ from literature_agent.domain.review_evidence_matrix import (
 from literature_agent.domain.run import RunStatus, RunType
 
 PROMPT_VERSION = "review-evidence-extraction.v1"
-WORKFLOW_VERSION = "review.v1"
+SUPPORTED_WORKFLOW_VERSIONS = frozenset({"review.v1", "review.v2"})
 SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
     {"review-default.v1", "review-default.v2", "review-default.v3"}
 )
@@ -417,7 +417,7 @@ class ReviewEvidenceMatrixService[TSession: Session]:
             ):
                 raise RunNotFoundError(run_id)
             if (
-                review.workflow_version != WORKFLOW_VERSION
+                review.workflow_version not in SUPPORTED_WORKFLOW_VERSIONS
                 or review.model_profile_version not in SUPPORTED_MODEL_PROFILE_VERSIONS
                 or review.prompt_versions.get("evidence_extract") != PROMPT_VERSION
             ):

@@ -77,6 +77,9 @@ from literature_agent.application.review_outline_service import (
 )
 from literature_agent.application.review_search_strategy_service import ReviewSearchStrategyService
 from literature_agent.application.review_section_service import ReviewSectionService
+from literature_agent.application.review_source_selection_service import (
+    ReviewSourceSelectionService,
+)
 from literature_agent.application.run_dispatcher import RunDispatcher
 from literature_agent.application.run_execution_service import RunExecutionService
 from literature_agent.application.run_reconcile_service import RunReconcileService
@@ -873,6 +876,14 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         review_repo_factory=review_repo,
         event_notifier=event_notifier,
     )
+    source_selection_service = ReviewSourceSelectionService(
+        session_factory=session_factory,
+        run_repo_factory=SqlalchemyRunRepository,
+        review_repo_factory=review_repo,
+        event_repo_factory=SqlalchemyEventRepository,
+        outbox_repo_factory=SqlalchemyOutboxRepository,
+        event_notifier=event_notifier,
+    )
     matrix_service = ReviewEvidenceMatrixService(
         session_factory=session_factory,
         run_repo_factory=SqlalchemyRunRepository,
@@ -935,6 +946,7 @@ async def _startup(ctx: dict[str, Any], settings: Settings) -> None:
         outline_decision_service=outline_decision,
         section_service=section_service,
         export_service=export_service,
+        source_selection_service=source_selection_service,
         checkpoint_store=PostgresCheckpointStore(settings.database_url),
     )
     agent_runtime_resources = AsyncExitStack()

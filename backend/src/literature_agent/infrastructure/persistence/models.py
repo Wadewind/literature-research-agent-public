@@ -1796,7 +1796,7 @@ class RunStepORM(Base):
 
 
 class ReviewSourceORM(Base):
-    """Review Run 自动纳入的 arXiv 来源。"""
+    """Review Run 固定的项目来源或 arXiv 候选。"""
 
     __tablename__ = "review_sources"
 
@@ -1804,8 +1804,9 @@ class ReviewSourceORM(Base):
     review_run_id: Mapped[str] = mapped_column(
         ForeignKey("review_runs.run_id"), index=True, nullable=False
     )
-    arxiv_id: Mapped[str] = mapped_column(String(100), nullable=False)
-    arxiv_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="arxiv")
+    arxiv_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    arxiv_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     rank: Mapped[int] = mapped_column(nullable=False)
     metadata_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -1820,8 +1821,19 @@ class ReviewSourceORM(Base):
     __table_args__ = (
         CheckConstraint("rank >= 1", name="ck_review_sources_rank_positive"),
         CheckConstraint(
-            "status IN ('discovered','importing','ready','failed')",
+            "status IN ('discovered','importing','ready','failed','rejected')",
             name="ck_review_sources_status",
+        ),
+        CheckConstraint(
+            "source_kind IN ('arxiv','project')",
+            name="ck_review_sources_kind",
+        ),
+        CheckConstraint(
+            "(source_kind = 'arxiv' AND arxiv_id IS NOT NULL AND arxiv_version IS NOT NULL) "
+            "OR (source_kind = 'project' AND arxiv_id IS NULL AND arxiv_version IS NULL "
+            "AND paper_id IS NOT NULL "
+            "AND paper_version_id IS NOT NULL)",
+            name="ck_review_sources_identity",
         ),
         UniqueConstraint(
             "review_run_id",
@@ -1944,6 +1956,7 @@ class HumanInputRequestORM(Base):
         ForeignKey("review_runs.run_id"), index=True, nullable=False
     )
     request_version: Mapped[int] = mapped_column(nullable=False)
+    request_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="outline")
     outline_output_id: Mapped[str] = mapped_column(
         ForeignKey("review_outputs.output_id"), nullable=False
     )
@@ -1965,6 +1978,10 @@ class HumanInputRequestORM(Base):
         CheckConstraint(
             "status IN ('open','resolved','cancelled')",
             name="ck_human_input_requests_status",
+        ),
+        CheckConstraint(
+            "request_kind IN ('outline','source_selection')",
+            name="ck_human_input_requests_kind",
         ),
         UniqueConstraint(
             "review_run_id", "request_version", name="uq_human_input_requests_run_version"
@@ -2001,7 +2018,10 @@ class HumanInputORM(Base):
             ["human_input_requests.request_id", "human_input_requests.request_version"],
             name="fk_human_inputs_request_version",
         ),
-        CheckConstraint("action IN ('approve','edit','feedback')", name="ck_human_inputs_action"),
+        CheckConstraint(
+            "action IN ('approve','edit','feedback','select_sources')",
+            name="ck_human_inputs_action",
+        ),
         UniqueConstraint("request_id", name="uq_human_inputs_request"),
         UniqueConstraint(
             "submitted_by", "idempotency_key", name="uq_human_inputs_submitter_idempotency"

@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from urllib.parse import unquote, urlsplit
 
 _ALLOWED_FIELDS = frozenset({"all", "ti", "au", "abs", "co", "jr", "cat", "rn", "id"})
 _FIELD_PATTERN = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z]+):")
@@ -13,6 +14,11 @@ _ARXIV_ID_PATTERN = re.compile(
     r"^(?P<base>(?:[a-z-]+(?:\.[A-Z]{2})?/\d{7}|\d{4}\.\d{4,5}))v(?P<version>[1-9]\d*)$",
     re.IGNORECASE,
 )
+_ARXIV_INPUT_ID_PATTERN = re.compile(
+    r"^(?P<base>(?:[a-z-]+(?:\.[A-Z]{2})?/\d{7}|\d{4}\.\d{4,5}))(?:v[1-9]\d*)?$",
+    re.IGNORECASE,
+)
+_ARXIV_INPUT_HOSTS = frozenset({"arxiv.org", "www.arxiv.org", "export.arxiv.org"})
 
 
 class ArxivSortBy(StrEnum):
@@ -97,6 +103,7 @@ class ArxivPaper:
     published_at: datetime
     updated_at: datetime
     pdf_url: str
+    page_count: int | None = None
 
     @property
     def versioned_id(self) -> str:
@@ -139,3 +146,25 @@ def parse_versioned_arxiv_id(value: str) -> tuple[str, str]:
     if match is None:
         raise ArxivError("arxiv_entry_id_invalid", temporary=False)
     return match.group("base"), f"v{match.group('version')}"
+
+
+def normalize_arxiv_search_input(value: str) -> str:
+    """把官方 URL 或 arXiv ID 归一化为精确查询，其余输入保留为检索表达式。"""
+    candidate = value.strip()
+    if "://" in candidate:
+        parsed = urlsplit(candidate)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname not in _ARXIV_INPUT_HOSTS:
+            raise ArxivQueryValidationError("arxiv_query_url_forbidden")
+        if parsed.query or parsed.fragment:
+            raise ArxivQueryValidationError("arxiv_query_url_invalid")
+        path = unquote(parsed.path).strip("/")
+        if path.startswith("abs/"):
+            candidate = path.removeprefix("abs/")
+        elif path.startswith("pdf/"):
+            candidate = path.removeprefix("pdf/").removesuffix(".pdf")
+        else:
+            raise ArxivQueryValidationError("arxiv_query_url_invalid")
+    match = _ARXIV_INPUT_ID_PATTERN.fullmatch(candidate)
+    if match is not None:
+        return f"id:{match.group('base')}"
+    return candidate

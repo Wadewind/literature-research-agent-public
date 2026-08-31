@@ -107,6 +107,7 @@ class ArxivProjectImportService[TSession: Session]:
         review_run_id: str,
         query: ArxivSearchQuery,
         correlation_id: str,
+        rank_offset: int = 0,
     ) -> list[ReviewSource]:
         """先授权并复用完成事实，再事务外检索、事务内固化快照。"""
         search_key = _search_idempotency_key(query)
@@ -154,7 +155,7 @@ class ArxivProjectImportService[TSession: Session]:
                     rank=rank,
                     metadata_snapshot=_metadata_snapshot(paper),
                 )
-                for rank, paper in enumerate(papers, start=1)
+                for rank, paper in enumerate(papers, start=rank_offset + 1)
             ]
             for source in sources:
                 await review_repo.add_source(source)
@@ -235,6 +236,8 @@ class ArxivProjectImportService[TSession: Session]:
 
         imported = ready = failed = 0
         for source in sources:
+            if source.status is ReviewSourceStatus.REJECTED:
+                continue
             if source.status in {ReviewSourceStatus.IMPORTING, ReviewSourceStatus.READY}:
                 imported += 1
                 ready += int(source.status is ReviewSourceStatus.READY)
@@ -242,6 +245,8 @@ class ArxivProjectImportService[TSession: Session]:
             if source.status is ReviewSourceStatus.FAILED:
                 failed += 1
                 continue
+            if source.arxiv_id is None or source.arxiv_version is None:
+                raise ValueError("arxiv_source_identity_missing")
             try:
                 downloaded = await self._arxiv.download_pdf(
                     str(source.metadata_snapshot["pdf_url"]),
@@ -353,7 +358,12 @@ class ArxivProjectImportService[TSession: Session]:
                 if review is None:
                     raise RunNotFoundError(review_run_id)
                 all_terminal = all(
-                    item.status in {ReviewSourceStatus.READY, ReviewSourceStatus.FAILED}
+                    item.status
+                    in {
+                        ReviewSourceStatus.READY,
+                        ReviewSourceStatus.FAILED,
+                        ReviewSourceStatus.REJECTED,
+                    }
                     for item in sources
                 )
                 if (
@@ -406,6 +416,8 @@ class ArxivProjectImportService[TSession: Session]:
                 raise RunNotFoundError(source_id)
             if source.status is not ReviewSourceStatus.DISCOVERED:
                 return source.status is ReviewSourceStatus.READY, None
+            if source.arxiv_id is None or source.arxiv_version is None:
+                raise ValueError("arxiv_source_identity_missing")
 
             version_repo = self._paper_version_repo_factory(session)
             await version_repo.acquire_owner_hash_lock(actor.owner_id, downloaded.content_hash)
@@ -693,6 +705,7 @@ def _metadata_snapshot(paper: ArxivPaper) -> dict:
         "published_at": paper.published_at.isoformat(),
         "updated_at": paper.updated_at.isoformat(),
         "pdf_url": paper.pdf_url,
+        "page_count": paper.page_count,
     }
 
 

@@ -29,7 +29,16 @@ from literature_agent.main import create_app
 class _Workflow:
     correlation_id = None
 
-    async def create_review_run(self, actor, project_id, question, key, correlation_id):
+    async def create_review_run(
+        self,
+        actor,
+        project_id,
+        question,
+        key,
+        correlation_id,
+        paper_version_ids,
+        auto_search_candidates,
+    ):
         self.correlation_id = correlation_id
         assert actor.owner_id == "user-1"
         assert (project_id, question, key, correlation_id) == (
@@ -38,6 +47,8 @@ class _Workflow:
             "create-1",
             "review-create-1",
         )
+        assert paper_version_ids == []
+        assert auto_search_candidates is True
         return CreateReviewRunResult("review-1", "queued")
 
 

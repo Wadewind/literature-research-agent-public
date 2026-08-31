@@ -29,6 +29,9 @@ from literature_agent.domain.review import (
     create_run_step,
 )
 from literature_agent.domain.run import RunType, create_run
+from literature_agent.infrastructure.persistence.chunk_set_repository import (
+    SqlalchemyChunkSetRepository,
+)
 from literature_agent.infrastructure.persistence.event_repository import (
     SqlalchemyEventRepository,
 )
@@ -38,6 +41,15 @@ from literature_agent.infrastructure.persistence.idempotency_repository import (
 from literature_agent.infrastructure.persistence.models import RunORM
 from literature_agent.infrastructure.persistence.outbox_repository import (
     SqlalchemyOutboxRepository,
+)
+from literature_agent.infrastructure.persistence.paper_repository import (
+    SqlalchemyPaperRepository,
+)
+from literature_agent.infrastructure.persistence.paper_version_repository import (
+    SqlalchemyPaperVersionRepository,
+)
+from literature_agent.infrastructure.persistence.project_paper_repository import (
+    SqlalchemyProjectPaperRepository,
 )
 from literature_agent.infrastructure.persistence.project_repository import (
     SqlalchemyProjectRepository,
@@ -566,6 +578,10 @@ async def test_review_creation_transaction_and_idempotency(db_engine) -> None:
         outbox_repo_factory=SqlalchemyOutboxRepository,
         idempotency_repo_factory=SqlalchemyIdempotencyRepository,
         review_repo_factory=SqlalchemyReviewRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
     )
     first = await service.create_review_run(
         ActorContext("user-1"),
@@ -624,6 +640,10 @@ async def test_review_creation_rolls_back_whole_bundle_on_failure(db_engine) -> 
         outbox_repo_factory=SqlalchemyOutboxRepository,
         idempotency_repo_factory=SqlalchemyIdempotencyRepository,
         review_repo_factory=_FailingReviewRepository,
+        paper_repo_factory=SqlalchemyPaperRepository,
+        paper_version_repo_factory=SqlalchemyPaperVersionRepository,
+        project_paper_repo_factory=SqlalchemyProjectPaperRepository,
+        chunk_set_repo_factory=SqlalchemyChunkSetRepository,
     )
     with pytest.raises(RuntimeError, match="模拟 ReviewRun 写入失败"):
         await service.create_review_run(

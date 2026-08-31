@@ -16,6 +16,38 @@ Project 工作区将 `/reviews` 的用户可见名称调整为“文献研究”
 检索产生普通 Project Paper 与 Ingestion Run，不创建 Review Run；未来若新增“只消费项目既有文献”的
 Review Profile，必须另行版本化契约，不能静默改变 `review.v1`。
 
+### 2026-08-31 `review.v2` 来源选择决策
+
+新建文献研究任务改用版本化的 `review.v2`；已有 `review.v1` Run、Event、Checkpoint 和恢复入口保持只读
+兼容。`review.v2` 在创建时允许从当前 Project 选择 0–3 个已固定的 PaperVersion，并可选择“来源不足时
+检索 arXiv 候选”。最终进入 Evidence Matrix 的来源上限仍为 3，但候选检索预算独立固定为 10，避免把
+最终来源上限误当成人工筛选候选数。
+
+关键不变量如下：
+
+- 0 个已选来源且关闭候选检索时拒绝创建 Run；1–2 个来源且关闭检索时允许以不足 3 篇继续；
+- Project 来源必须属于当前 owner/Project，创建时固定 PaperVersion，且必须已有 ready ChunkSet；
+- 自动补充只负责检索候选，不自动导入；Workflow 在下载和导入前进入来源筛选 HITL；
+- 用户最多确认 `3 - 已选来源数` 个候选，也可不再补充并用已有来源继续；没有任何有效来源时不能越过
+  来源筛选节点；
+- arXiv 候选与用户选择都持久化并可幂等重放；未选候选不得创建 Project Paper、Ingestion Run 或下载
+  正式 PDF；
+- 摘要来自 arXiv 元数据；页数优先从作者提交的 arXiv comment（如 `18 pages`）提取。comment 未声明时
+  显示“页数待下载后确认”，筛选前不为补齐页数而下载 PDF，也不得因此自动导入或丢弃候选；
+- 来源确认后复用既有解析、索引、Evidence Matrix、大纲 HITL、章节写作、引用校验与导出链路。
+
+```text
+研究问题 + 0–3 个 Project PaperVersion + 候选检索策略
+  → 校验并固定 Project 来源
+  → （需要补充）生成检索策略并搜索最多 10 个 arXiv 候选
+  → 来源筛选 HITL
+  → 仅导入确认候选
+  → 等待 Ingestion/Indexing
+  → Evidence Matrix
+  → 大纲 HITL
+  → 分章节写作、校验与导出
+```
+
 ## 1. 阶段目标
 
 本阶段在 Phase 2 已完成的文献导入、索引、检索、Evidence 和引用校验能力之上，实现一个固定、可持久化、可暂停恢复的文献综述 Workflow。
@@ -51,16 +83,18 @@ Review Profile，必须另行版本化契约，不能静默改变 `review.v1`。
 
 第一版只支持上述固定节点和固定跳转，不实现 Workflow Canvas、用户自定义节点、多 Agent 或动态工具规划。
 
-### 3.2 只使用 arXiv，并自动纳入结果
+### 3.2 只使用 arXiv；v1 自动纳入，v2 人工筛选
 
 - 论文发现、元数据和 PDF 下载统一使用 arXiv API/官方 PDF 地址；
-- 按检索排序自动导入前 N 篇，不设置“候选论文人工筛选”步骤；
+- `review.v1` 按检索排序自动导入前 N 篇；`review.v2` 检索最多 10 个候选，并在下载前等待人工筛选；
 - 不接入 OpenAlex、Crossref、Unpaywall 或多来源 OA 下载；
 - 部分论文下载或解析失败时允许使用其余成功论文继续；全部失败时终止为 `no_reviewable_papers`。
 
-`N` 是检索与下载预算，不是人工筛选候选数。初始默认值为 10，作为可校准的 Workflow Profile 参数保存到运行快照中。
+`review.v2` 的最终来源上限与候选检索预算分别为 3 和 10，并共同保存在运行快照中。
 
-### 3.3 只在大纲阶段引入 HITL
+### 3.3 顺序 HITL
+
+`review.v2` 先使用 `select_sources` 完成候选筛选；随后复用大纲阶段的以下动作：
 
 用户可以：
 
@@ -68,7 +102,7 @@ Review Profile，必须另行版本化契约，不能静默改变 `review.v1`。
 - `edit`：提交完整的结构化修订大纲，校验通过后开始写作；
 - `feedback`：提交反馈，由模型重新生成大纲并再次暂停。
 
-论文检索、下载和 Evidence Matrix 不引入人工审批。
+论文下载和 Evidence Matrix 不引入额外审批；来源筛选解决后才允许下载选中候选。
 
 ### 3.4 包含范围
 
@@ -82,7 +116,7 @@ Review Profile，必须另行版本化契约，不能静默改变 `review.v1`。
 
 ### 3.5 非范围
 
-- 候选论文人工筛选、纳排标准 UI；
+- 复杂纳排标准、批量自动评分和多轮筛选 UI；
 - 多学术检索源、多 OA 下载源和通用 URL 抓取；
 - 自动投稿格式、Word/LaTeX 导出和复杂引用样式切换；
 - 事实正确性的通用 LLM Judge；
@@ -118,6 +152,7 @@ Route 只处理 HTTP、身份和输入输出。应用服务组织授权、事务
 validate_request
   → formulate_search_strategy
   → search_arxiv
+  → review_sources（review.v2 且需要补充时）
   → import_arxiv_papers
   → wait_for_ingestion
   → build_evidence_matrix
@@ -143,7 +178,8 @@ validate_request
 
 生产实现把外部检索、下载、子 Run 创建和依赖等待放在 `ReviewExecutor` 的图外业务编排层；只有
 Outline HITL 到章节、引用、一致性、导出和终态收敛进入持久 LangGraph。这避免把释放 Worker 的
-`WAITING_DEPENDENCY` 伪装成 LangGraph Interrupt，也保持 Outline 是唯一 HITL。每次恢复会先重放
+`WAITING_DEPENDENCY` 伪装成 LangGraph Interrupt。来源筛选是图外顺序 HITL，大纲确认仍使用 LangGraph
+Interrupt。每次恢复会先重放
 Search Strategy、arXiv 导入和 Matrix 应用服务，但这些服务先复核持久 Step/Output/Source，因此不会
 重复调用模型、arXiv 或创建业务副作用。执行器只在明确查询到 Thread 尚无 checkpoint 时调用
 `start(initial_state)`；已有 checkpoint 一律 `resume`，损坏或非法 checkpoint 稳定失败，不能被当作
@@ -167,7 +203,7 @@ LangGraph Checkpoint  interrupt/crash 后恢复图执行的位置
 在现有状态机上增加：
 
 - `WAITING_DEPENDENCY`：等待论文 Ingestion/Indexing 形成可用 ChunkSet；
-- `WAITING_INPUT`：等待大纲人工输入。
+- `WAITING_INPUT`：等待来源筛选或大纲人工输入。
 
 典型转换：
 

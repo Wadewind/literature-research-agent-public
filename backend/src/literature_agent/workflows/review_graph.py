@@ -18,6 +18,7 @@ from literature_agent.domain.review import ReviewStage
 from literature_agent.metrics import observe_review_stage
 
 WORKFLOW_VERSION = "review.v1"
+SUPPORTED_WORKFLOW_VERSIONS = frozenset({"review.v1", "review.v2"})
 
 
 class ReviewGraphState(TypedDict):
@@ -270,8 +271,8 @@ class ReviewWorkflowRuntime:
 
     async def start(self, state: ReviewGraphState) -> ReviewGraphState:
         """仅用于首次执行；完整初始 State 不能作为恢复输入重复提交。"""
-        if state["workflow_version"] != WORKFLOW_VERSION:
-            raise CheckpointDataError("Workflow 版本与 review.v1 runtime 不匹配")
+        if state["workflow_version"] not in SUPPORTED_WORKFLOW_VERSIONS:
+            raise CheckpointDataError("Workflow 版本与 Review runtime 不匹配")
         return await self._invoke(state, state["review_run_id"])
 
     async def resume(self, review_run_id: str) -> ReviewGraphState:

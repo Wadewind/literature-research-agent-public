@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import TypeVar
 
 from literature_agent.application.event_notification import notify_run_event
+from literature_agent.application.ports.chunk_set_repository import ChunkSetRepository
 from literature_agent.application.ports.event_notifier import EventNotifier, NoopEventNotifier
 from literature_agent.application.ports.event_repository import EventRepository
 from literature_agent.application.ports.idempotency_repository import (
@@ -15,6 +16,9 @@ from literature_agent.application.ports.idempotency_repository import (
     IdempotencyRepository,
 )
 from literature_agent.application.ports.outbox_repository import OutboxRepository
+from literature_agent.application.ports.paper_repository import PaperRepository
+from literature_agent.application.ports.paper_version_repository import PaperVersionRepository
+from literature_agent.application.ports.project_paper_repository import ProjectPaperRepository
 from literature_agent.application.ports.project_repository import ProjectRepository
 from literature_agent.application.ports.review_repository import ReviewRepository
 from literature_agent.application.ports.run_repository import RunRepository
@@ -32,6 +36,7 @@ from literature_agent.domain.review import (
     ReviewStage,
     ReviewStepKey,
     ReviewStepStatus,
+    create_project_review_source,
     create_review_run,
     create_run_step,
 )
@@ -39,7 +44,7 @@ from literature_agent.domain.run import RunType, create_run
 
 TSession = TypeVar("TSession", bound=Session)
 
-WORKFLOW_VERSION = "review.v1"
+WORKFLOW_VERSION = "review.v2"
 MODEL_PROFILE_VERSION = "review-default.v3"
 PROMPT_VERSIONS = {
     "search_strategy": "search_strategy.v1",
@@ -50,6 +55,7 @@ PROMPT_VERSIONS = {
 }
 DEFAULT_CONFIG_SNAPSHOT = {
     "source_limit": 3,
+    "candidate_limit": 10,
     "minimum_ready_papers": 1,
     "full_text_token_threshold": 12_000,
     "retrieval_top_k_per_dimension": 5,
@@ -69,12 +75,19 @@ class CreateReviewRunResult:
     reused: bool = False
 
 
-def _request_hash(project_id: str, research_question: str) -> str:
+def _request_hash(
+    project_id: str,
+    research_question: str,
+    paper_version_ids: tuple[str, ...],
+    auto_search_candidates: bool,
+) -> str:
     """对影响创建语义的输入生成稳定指纹。"""
     payload = json.dumps(
         {
             "project_id": project_id,
             "research_question": research_question,
+            "paper_version_ids": paper_version_ids,
+            "auto_search_candidates": auto_search_candidates,
             "workflow_version": WORKFLOW_VERSION,
             "model_profile_version": MODEL_PROFILE_VERSION,
             "prompt_versions": PROMPT_VERSIONS,
@@ -99,6 +112,10 @@ class ReviewWorkflowService:
         outbox_repo_factory: Callable[[TSession], OutboxRepository],
         idempotency_repo_factory: Callable[[TSession], IdempotencyRepository],
         review_repo_factory: Callable[[TSession], ReviewRepository],
+        paper_repo_factory: Callable[[TSession], PaperRepository],
+        paper_version_repo_factory: Callable[[TSession], PaperVersionRepository],
+        project_paper_repo_factory: Callable[[TSession], ProjectPaperRepository],
+        chunk_set_repo_factory: Callable[[TSession], ChunkSetRepository],
         event_notifier: EventNotifier | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -108,6 +125,10 @@ class ReviewWorkflowService:
         self._outbox_repo_factory = outbox_repo_factory
         self._idempotency_repo_factory = idempotency_repo_factory
         self._review_repo_factory = review_repo_factory
+        self._paper_repo_factory = paper_repo_factory
+        self._paper_version_repo_factory = paper_version_repo_factory
+        self._project_paper_repo_factory = project_paper_repo_factory
+        self._chunk_set_repo_factory = chunk_set_repo_factory
         self._event_notifier = event_notifier or NoopEventNotifier()
 
     async def create_review_run(
@@ -117,6 +138,8 @@ class ReviewWorkflowService:
         research_question: str,
         idempotency_key: str,
         correlation_id: str,
+        paper_version_ids: list[str] | None = None,
+        auto_search_candidates: bool = True,
     ) -> CreateReviewRunResult:
         """原子创建通用 Run、Review 扩展、首个 Event 与 Outbox。
 
@@ -124,9 +147,20 @@ class ReviewWorkflowService:
         API 只需把强制的 ``Idempotency-Key`` 传入本服务。
         """
         question = research_question.strip()
+        selected_version_ids = tuple(dict.fromkeys(paper_version_ids or ()))
+        source_limit = int(DEFAULT_CONFIG_SNAPSHOT["source_limit"])
+        if len(selected_version_ids) != len(paper_version_ids or ()):
+            raise ValueError("所选论文不能重复")
+        if len(selected_version_ids) > source_limit:
+            raise ValueError(f"一次最多选择 {source_limit} 篇项目论文")
+        if not selected_version_ids and not auto_search_candidates:
+            raise ValueError("至少选择一篇项目论文，或开启来源不足时自动补充")
+        effective_auto_search = auto_search_candidates and len(selected_version_ids) < source_limit
         if not idempotency_key or len(idempotency_key) > _IDEMPOTENCY_KEY_MAX_LENGTH:
             raise ValueError("Idempotency-Key 不能为空且长度不得超过 255")
-        fingerprint = _request_hash(project_id, question)
+        fingerprint = _request_hash(
+            project_id, question, selected_version_ids, effective_auto_search
+        )
 
         async with self._session_factory() as session:
             idempotency_repo = self._idempotency_repo_factory(session)
@@ -151,6 +185,40 @@ class ReviewWorkflowService:
             if project.is_archived:
                 raise ProjectArchivedError(project_id)
 
+            selected_sources = []
+            for rank, version_id in enumerate(selected_version_ids, start=1):
+                version = await self._paper_version_repo_factory(session).get_by_id(version_id)
+                relation = await self._project_paper_repo_factory(session).get_by_version(
+                    project_id, version_id
+                )
+                if (
+                    version is None
+                    or version.owner_id != actor.owner_id
+                    or relation is None
+                    or relation.paper_id != version.paper_id
+                ):
+                    raise ValueError("所选论文不属于当前项目")
+                paper = await self._paper_repo_factory(session).get_by_id(version.paper_id)
+                ready_chunk_set = await self._chunk_set_repo_factory(
+                    session
+                ).get_ready_by_version(version_id)
+                if (
+                    paper is None
+                    or paper.owner_id != actor.owner_id
+                    or paper.is_archived
+                    or ready_chunk_set is None
+                ):
+                    raise ValueError("所选论文尚未完成解析与索引")
+                selected_sources.append(
+                    (rank, paper, version)
+                )
+
+            config_snapshot = {
+                **DEFAULT_CONFIG_SNAPSHOT,
+                "selected_paper_version_ids": list(selected_version_ids),
+                "auto_search_candidates": effective_auto_search,
+            }
+
             run = create_run(
                 project_id=project_id,
                 owner_id=actor.owner_id,
@@ -159,6 +227,8 @@ class ReviewWorkflowService:
                     "research_question": question,
                     "workflow_version": WORKFLOW_VERSION,
                     "model_profile_version": MODEL_PROFILE_VERSION,
+                    "paper_version_ids": list(selected_version_ids),
+                    "auto_search_candidates": effective_auto_search,
                 },
             )
             review_run = create_review_run(
@@ -167,7 +237,7 @@ class ReviewWorkflowService:
                 workflow_version=WORKFLOW_VERSION,
                 model_profile_version=MODEL_PROFILE_VERSION,
                 prompt_versions=PROMPT_VERSIONS,
-                config_snapshot=DEFAULT_CONFIG_SNAPSHOT,
+                config_snapshot=config_snapshot,
             )
             review_run = replace(
                 review_run,
@@ -178,7 +248,7 @@ class ReviewWorkflowService:
                 run_id=run.run_id,
                 step_key=ReviewStepKey.VALIDATE_REQUEST,
                 sequence=1,
-                idempotency_key=f"{run.run_id}:validate-request:review.v1",
+                idempotency_key=f"{run.run_id}:validate-request:{WORKFLOW_VERSION}",
                 input_refs={"workflow_version": WORKFLOW_VERSION},
             )
             validate_step = replace(
@@ -207,6 +277,21 @@ class ReviewWorkflowService:
             await run_repo.add(persisted_run)
             await session.flush()
             await review_repo.add_review_run(review_run)
+            for rank, paper, version in selected_sources:
+                await review_repo.add_source(
+                    create_project_review_source(
+                        review_run_id=run.run_id,
+                        paper_id=paper.paper_id,
+                        paper_version_id=version.version_id,
+                        rank=rank,
+                        metadata_snapshot={
+                            "title": paper.title,
+                            "authors": [],
+                            "published_at": None,
+                            "display_filename": version.display_filename,
+                        },
+                    )
+                )
             await review_repo.add_step(validate_step)
             await self._event_repo_factory(session).add(created_event)
             await self._outbox_repo_factory(session).add(create_outbox_entry(run.run_id))

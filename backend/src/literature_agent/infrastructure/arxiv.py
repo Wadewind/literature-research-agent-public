@@ -1,6 +1,7 @@
 """基于 httpx2 的官方 arXiv API/PDF Adapter。"""
 
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ _ARXIV = "{http://arxiv.org/schemas/atom}"
 _OFFICIAL_PDF_HOSTS = frozenset({"arxiv.org", "export.arxiv.org"})
 _API_MIN_INTERVAL_SECONDS = 3.0
 _MAX_RETRY_AFTER_SECONDS = 3600.0
+_PAGE_COUNT_PATTERN = re.compile(r"\b([1-9][0-9]{0,3})\s+pages?\b", re.IGNORECASE)
 
 
 class HttpxArxivGateway(ArxivGateway):
@@ -268,6 +270,7 @@ class HttpxArxivGateway(ArxivGateway):
             published_at=_parse_datetime(_required_text(entry, f"{_ATOM}published")),
             updated_at=_parse_datetime(_required_text(entry, f"{_ATOM}updated")),
             pdf_url=_canonical_pdf_url(raw_pdf_url, arxiv_id, version),
+            page_count=_page_count_from_comment(entry.findtext(f"{_ARXIV}comment")),
         )
 
 
@@ -283,6 +286,15 @@ def _parse_datetime(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ArxivError("arxiv_search_feed_invalid", temporary=False) from exc
+
+
+def _page_count_from_comment(comment: str | None) -> int | None:
+    """从 arXiv 作者备注中提取声明页数；缺失或异常时保持未知。"""
+    match = _PAGE_COUNT_PATTERN.search(comment or "")
+    if match is None:
+        return None
+    page_count = int(match.group(1))
+    return page_count if page_count <= 2_000 else None
 
 
 def _canonical_pdf_url(raw_url: str, arxiv_id: str, version: str) -> str:

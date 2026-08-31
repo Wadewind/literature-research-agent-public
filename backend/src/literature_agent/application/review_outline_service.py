@@ -33,6 +33,7 @@ from literature_agent.domain.review import (
     HumanInput,
     HumanInputAction,
     HumanInputRequest,
+    HumanInputRequestKind,
     HumanInputRequestStatus,
     ReviewOutput,
     ReviewOutputType,
@@ -62,7 +63,12 @@ PROMPT_VERSION = "outline_generate.v1"
 OUTLINE_SCHEMA_VERSION = "outline.v1"
 SEARCH_STRATEGY_SCHEMA_VERSION = "search-strategy.v1"
 EVIDENCE_MATRIX_SCHEMA_VERSION = "evidence-matrix.v1"
-WORKFLOW_VERSION = "review.v1"
+SUPPORTED_WORKFLOW_VERSIONS = frozenset({"review.v1", "review.v2"})
+OUTLINE_ACTIONS = (
+    HumanInputAction.APPROVE,
+    HumanInputAction.EDIT,
+    HumanInputAction.FEEDBACK,
+)
 SUPPORTED_MODEL_PROFILE_VERSIONS = frozenset(
     {"review-default.v1", "review-default.v2", "review-default.v3"}
 )
@@ -255,7 +261,7 @@ class ReviewOutlineService[TSession: Session]:
             ):
                 raise RunNotFoundError(run_id)
             if (
-                review.workflow_version != WORKFLOW_VERSION
+                review.workflow_version not in SUPPORTED_WORKFLOW_VERSIONS
                 or review.model_profile_version not in SUPPORTED_MODEL_PROFILE_VERSIONS
                 or review.prompt_versions.get("outline_generate") != PROMPT_VERSION
             ):
@@ -595,6 +601,7 @@ class ReviewOutlineService[TSession: Session]:
             review = await repo.get_review_run_scoped_for_update(run_id, project_id, owner_id)
             if run is None or review is None or run.project_id != project_id:
                 raise RunNotFoundError(run_id)
+            request_version = output.version + int(review.workflow_version == "review.v2")
             if run.status is RunStatus.WAITING_INPUT:
                 existing = await repo.get_open_human_input_request_scoped(
                     run_id, project_id, owner_id
@@ -602,8 +609,9 @@ class ReviewOutlineService[TSession: Session]:
                 if existing is None or existing.outline_output_id != output.output_id:
                     raise ReviewOutlineScopeError("等待状态缺少匹配的开放请求")
                 if (
-                    existing.request_version != output.version
-                    or existing.allowed_actions != tuple(HumanInputAction)
+                    existing.request_version != request_version
+                    or existing.request_kind is not HumanInputRequestKind.OUTLINE
+                    or existing.allowed_actions != OUTLINE_ACTIONS
                     or review.current_stage is not ReviewStage.REVIEW_OUTLINE
                     or review.current_outline_output_id != output.output_id
                     or output.output_type is not ReviewOutputType.OUTLINE
@@ -633,9 +641,10 @@ class ReviewOutlineService[TSession: Session]:
                 raise RunConcurrentModificationError(run_id)
             proposed = create_human_input_request(
                 review_run_id=run_id,
-                request_version=output.version,
+                request_version=request_version,
                 outline_output_id=output.output_id,
-                allowed_actions=list(HumanInputAction),
+                allowed_actions=list(OUTLINE_ACTIONS),
+                request_kind=HumanInputRequestKind.OUTLINE,
             )
             request = await repo.get_or_add_human_input_request(proposed)
             if (
@@ -788,6 +797,7 @@ class HumanOutlineInputService[TSession: Session]:
             )
             if (
                 request is None
+                or request.request_kind is not HumanInputRequestKind.OUTLINE
                 or request.status is not HumanInputRequestStatus.OPEN
                 or request.request_version != request_version
                 or request.outline_output_id != outline_output_id
@@ -815,7 +825,7 @@ class HumanOutlineInputService[TSession: Session]:
                 raise ReviewOutlineScopeError("HumanInput Request 的 Outline Output 非法") from exc
             try:
                 normalized_payload, approved_id = await self._normalize_action(
-                    repo, request, selected_action, payload, dimensions
+                    repo, request, selected_action, payload, dimensions, outputs
                 )
             except OutlineValidationError as exc:
                 raise HumanInputConflictError("human_input_payload_invalid") from exc
@@ -902,7 +912,7 @@ class HumanOutlineInputService[TSession: Session]:
         return keys
 
     @staticmethod
-    async def _normalize_action(repo, request, action, payload, dimensions):
+    async def _normalize_action(repo, request, action, payload, dimensions, outputs):
         if action not in request.allowed_actions:
             raise HumanInputConflictError("human_input_action_not_allowed")
         if action is HumanInputAction.APPROVE:
@@ -919,11 +929,16 @@ class HumanOutlineInputService[TSession: Session]:
         if not isinstance(payload, dict):
             raise HumanInputConflictError("edit_outline_invalid")
         outline = validate_outline(payload, allowed_dimension_keys=dimensions)
+        request_output = next(
+            (item for item in outputs if item.output_id == request.outline_output_id), None
+        )
+        if request_output is None or request_output.output_type is not ReviewOutputType.OUTLINE:
+            raise HumanInputConflictError("edit_outline_request_output_missing")
         output = create_review_output(
             review_run_id=request.review_run_id,
             output_type=ReviewOutputType.OUTLINE,
             output_key="outline",
-            version=request.request_version + 1,
+            version=request_output.version + 1,
             schema_version=OUTLINE_SCHEMA_VERSION,
             payload=outline.to_payload(),
             idempotency_key=f"{request.review_run_id}:outline-edit:{request.request_id}",
