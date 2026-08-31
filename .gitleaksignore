@@ -1,0 +1,21 @@
+# 完整历史审计确认的精确误报：固定 MCP Schema hash 与脱敏/幂等测试假值。
+# 使用 fingerprint 而不是目录级 allowlist，避免掩盖同一路径中的未来真实泄漏。
+06a0c74803b0c04342223b2207d44535f915cc1b:backend/tests/test_observability.py:generic-api-key:29
+499f8a0f067fdf7e5e43c411aa8ecefc0038c458:backend/src/literature_agent/infrastructure/agent/mcp_catalog.py:generic-api-key:32
+b32f877f90ccd16db85c514672f76385981ff0fe:backend/tests/application/test_agent_session_service.py:generic-api-key:39
+b32f877f90ccd16db85c514672f76385981ff0fe:backend/tests/application/test_agent_session_service.py:generic-api-key:47
+b424cdcf288cca2f79ae1a552e3828d9d4cad4f5:backend/tests/infrastructure/test_agent_tool_preview.py:curl-auth-header:9
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:450
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:456
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:473
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:486
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:506
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:524
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:544
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:559
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:572
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:577
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:594
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:600
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:615
+d3e9221bb0e4d3bf94b612f1775e7fc54d3c8214:backend/tests/application/test_conversation_service.py:generic-api-key:633
