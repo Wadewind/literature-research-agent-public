@@ -114,7 +114,7 @@
 
 ## 已确定事项
 
-- 2026-08-10：总体实施指南文件路径已与 `AGENTS.md` 统一为 `docs/spec/literature-review-agent-system-implementation-guide.md`。
+- 2026-08-10：总体实施指南文件路径统一为 `docs/spec/literature-review-agent-system-implementation-guide.md`。
 - 2026-08-10：采用 `backend/` 与 `web/` 的单仓库布局。Python 项目使用 `backend/src/literature_agent/` 包结构；前端在进入对应垂直切片时再创建 React/Vite 骨架。
 - 2026-08-13：Phase 0 以学习和 `notebook/` 中的隔离技术验证完成为准。容器、前端和生产工程骨架改为在实际功能切片需要时实现和验收，且不得把 notebook 实验直接视为生产实现。
 

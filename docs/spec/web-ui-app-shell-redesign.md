@@ -188,7 +188,7 @@
 - 本文档取代 `project-workspace-ui-contract.md` 第 3 节"共享 Project Chrome"（`ProjectWorkspaceHeader`
   + `ProjectNav` 方案）。实施切片 2 时必须同步改写该节为 sidebar + PageBar 描述，保持契约与代码一致。
 - 该契约其余各节（路由、问答范围、三栏工作区、resize 规则）继续有效，本次改造不触碰。
-- `AGENTS.md` 的技术基线、测试要求不变；本改造不引入新依赖。
+- 项目既有技术基线、测试要求不变；本改造不引入新依赖。
 
 ## 9. 当前实现锚点
 

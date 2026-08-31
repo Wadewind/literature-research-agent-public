@@ -1284,8 +1284,6 @@ literature-agent/
 │  │  ├─ modules/
 │  │  └─ decisions/
 │  └─ operations/
-├─ AGENTS.md
-├─ Makefile
 └─ README.md
 ```
 

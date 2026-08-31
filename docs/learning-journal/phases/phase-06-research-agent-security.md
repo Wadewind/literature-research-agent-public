@@ -888,7 +888,7 @@ deadline 才终止本轮。
 
 Deep Agents 子 Agent 和长期 Memory 在精简交付中保持关闭。任何把代码执行扩大到宿主、允许
 private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/网络 Profile、正式外部写产品能力或
-长期 Memory 的决定都必须单独更新本 Spec，并在满足 `AGENTS.md` 条件时创建 ADR。raw 公网通道可能
+长期 Memory 的决定都必须单独更新本 Spec，并在形成独立架构决策时创建 ADR。raw 公网通道可能
 产生写请求是已知风险，不被误记为已实现的产品能力或强制拒绝。
 
 2026-08-31 Real Browser 回归确认基础 Chrome 镜像自动访问 Google 会阻塞 Playwright MCP 首次 CDP

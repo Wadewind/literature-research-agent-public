@@ -671,7 +671,7 @@ GET /api/v1/projects/{project_id}/paper-versions/{version_id}/file
 4. 本地 Storage 孤儿资产和历史非 canonical 资产不在 Phase 1 自动删除；永久删除、引用检查与异步 GC
    原定延后到 Phase 4，后由 ADR-0004 调整为不属于 Demo-ready Core v1。
 
-如果实现需要改变 Run/Event 事实来源、Paper/Version/Parse Revision 所有权、数据隐私或跨用户去重策略，先更新本 Spec；达到 `AGENTS.md` 的触发条件时再写 ADR。
+如果实现需要改变 Run/Event 事实来源、Paper/Version/Parse Revision 所有权、数据隐私或跨用户去重策略，先更新本 Spec；涉及独立架构决策时再写 ADR。
 
 ## 已知限制
 
