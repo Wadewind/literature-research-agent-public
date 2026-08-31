@@ -794,6 +794,50 @@ async def test_mcp_session_wraps_runtime_execution_and_closes_before_sandbox() -
 
 
 @pytest.mark.asyncio
+async def test_browser_preflight_failure_marks_sandbox_generation_dirty() -> None:
+    workspace = _WorkspaceManager()
+    real_runtime_created = False
+
+    class _Loader:
+        @asynccontextmanager
+        async def open(self, request, lease):
+            del request, lease
+            raise ResearchAgentRuntimeError(
+                kind=RuntimeErrorKind.TEMPORARY,
+                code="runtime_mcp_browser_unavailable",
+                safe_message="浏览器暂时不可用",
+            )
+            yield ()  # pragma: no cover
+
+    def runtime_factory(saver, backend, before_succeed):
+        del saver, before_succeed
+        if not isinstance(backend, StateBackend):
+            nonlocal real_runtime_created
+            real_runtime_created = True
+        return _Runtime(backend, known={"value": False})
+
+    runtime = SandboxedResearchAgentRuntime(
+        checkpoint_factory=_CheckpointFactory(),
+        runtime_factory=runtime_factory,
+        runtime_with_tools_factory=(
+            lambda saver, backend, before_succeed, tools: _Runtime(
+                backend, known={"value": False}
+            )
+        ),
+        mcp_tool_loader=_Loader(),
+        workspace_manager=workspace,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ResearchAgentRuntimeError) as caught:
+        await _collect_events(runtime.execute_turn(_mcp_request()))
+
+    assert caught.value.code == "runtime_mcp_browser_unavailable"
+    assert workspace.dirty_calls == 1
+    assert workspace.backend.closed is True
+    assert real_runtime_created is False
+
+
+@pytest.mark.asyncio
 async def test_platform_submit_artifact_tool_is_assembled_for_real_sandbox_turn() -> None:
     workspace = _WorkspaceManager()
     known = {"value": False}

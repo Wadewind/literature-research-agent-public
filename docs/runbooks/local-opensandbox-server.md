@@ -9,7 +9,7 @@
 - Server：`opensandbox-server==0.2.2`；
 - 配置：`config/opensandbox-server.phase6.toml`；
 - 启动入口：`scripts/opensandbox-server.sh`；
-- research image：`agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1`；
+- research image：`agent-service/research-agent-sandbox@sha256:f55f3d706c9d35122cc36b14d91c8e24df5051f383ff014a34f99bb3d8c1434a`；
 - execd image：`opensandbox/execd@sha256:1dc98c7de10b9a73450ac75aa0f200ad7972f2c40f5225f6a8998e166b45d6dd`；
 - egress image：`opensandbox/egress@sha256:973130e01bf76e8e686e2853ebf47b21741bc8781919bb4a7cf60af09a3c6e8a`。
 
@@ -26,25 +26,25 @@ lock，但 apt 仓库内容与构建器版本仍可能改变结果，所以“�
 
 ```bash
 docker build \
-  --tag agent-service/research-agent-sandbox:phase6-8.5 \
+  --tag agent-service/research-agent-sandbox:phase6-8.6 \
   sandbox/research-agent
 ```
 
-当前本地审核 pin 是在上一版已审核 digest 上只叠加 `start-vnc-server` 的最小迁移结果；可用
-`Dockerfile.vnc-overlay` 精确复核本次 VNC 差异。完整 Dockerfile 同步包含相同 wrapper，供后续从固定
-upstream stage 重建：
+当前本地审核 pin 是在上一版已审核 digest 上只叠加 `start-chromium` 的最小迁移结果；可用
+`Dockerfile.browser-startup-overlay` 精确复核本次 Browser 启动差异。完整 Dockerfile 同步包含 VNC wrapper
+和 Chromium launcher，供后续从固定 upstream stage 重建：
 
 ```bash
 DOCKER_BUILDKIT=0 docker build \
-  --file sandbox/research-agent/Dockerfile.vnc-overlay \
-  --tag agent-service/research-agent-sandbox:phase6-8.5 \
+  --file sandbox/research-agent/Dockerfile.browser-startup-overlay \
+  --tag agent-service/research-agent-sandbox:phase6-8.6 \
   sandbox/research-agent
 ```
 
-wrapper 使 base entrypoint 启动的 `Xtigervnc` 只监听 Sandbox namespace loopback，并固定
-`SecurityTypes=None`。身份校验仍发生在平台 Browser ticket gateway；5901 不映射到宿主或跨 Sandbox，
-VNC 密码也不会进入前端。模型在同一 Sandbox 内理论上可访问该 loopback 端口，但它已拥有同一 Chromium
-的固定 Playwright MCP/CDP 与 `execute`，因此没有扩大到宿主或其他 Session；这仍只属于本地单人演示边界。
+launcher 使 Chromium 从 `about:blank` 启动，避免基础镜像自动访问 Google 阻塞 Playwright 首次 CDP
+attach；目标 URL 只由审核后的 Browser Tool 导航。既有 VNC wrapper 仍使 `Xtigervnc` 只监听 Sandbox
+namespace loopback，并固定 `SecurityTypes=None`。身份校验仍发生在平台 Browser ticket gateway；5901
+不映射到宿主或跨 Sandbox，VNC 密码也不会进入前端。这仍只属于本地单人演示边界。
 
 execd 与 egress 可以按审核过的 digest 获取；若 registry 返回的内容不匹配，Docker 必须拒绝 pull：
 
@@ -57,8 +57,8 @@ docker pull opensandbox/egress@sha256:973130e01bf76e8e686e2853ebf47b21741bc87819
 execd/egress pin。任一 `inspect`、ID 比较或配置匹配失败都停止启动，不改用 `latest` 或普通 tag：
 
 ```bash
-phase6_research_tag='agent-service/research-agent-sandbox:phase6-8.5'
-phase6_research_pin='agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1'
+phase6_research_tag='agent-service/research-agent-sandbox:phase6-8.6'
+phase6_research_pin='agent-service/research-agent-sandbox@sha256:f55f3d706c9d35122cc36b14d91c8e24df5051f383ff014a34f99bb3d8c1434a'
 phase6_execd_pin='opensandbox/execd@sha256:1dc98c7de10b9a73450ac75aa0f200ad7972f2c40f5225f6a8998e166b45d6dd'
 phase6_egress_pin='opensandbox/egress@sha256:973130e01bf76e8e686e2853ebf47b21741bc8781919bb4a7cf60af09a3c6e8a'
 

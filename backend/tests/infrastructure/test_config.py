@@ -189,7 +189,7 @@ def test_research_agent_sandbox_image_defaults_to_current_pinned_digest(monkeypa
     assert (
         Settings.from_env().research_sandbox_image
         == "agent-service/research-agent-sandbox@sha256:"
-        "8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1"
+        "f55f3d706c9d35122cc36b14d91c8e24df5051f383ff014a34f99bb3d8c1434a"
     )
 
 

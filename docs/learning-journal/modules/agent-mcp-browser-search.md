@@ -38,6 +38,7 @@ PolicySnapshot.mcp_refs（平台固定 ID/version/config hash/tool schema hash�
   → Worker 以 endpoint + 私有 header 建立本轮 Streamable HTTP ClientSession
   → 分页遍历完整 tools/list
   → 校验 Catalog 允许子集存在且 Schema/hash 精确一致
+  → Playwright 以 browser_tabs(list) 在同一 session 预热 Chromium/CDP
   → 只把允许 Tool 转换为带前缀的 LangChain Tool
   → create_deep_agent 使用本轮 Tool
   → graph 结束先关闭 MCP session，再释放 Sandbox Backend 连接
@@ -95,6 +96,12 @@ Loader 在 resolver/session/discovery/conversion 边界检查取消；Tool 调�
 permit。Provider、recipe 与连接异常统一转换为不含原始 cause 的安全 temporary Runtime 错误。endpoint、
 header、命令、Server log、Tool 参数和正文不进入 Event。
 
+Playwright Loader 在模型首次调用前用同一 MCP session 执行只读 `browser_tabs(list)`。CDP 初始化失败会
+归一化为 `runtime_mcp_browser_unavailable`，当前 Sandbox generation 被标记 dirty，平台重试时必须创建
+新 generation。MCP `isError` 结果在已成功加载后作为 Tool observation 返回模型，使页面级错误可被纠正；
+连接/Schema/取消等平台边界错误仍 fail-closed。固定 Chromium 从 `about:blank` 启动，不再让基础镜像的
+Google 自动导航占用 Playwright 内部 30 秒 CDP attach 边界。
+
 调用已产生副作用、但 `ToolExecution.succeed` 尚未提交的窗口仍没有通用 Exactly Once 解法；orphan
 RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，只有通过既有 Snapshot/Artifact 校验与
 业务事务后才成为正式产物。
@@ -118,6 +125,10 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
   `52 passed in 2.18s`。
 - PostgreSQL Application/API/Workspace Repository 相关回归为 `10 passed in 17.40s`，确认非空生产
   Catalog 没有改变 Profile owner/Session/CAS、逐 Turn Policy 冻结和 Workspace 持久边界。
+- 2026-08-31 修复后，新固定镜像的 OpenSandbox MCP Smoke 为 `1 passed in 12.47s`；真实模型 Turn
+  通过 Playwright
+  打开 `https://example.com`，11 秒完成并返回 `Example Domain`。同一 Session 随后获得 Browser ticket，
+  前端 noVNC 显示“已连接”并渲染同一 Chromium。
 
 ## 代码入口
 
@@ -126,7 +137,7 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
 - Lease connection resolver：`backend/src/literature_agent/infrastructure/agent/sandbox_mcp.py`
 - OpenSandbox adapter：`backend/src/literature_agent/infrastructure/agent/opensandbox_backend.py`
 - Worker 装配：`backend/src/literature_agent/worker.py`
-- 镜像与 recipe：`sandbox/research-agent/Dockerfile`、`start-mcp-service`
+- 镜像与 recipe：`sandbox/research-agent/Dockerfile`、`start-chromium`、`start-mcp-service`
 - recipe 状态机测试：`backend/tests/infrastructure/test_mcp_service_recipe.py`
 - 显式真实 Smoke：`backend/tests/infrastructure/test_opensandbox_mcp_smoke.py`
 
@@ -145,10 +156,9 @@ RUNNING 继续 fail-safe，不盲目重放。下载文件先留在 Workspace，�
   Session/Secret/宿主隔离、default-deny 网络、平台 Policy 和结果校验；
 - graph 创建前的只读 resolver/session/discovery 仍可能因重复 Job 重复执行，但不缓存跨 generation 连接，
   Tool 副作用仍受 invocation 账本约束。
-- 当前派生镜像和 Web UI 没有面向用户的 noVNC 画面、Browser 控制权状态或鉴权代理；用户不能操作
-  Session Chromium，也没有 Cookie/Profile 跨 generation 恢复。ADR-0009 已将首版固定为两个 Turn
-  之间、同一 generation 的人工控制，先以 Sandbox 内合成登录页验证；ADR-0012 后的公共站点验收仍由
-  Phase 6 Slice 7 的 public-egress/private-network 真实证据阻塞。
+- Web UI 已提供带 ticket gateway 的 noVNC 画面和两个 Turn 之间、同一 generation 的人工控制；不支持
+  同 Turn 接管、Cookie/Profile 跨 generation 恢复或凭据委托。公共站点仍可能受验证码、登录、地区限制
+  和站点自身超时影响。
 - `browser_file_upload` 继续不在 Catalog allowlist。用户附件和网页上传必须经过 ADR-0010 的业务
   Attachment ID 与后续平台包装 Tool，不能直接让模型选择 Workspace 路径。
 

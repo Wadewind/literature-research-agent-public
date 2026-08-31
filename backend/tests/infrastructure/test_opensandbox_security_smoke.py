@@ -21,7 +21,7 @@ pytestmark = pytest.mark.opensandbox_security
 _RUN = os.getenv("AGENT_RUN_OPENSANDBOX_SECURITY_TESTS") == "1"
 _IMAGE = (
     "agent-service/research-agent-sandbox@sha256:"
-    "8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1"
+    "f55f3d706c9d35122cc36b14d91c8e24df5051f383ff014a34f99bb3d8c1434a"
 )
 
 

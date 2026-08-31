@@ -139,7 +139,7 @@ Sandbox 部署配置：
 - `AGENT_RESEARCH_SANDBOX_DOMAIN=127.0.0.1:8080`；
 - `AGENT_RESEARCH_SANDBOX_PROTOCOL=http|https`；
 - `AGENT_RESEARCH_SANDBOX_API_KEY`；
-- `AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1`。
+- `AGENT_RESEARCH_SANDBOX_IMAGE=agent-service/research-agent-sandbox@sha256:f55f3d706c9d35122cc36b14d91c8e24df5051f383ff014a34f99bb3d8c1434a`。
 
 `scripts/dev.sh --real` 在 `deep_agents` 模式下会启动并管理本地 OpenSandbox Server；手动启动 Worker 时
 仍使用 `scripts/opensandbox-server.sh` 独立启动。项目版本化配置是

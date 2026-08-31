@@ -121,3 +121,42 @@ Evidence 的正常回复则被错误拒绝为 `runtime_output_invalid`。
 
 这一行为允许 Agent 在一轮内组合 Project Context、外部 Search/Browser、Sandbox 文件处理和 Artifact
 交付；外部网址及世界知识的可信度仍取决于对应 Tool/来源契约，不自动转化为 Project Citation。
+
+## P6-REAL-005：Playwright 首次 CDP attach 超时且被误报为新消息取消
+
+### 现象与证据
+
+Session `950d1671-ca63-4b3c-af85-0ef61806a196` 的 Browser Turn 只产生一次
+`playwright_browser_navigate` 调用，MCP 返回
+`async createBrowserWithInfo: Timeout 30000ms exceeded`。当异常越过 graph 边界时，Deep Agents
+`PatchToolCallsMiddleware` 为未配对 Tool Call 补写固定的 cancelled ToolMessage，导致下一轮模型误判为
+“另一条消息到达后取消”。实际时间线显示失败 Turn 已先结束，用户消息随后才发送，并非并发打断。
+
+真实 public-egress 回归进一步确认：每个新 Sandbox generation 都在 Playwright MCP 首次连接 CDP 时固定
+等待 30 秒。固定 Chrome 基础镜像的 `/chrome.sh` 会在启动时自动导航 `https://www.google.com`；受控网络
+环境中的首次公网加载阻塞了 Playwright `connectOverCDP` 初始化。单纯提高平台外层 Tool timeout 不能改变
+MCP 内部 30 秒边界。
+
+### 修复
+
+- 固定镜像覆盖 Chromium 启动入口，从 `about:blank` 启动并关闭后台网络请求；目标 URL 只允许由审核后的
+  Playwright MCP Tool 发起。新本地审核镜像 pin 为
+  `agent-service/research-agent-sandbox@sha256:f55f3d706c9d35122cc36b14d91c8e24df5051f383ff014a34f99bb3d8c1434a`；
+- Loader 在模型调用前通过同一 MCP session 执行只读 `browser_tabs(list)` 预热。预热失败归一化为安全的
+  temporary `runtime_mcp_browser_unavailable`，并把当前 Sandbox generation 标记 dirty，使平台重试创建
+  新 generation；
+- LangChain MCP Tool 改为向模型返回 Server `isError` 结果，允许模型根据 Browser Tool 的业务错误调整，
+  不再把所有 Server error 抛出并制造悬空 Tool Call；
+- 保留 Turn 预算、取消、fence、Effect 账本和跨 Turn 人工控制边界，不把 Chromium 或 MCP 移到宿主。
+
+### 验证
+
+- Loader/Runtime 新增回归覆盖 Browser 预热顺序、CDP 失败脱敏与 temporary 分类、dirty generation 换代，
+  以及 MCP Server error 返回模型；
+- 固定镜像 recipe 测试确认启动脚本不含 Google，且以 `about:blank` 启动；
+- 新固定镜像的显式 OpenSandbox MCP Smoke 为 `1 passed in 12.47s`；
+- 修复后的真实模型 Turn 使用 Playwright MCP 打开 `https://example.com`，11 秒完成、1 次 Tool Call，前端
+  回复标题 `Example Domain`；随后人工接管显示“已连接”，noVNC 画面渲染同一 Chromium 页面。
+
+本修复证明本地单人 Real 模式下的启动、导航和前端接管闭环，不扩大 public-egress 的既有安全声明，也不
+保证所有第三方网站都能避开验证码、登录、地区限制或站点自身超时。

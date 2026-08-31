@@ -31,6 +31,9 @@ COPY --from=playwright-mcp \
     /opt/research-agent-mcp-node/node_modules
 COPY --chmod=0755 start-mcp-service /opt/research-agent/start-mcp-service
 COPY --chmod=0755 start-browser-proxy /opt/research-agent/start-browser-proxy
+# 上游镜像默认启动 Google，会让受限 egress 下的首次 CDP attach 等待页面网络完成。
+# 固定从空白页启动，目标 URL 只由审核后的 Playwright MCP 导航。
+COPY --chmod=0755 start-chromium /chrome.sh
 # Base entrypoint 直接按 PATH 启动 Xtigervnc，不读取 vncserver 用户配置。
 # 固定 wrapper 只在 Sandbox namespace loopback 提供免密码 RFB；外层仍由平台 ticket gateway 鉴权。
 COPY --chmod=0755 start-vnc-server /opt/research-agent-venv/bin/Xtigervnc

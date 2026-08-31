@@ -189,6 +189,88 @@ def _lease() -> SandboxWorkspaceLease:
 
 
 @pytest.mark.asyncio
+async def test_playwright_preflight_warms_browser_before_model_tool_calls() -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+    guard = _Guard()
+
+    class _BrowserSession:
+        async def call_tool(self, name: str, arguments: dict[str, str]) -> CallToolResult:
+            calls.append((name, arguments))
+            return CallToolResult(
+                content=[TextContent(type="text", text="tabs ready")],
+                isError=False,
+            )
+
+    await mcp_tools_module._preflight_playwright_browser(
+        cast(Any, _BrowserSession()),
+        guard=guard,
+        turn_run_id="turn-1",
+    )
+
+    assert calls == [("browser_tabs", {"action": "list"})]
+    assert guard.active_checks == 2
+
+
+@pytest.mark.asyncio
+async def test_playwright_preflight_returns_temporary_safe_error_on_cdp_failure() -> None:
+    guard = _Guard()
+
+    class _BrowserSession:
+        async def call_tool(self, name: str, arguments: dict[str, str]) -> CallToolResult:
+            assert (name, arguments) == ("browser_tabs", {"action": "list"})
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text="secret CDP endpoint and raw provider failure",
+                    )
+                ],
+                isError=True,
+            )
+
+    with pytest.raises(ResearchAgentRuntimeError) as caught:
+        await mcp_tools_module._preflight_playwright_browser(
+            cast(Any, _BrowserSession()),
+            guard=guard,
+            turn_run_id="turn-1",
+        )
+
+    assert caught.value.code == "runtime_mcp_browser_unavailable"
+    assert caught.value.kind is RuntimeErrorKind.TEMPORARY
+    assert caught.value.safe_message == "浏览器暂时不可用"
+    assert "secret" not in str(caught.value)
+
+
+def test_mcp_conversion_surfaces_server_errors_to_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[bool] = []
+
+    def convert(*args: Any, **kwargs: Any) -> Any:
+        del args
+        captured.append(kwargs["handle_tool_errors"])
+        return SimpleNamespace(name="fixture-search_search")
+
+    monkeypatch.setattr(mcp_tools_module, "convert_mcp_tool_to_langchain_tool", convert)
+    definition = Tool(
+        name="search",
+        description="fixture",
+        inputSchema={"type": "object", "properties": {}},
+    )
+
+    converted = mcp_tools_module._convert_allowed_tools(
+        session=cast(Any, object()),
+        definitions=(definition,),
+        allowed_raw_names=frozenset({"search"}),
+        server_name="fixture-search",
+        interceptor=cast(Any, object()),
+    )
+
+    assert [item.name for item in converted] == ["fixture-search_search"]
+    assert captured == [True]
+
+
+@pytest.mark.asyncio
 async def test_loader_uses_prefixed_tools_explicit_session_and_replays_effect() -> None:
     calls: list[str] = []
     server = _server(calls)

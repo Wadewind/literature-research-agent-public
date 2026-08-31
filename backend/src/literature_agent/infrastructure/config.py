@@ -65,7 +65,7 @@ _DEFAULT_RESEARCH_SANDBOX_DOMAIN = "127.0.0.1:8080"
 _DEFAULT_RESEARCH_SANDBOX_PROTOCOL = "http"
 _DEFAULT_RESEARCH_SANDBOX_IMAGE = (
     "agent-service/research-agent-sandbox@sha256:"
-    "8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1"
+    "f55f3d706c9d35122cc36b14d91c8e24df5051f383ff014a34f99bb3d8c1434a"
 )
 _PINNED_OCI_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 # arXiv 默认关闭真实网络：只有显式选择 httpx 才能访问官方 API。

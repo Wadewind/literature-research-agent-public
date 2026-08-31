@@ -227,7 +227,14 @@ class SandboxedResearchAgentRuntime:
                 )
             else:
                 mcp_tools = ()
-        except BaseException:
+        except BaseException as exc:
+            if (
+                isinstance(exc, ResearchAgentRuntimeError)
+                and exc.code == "runtime_mcp_browser_unavailable"
+            ):
+                # CDP 预检失败说明当前 Chromium generation 不健康；模型尚未执行，
+                # 可以安全轮换后由平台按 Turn 重试。
+                await self._workspace_manager.mark_dirty(lease)
             await _close_runtime_resources(tool_stack, lease.backend)
             raise
 

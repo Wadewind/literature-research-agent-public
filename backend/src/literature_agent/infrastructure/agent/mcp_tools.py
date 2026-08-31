@@ -42,6 +42,7 @@ _MAX_MCP_DISCOVERED_TOOLS = 256
 _MCP_TIMEOUT_HEADROOM_SECONDS = 1.0
 _MCP_MIN_TIMEOUT_SECONDS = 0.1
 _MCP_TRUNCATION_NOTICE = "[平台已截断过大的 MCP 文本输出；请缩小查询范围后重试。]"
+_PLAYWRIGHT_CATALOG_ID = "playwright"
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +361,12 @@ class LangchainMcpToolLoader:
                 }
                 if any(actual.get(name) != schema_hash for name, schema_hash in expected.items()):
                     raise _error("runtime_mcp_schema_drift", "MCP Tool 名称或 Schema 已漂移")
+                if ref.catalog_id == _PLAYWRIGHT_CATALOG_ID:
+                    await _preflight_playwright_browser(
+                        session,
+                        guard=self._guard,
+                        turn_run_id=request.turn_run_id,
+                    )
                 interceptor: ToolCallInterceptor = PlatformMcpToolInterceptor(
                     turn_run_id=request.turn_run_id,
                     ref=ref,
@@ -451,7 +458,7 @@ def _convert_allowed_tools(
                 server_name=server_name,
                 tool_name_prefix=True,
                 tool_interceptors=[interceptor],
-                handle_tool_errors=False,
+                handle_tool_errors=True,
             )
             for item in definitions
             if item.name in allowed_raw_names
@@ -464,6 +471,34 @@ def _convert_allowed_tools(
             "MCP 能力暂时不可用",
             RuntimeErrorKind.TEMPORARY,
         ) from None
+
+
+async def _preflight_playwright_browser(
+    session: ClientSession,
+    *,
+    guard: McpInvocationGuard,
+    turn_run_id: str,
+) -> None:
+    """在模型调用前建立同一 MCP Session 的 CDP 连接，失败时允许干净重试。"""
+
+    await guard.assert_active(turn_run_id)
+    try:
+        result = await session.call_tool("browser_tabs", {"action": "list"})
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        raise _error(
+            "runtime_mcp_browser_unavailable",
+            "浏览器暂时不可用",
+            RuntimeErrorKind.TEMPORARY,
+        ) from None
+    if not isinstance(result, CallToolResult) or result.isError:
+        raise _error(
+            "runtime_mcp_browser_unavailable",
+            "浏览器暂时不可用",
+            RuntimeErrorKind.TEMPORARY,
+        )
+    await guard.assert_active(turn_run_id)
 
 
 def _bounded_mcp_result(

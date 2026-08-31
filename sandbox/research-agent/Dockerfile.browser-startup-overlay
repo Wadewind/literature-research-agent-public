@@ -1,0 +1,8 @@
+# 在上一版已审核镜像上只替换 Chromium 启动入口，供本地复核本次 Browser 修复。
+FROM agent-service/research-agent-sandbox@sha256:8ded4a3cfb5603efac3e297a09f79f4bdef798379728eeb96d563ae8f99f40d1
+
+USER root
+COPY start-chromium /chrome.sh
+RUN chmod 0755 /chrome.sh
+USER chrome
+WORKDIR /workspace

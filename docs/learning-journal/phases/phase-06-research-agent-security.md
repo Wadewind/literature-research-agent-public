@@ -891,6 +891,12 @@ private/metadata/宿主/LAN、提供动态包安装、用户自定义 Tool/MCP/�
 长期 Memory 的决定都必须单独更新本 Spec，并在满足 `AGENTS.md` 条件时创建 ADR。raw 公网通道可能
 产生写请求是已知风险，不被误记为已实现的产品能力或强制拒绝。
 
+2026-08-31 Real Browser 回归确认基础 Chrome 镜像自动访问 Google 会阻塞 Playwright MCP 首次 CDP
+attach，并被 Deep Agents 的悬空 Tool Call 补丁误报为“新消息取消”。固定派生镜像现从 `about:blank`
+启动；Loader 在模型调用前预热同一 MCP session，失败时返回安全 temporary 错误并 dirty 当前 Sandbox
+generation，MCP Server error 则作为观察返回模型纠正。真实 Turn 已在 11 秒内打开 `example.com`、返回
+`Example Domain`，并通过 Browser ticket/noVNC 完成人工接管显示。该修复不改变跨 Turn 控制与网络边界。
+
 ## 已知预期限制
 
 - Agent 输出仍需人工审核，不等同于系统性文献综述或事实保证；
