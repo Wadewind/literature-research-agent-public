@@ -77,11 +77,11 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   Claim/标记会拆成规范行，并在 Runtime 与 Application 两个边界保存同一规范正文。真实 Evidence ID
   格式错误、单个标记内部重复 ID、标记后未引用尾文或其他歧义仍然 fail-closed；Application 继续负责
   显式 Evidence 的 Run/Project 授权、Citation Validator 与事务提交；
-- Graph v7 通过 Deep Agents 原生 `ToolStrategy` 增加 `finalize_research_answer` 终止协议。协议只包含有界
-  `grounded_claim`、`analysis`、`artifact_receipt` 内容块，框架校验后写入 checkpoint
-  `structured_response`，Adapter 确定性渲染为既有消息和引用格式。该控制调用不进入 ToolNode、不写业务
-  数据库且不占普通 Tool 预算，但仍受模型预算和执行 lease/fence 保护；普通搜索、Browser、文件、成果
-  Tool 的可见性与预算不变。模型直接返回普通文本时仍使用兼容解析，因此结构化终止不是新的单点失败；
+- Graph v7 曾通过 Deep Agents 原生 `ToolStrategy` 增加 `finalize_research_answer`，离线 Fake 模型通过，
+  但真实 `deepseek-v4-flash` thinking 请求在首次输出前失败。根因是 LangChain 对 `ToolStrategy` 强制绑定
+  `tool_choice="any"`，与当前 DeepSeek V4 thinking 接口不兼容；所谓纯文本回退并未覆盖传输层失败。
+  Graph v8 已完整撤回该结构化终止协议，只保留 Evidence 排版兼容与纯文本解析。普通 Project/Browser/
+  文件/成果 Tool 重新使用 Provider 默认 `tool_choice=None/auto`，并由回归直接断言不强制选择；
 - 每轮 HumanMessage 在正文前附加 `ContextSnapshot.created_at` 的 UTC 时间基准，使“今年”等相对日期不依赖
   模型训练时间；它不复制历史消息或改变 Deep Agents 的上下文/压缩职责；
 - 切片 4 当时未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，
@@ -196,6 +196,11 @@ Ruff、Pyright 和 `git diff --check` 均通过。测试未调用真实模型或
 同日引用排版兼容与结构化终止协议回归：领域契约 `30 passed`；Deep Agents Adapter `68 passed`，覆盖
 零普通 Tool 预算下的结构化终止、纯文本回退以及与 Project/execute Tool 共存；Agent Turn Executor
 `17 passed`，覆盖规范化正文、Claim/Citation 原子提交。以上均为离线或本机测试，不调用真实模型与公网。
+
+真实 Provider 失败后的 Graph v8 回退回归：Deep Agents Adapter `66 passed`，其中 Project Tool 用例显式
+断言所有模型绑定均未强制 `tool_choice`，纯文本结果与 v7 checkpoint 拒绝用例通过；领域 Evidence 契约
+仍为 `30 passed`。本次回归未调用真实模型或公网；真实 DeepSeek thinking 结果由用户重启 Worker 后点击
+验证。
 
 ## 代码入口
 

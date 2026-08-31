@@ -6,13 +6,12 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, NotRequired, cast
+from typing import Annotated, Any, NotRequired, cast
 from uuid import uuid4
 
 from deepagents import (
@@ -32,7 +31,6 @@ from langchain.agents.middleware.types import (
     PrivateStateAttr,
     ToolCallRequest,
 )
-from langchain.agents.structured_output import ToolStrategy
 from langchain.tools import ToolRuntime
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -41,7 +39,6 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.types import Command, StateSnapshot
-from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from literature_agent.application.agent_usage_service import AgentUsageError
 from literature_agent.application.ports.agent_usage_control import (
@@ -113,48 +110,6 @@ _GRAPH_REVISION_METADATA_KEY = "agent_graph_revision"
 _FILESYSTEM_TOOL_NAMES = frozenset({"ls", "read_file", "write_file", "edit_file", "glob", "grep"})
 _FORBIDDEN_CUSTOM_TOOL_NAMES = frozenset({"execute", "task"})
 _ALWAYS_FORBIDDEN_TOOL_NAMES = frozenset({"task"})
-_FINALIZE_RESEARCH_ANSWER_TOOL = "finalize_research_answer"
-_CONTROL_TOOL_NAMES = frozenset({_FINALIZE_RESEARCH_ANSWER_TOOL})
-_STRUCTURED_EVIDENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
-
-
-class _FinalAnswerBlock(BaseModel):
-    """结构化终止协议中的一个可展示内容块。"""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    kind: Literal["grounded_claim", "analysis", "artifact_receipt"]
-    text: str = Field(min_length=1, max_length=2_000)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=10)
-
-    @model_validator(mode="after")
-    def validate_evidence_contract(self) -> _FinalAnswerBlock:
-        unique = len(self.evidence_ids) == len(set(self.evidence_ids))
-        valid = all(_STRUCTURED_EVIDENCE_ID.fullmatch(item) for item in self.evidence_ids)
-        if not unique or not valid:
-            raise ValueError("Evidence ID 非法或重复")
-        if self.kind == "grounded_claim" and not self.evidence_ids:
-            raise ValueError("grounded_claim 必须提供 Evidence ID")
-        if self.kind != "grounded_claim" and self.evidence_ids:
-            raise ValueError("非项目证据内容不能附带 Evidence ID")
-        return self
-
-
-class finalize_research_answer(BaseModel):  # noqa: N801 - 类名就是模型可见的协议名
-    """研究完成时提交最终内容；这是终止协议，不会执行外部操作。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    answer_status: Literal["answered", "insufficient_evidence"]
-    blocks: list[_FinalAnswerBlock] = Field(default_factory=list, max_length=32)
-
-    @model_validator(mode="after")
-    def validate_answer_contract(self) -> finalize_research_answer:
-        if self.answer_status == "answered" and not self.blocks:
-            raise ValueError("answered 必须至少包含一个内容块")
-        if self.answer_status == "insufficient_evidence" and self.blocks:
-            raise ValueError("insufficient_evidence 不得包含内容块")
-        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +161,7 @@ class _RuntimeToolPolicyMiddleware(AgentMiddleware[Any, _TurnContext, Any]):
         self._execution_control = execution_control
 
     def _allowed(self, context: _TurnContext) -> frozenset[str]:
-        return (context.allowed_tool_names & self._registered_tool_names) | _CONTROL_TOOL_NAMES
+        return context.allowed_tool_names & self._registered_tool_names
 
     def _filtered(self, request: ModelRequest[_TurnContext]) -> list[BaseTool | dict[str, Any]]:
         allowed = self._allowed(request.runtime.context)
@@ -577,16 +532,14 @@ class _RuntimeToolCallBudgetMiddleware(AgentMiddleware[_ToolCallBudgetState, _Tu
         tool_calls = messages[-1].tool_calls
         if not tool_calls:
             return None
-        allowed = (context.allowed_tool_names & self._registered_tool_names) | _CONTROL_TOOL_NAMES
+        allowed = context.allowed_tool_names & self._registered_tool_names
         if any(item.get("name") not in allowed for item in tool_calls):
             raise _runtime_error(
                 RuntimeErrorKind.PERMANENT,
                 "runtime_tool_not_allowed",
                 "Runtime Tool 未被本轮策略授权",
             )
-        requested = sum(item.get("name") not in _CONTROL_TOOL_NAMES for item in tool_calls)
-        if requested == 0:
-            return None
+        requested = len(tool_calls)
         budget_turn_run_id = state.get("agent_tool_budget_turn_run_id")
         used = (
             state.get("agent_tool_budget_reserved_calls", 0)
@@ -683,8 +636,6 @@ class DeepAgentsResearchAgentRuntime:
         names = [item.name for item in all_tools]
         if len(names) != len(set(names)):
             raise ValueError("Deep Agents Tool 名称不得重复")
-        if _CONTROL_TOOL_NAMES & frozenset(names):
-            raise ValueError("Deep Agents Tool 名称与 Runtime 终止协议冲突")
         if allow_execute and _FORBIDDEN_CUSTOM_TOOL_NAMES & frozenset(names):
             raise ValueError("execute/task 只能由受控 Deep Agents Backend 提供")
         filesystem_tool_names = list(_FILESYSTEM_TOOL_NAMES)
@@ -722,10 +673,6 @@ class DeepAgentsResearchAgentRuntime:
                 "可以不带项目 Evidence 标记，但不得暗示它们已经通过项目证据验证。"
                 "项目证据不足时应明确说明；只有整轮无法给出任何有效内容时才单独输出"
                 "‘当前授权上下文证据不足。’。"
-                "完成研究时优先调用 finalize_research_answer：项目证据结论使用"
-                " grounded_claim，普通分析和成果回执分别使用 analysis 与 artifact_receipt。"
-                "该调用只提交最终内容，不会执行外部操作；不要把它当作检索、文件或浏览工具。"
-                "如果当前模型或 Provider 无法调用该终止协议，可以直接返回普通文本。"
                 + (
                     "需要提交正式成果时，必须先将文件写入 /workspace/outputs/，再调用"
                     " submit_artifact；不要提交 /workspace 根目录或 inbox 中的文件。"
@@ -764,11 +711,6 @@ class DeepAgentsResearchAgentRuntime:
             backend=backend,
             context_schema=_TurnContext,
             checkpointer=checkpointer,
-            response_format=ToolStrategy(
-                finalize_research_answer,
-                tool_message_content="最终研究内容已接收。",
-                handle_errors="最终内容结构无效，请修正字段后重新调用 finalize_research_answer。",
-            ),
             name="project-research-agent",
         )
 
@@ -1420,11 +1362,7 @@ class DeepAgentsResearchAgentRuntime:
             RuntimeExecutionState.INTERRUPTED
             if snapshot.interrupts
             else RuntimeExecutionState.SUCCEEDED
-            if not snapshot.next
-            and (
-                snapshot.values.get("structured_response") is not None
-                or self._assistant_content(snapshot.values.get("messages", []))
-            )
+            if not snapshot.next and self._assistant_content(snapshot.values.get("messages", []))
             else RuntimeExecutionState.RUNNING
         )
         checkpoint_id = _checkpoint_id(checkpoint.config)
@@ -1441,12 +1379,7 @@ class DeepAgentsResearchAgentRuntime:
         turn_run_id = _required_metadata(checkpoint.metadata, _TURN_METADATA_KEY)
         snapshot = await self._read_state(checkpoint)
         messages = snapshot.values.get("messages", [])
-        structured_response = snapshot.values.get("structured_response")
-        raw_assistant_content = (
-            _render_structured_final_answer(structured_response)
-            if structured_response is not None
-            else self._assistant_content(messages)
-        )
+        raw_assistant_content = self._assistant_content(messages)
         if not raw_assistant_content:
             raise _runtime_error(
                 RuntimeErrorKind.TEMPORARY,
@@ -1821,33 +1754,6 @@ class DeepAgentsResearchAgentRuntime:
             kind=kind,
             safe_summary=safe_summary,
         )
-
-
-def _render_structured_final_answer(value: object) -> str:
-    """把 checkpoint 中的终止协议结果确定性投影为既有产品消息格式。"""
-    try:
-        answer = (
-            value
-            if isinstance(value, finalize_research_answer)
-            else finalize_research_answer.model_validate(value)
-        )
-    except ValueError as exc:
-        raise _runtime_error(
-            RuntimeErrorKind.PERMANENT,
-            "runtime_output_invalid",
-            "Deep Agents 结构化最终回答非法",
-        ) from exc
-    if answer.answer_status == "insufficient_evidence":
-        return INSUFFICIENT_AGENT_EVIDENCE_TEXT
-    rendered: list[str] = []
-    for block in answer.blocks:
-        if block.kind == "grounded_claim":
-            rendered.append(
-                f"{block.text} [evidence:{','.join(block.evidence_ids)}]"
-            )
-        else:
-            rendered.append(block.text)
-    return "\n\n".join(rendered)
 
 
 def _tool_name(tool: BaseTool | dict[str, Any]) -> str | None:

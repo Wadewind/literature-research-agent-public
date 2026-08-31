@@ -862,6 +862,15 @@ ID 列表；同一物理行中连续出现的多组“非空 Claim + 真实 Evid
 调用失败。终止协议属于 Graph State/输出契约变化，因此新执行使用新的 Graph revision；已完成或失败的
 历史 Run 不原地改写。
 
+真实 `deepseek-v4-flash` thinking Turn 随即否定了上述 `ToolStrategy` 方案：LangChain 在存在结构化输出
+Tool 时会强制向模型绑定 `tool_choice="any"`，而当前官方 DeepSeek V4 thinking 接口拒绝该参数。请求在
+首次模型输出前即失败，表现为 1 个逻辑模型 reservation、0 个 ToolCall、无 Token usage；三次 Attempt
+重复同一确定性错误。Graph v8 因此撤回 `ToolStrategy`、`finalize_research_answer` 控制 Tool 和
+`structured_response` 投影，只保留 Evidence 排版规范化与纯文本兼容解析。普通 Project/文件/Browser/
+Sandbox Tool 必须继续使用 Provider 默认的 `tool_choice=None/auto`；回归测试直接断言 Adapter 不强制
+该参数。v7 已失败或运行中的 Turn 不跨 Graph revision 恢复，历史记录不原地改写。若后续重新引入结构化
+终止，必须采用不强制 `tool_choice` 的 Provider 适配方案，并先通过真实 DeepSeek thinking Smoke。
+
 2026-08-30 Real 对话回归修复了同一条 Workspace 成果链的两个契约缺口：每次新建或复用 Sandbox Lease
 都会幂等创建 `/workspace/outputs`，系统提示要求正式成果先写入该目录；`artifact_path_invalid` 在保留
 Rejected Candidate 与失败 ToolCall 审计后，以有界错误 ToolMessage 返回模型继续纠正，不再直接终止

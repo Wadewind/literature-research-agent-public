@@ -265,6 +265,7 @@ def _tool_json_schema(tool_value: Any) -> dict[str, Any]:
 
 class _ProjectToolModel(ScriptedDeepAgentChatModel):
     visible_tool_schemas: list[dict[str, Any]] = Field(default_factory=list)
+    visible_tool_choices: list[str | None] = Field(default_factory=list)
 
     def bind_tools(
         self,
@@ -273,6 +274,7 @@ class _ProjectToolModel(ScriptedDeepAgentChatModel):
         tool_choice: str | None = None,
         **kwargs: Any,
     ):
+        self.visible_tool_choices.append(tool_choice)
         self.visible_tool_schemas.append({item.name: _tool_json_schema(item) for item in tools})
         return super().bind_tools(tools, tool_choice=tool_choice, **kwargs)
 
@@ -311,39 +313,6 @@ class _ProjectToolPlaceholderModel(_ProjectToolModel):
                 )
             )
         return message
-
-
-class _StructuredFinalAnswerModel(ScriptedDeepAgentChatModel):
-    """直接使用 Runtime 终止协议，不请求任何普通 Tool。"""
-
-    def _next_message(self, messages: list[Any]) -> AIMessage:
-        del messages
-        self.model_call_count += 1
-        return AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "finalize_research_answer",
-                    "args": {
-                        "answer_status": "answered",
-                        "blocks": [
-                            {
-                                "kind": "analysis",
-                                "text": "## 研究结论",
-                                "evidence_ids": [],
-                            },
-                            {
-                                "kind": "grounded_claim",
-                                "text": "强化学习可用于动态路径规划",
-                                "evidence_ids": ["evidence-agent-1", "evidence-agent-2"],
-                            },
-                        ],
-                    },
-                    "id": "final-answer-1",
-                    "type": "tool_call",
-                }
-            ],
-        )
 
 
 class _MatrixToolModel(_ProjectToolModel):
@@ -1993,7 +1962,7 @@ async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> 
     assert (await anext(stream)).kind is RuntimeEventKind.STARTED
     record = await control.get(request.turn_run_id)
     assert record is not None and record.last_checkpoint_id is not None
-    assert record.graph_revision == "deep-agent-graph.v7"
+    assert record.graph_revision == "deep-agent-graph.v8"
     checkpoint = await saver.aget_tuple(
         {
             "configurable": {
@@ -2004,7 +1973,7 @@ async def test_record_checkpoint_lookup_rejects_mismatched_stable_identity() -> 
         }
     )
     assert checkpoint is not None
-    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v7"
+    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v8"
     tampered = checkpoint._replace(
         metadata={**checkpoint.metadata, "agent_runtime_session_id": "session-other"}
     )
@@ -2038,7 +2007,7 @@ async def test_record_checkpoint_lookup_rejects_v2_graph_revision() -> None:
     await _collect(runtime.execute_turn(request))
     record = await control.get(request.turn_run_id)
     assert record is not None and record.last_checkpoint_id is not None
-    assert record.graph_revision == "deep-agent-graph.v7"
+    assert record.graph_revision == "deep-agent-graph.v8"
     checkpoint = await saver.aget_tuple(
         {
             "configurable": {
@@ -2049,7 +2018,7 @@ async def test_record_checkpoint_lookup_rejects_v2_graph_revision() -> None:
         }
     )
     assert checkpoint is not None
-    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v7"
+    assert checkpoint.metadata["agent_graph_revision"] == "deep-agent-graph.v8"
     old_checkpoint = checkpoint._replace(
         metadata={**checkpoint.metadata, "agent_graph_revision": "deep-agent-graph.v2"}
     )
@@ -2131,7 +2100,7 @@ async def test_persistent_failed_and_cancelled_states_survive_adapter_recreation
     ).state is RuntimeExecutionState.CANCELLED
 
 
-async def test_v6_runtime_graph_revision_is_permanent_and_does_not_call_model() -> None:
+async def test_v7_runtime_graph_revision_is_permanent_and_does_not_call_model() -> None:
     request = _request(turn_run_id="turn-2", allowed_tool_names=())
     control, _, _, repo = await _controlled_runtime_dependencies(request.turn_run_id)
     saver = MemorySaver()
@@ -2144,9 +2113,9 @@ async def test_v6_runtime_graph_revision_is_permanent_and_does_not_call_model() 
     )
     await _collect(first.execute_turn(request))
     record = repo._items[request.turn_run_id]  # noqa: SLF001
-    assert record.graph_revision == "deep-agent-graph.v7"
+    assert record.graph_revision == "deep-agent-graph.v8"
     repo._items[request.turn_run_id] = replace(  # noqa: SLF001
-        record, graph_revision="deep-agent-graph.v6"
+        record, graph_revision="deep-agent-graph.v7"
     )
 
     new_model = ScriptedDeepAgentChatModel()
@@ -2315,7 +2284,7 @@ async def test_hidden_custom_tool_is_also_denied_at_execution_boundary() -> None
     assert exc_info.value.kind is RuntimeErrorKind.PERMANENT
     assert exc_info.value.code == "runtime_tool_not_allowed"
     assert tool_calls == []
-    assert all(names == ("finalize_research_answer",) for names in model.visible_tool_names)
+    assert all(not names for names in model.visible_tool_names)
     assert (await runtime.reconcile_turn("turn-1")).state is RuntimeExecutionState.FAILED
 
 
@@ -2350,6 +2319,8 @@ async def test_project_tool_injects_turn_scope_and_hides_platform_ids_from_model
         if "search_project_chunks" in schemas
     ]
     assert search_schemas
+    assert model.visible_tool_choices
+    assert all(choice is None for choice in model.visible_tool_choices)
     assert set(search_schemas[-1]["properties"]) == {"query"}
     assert all(
         forbidden not in str(search_schemas[-1])
@@ -2385,29 +2356,7 @@ async def test_project_tool_result_neutralizes_evidence_placeholder_metasyntax()
     assert result.evidence_ids == ("evidence-agent-1",)
 
 
-async def test_structured_final_answer_is_terminal_and_does_not_use_tool_budget() -> None:
-    model = _StructuredFinalAnswerModel()
-    runtime = DeepAgentsResearchAgentRuntime(
-        model=model,
-        checkpointer=MemorySaver(),
-    )
-    request = _request(allowed_tool_names=(), max_tool_calls=0)
-
-    events = await _collect(runtime.execute_turn(request))
-    result = await runtime.collect_turn_result(request.turn_run_id)
-
-    assert events[-1].kind is RuntimeEventKind.COMPLETED
-    assert result.assistant_content == (
-        "## 研究结论\n\n"
-        "强化学习可用于动态路径规划 "
-        "[evidence:evidence-agent-1,evidence-agent-2]"
-    )
-    assert result.evidence_ids == ("evidence-agent-1", "evidence-agent-2")
-    assert model.model_call_count == 1
-    assert all("finalize_research_answer" in names for names in model.visible_tool_names)
-
-
-async def test_plain_text_final_answer_remains_supported_when_protocol_is_not_called() -> None:
+async def test_plain_text_final_answer_is_collected_without_forced_tool_choice() -> None:
     model = ScriptedDeepAgentChatModel()
     runtime = DeepAgentsResearchAgentRuntime(model=model, checkpointer=MemorySaver())
     request = _request(turn_run_id="turn-2", allowed_tool_names=(), max_tool_calls=0)
@@ -2417,7 +2366,7 @@ async def test_plain_text_final_answer_remains_supported_when_protocol_is_not_ca
 
     assert result.assistant_content == "第二轮基于同一 Thread 的压缩上下文继续完成。"
     assert result.evidence_ids == ()
-    assert all("finalize_research_answer" in names for names in model.visible_tool_names)
+    assert all(not names for names in model.visible_tool_names)
 
 
 async def test_previous_turn_project_tool_does_not_reclassify_natural_reply() -> None:
@@ -2523,10 +2472,7 @@ async def test_policy_allows_only_the_selected_filesystem_tool() -> None:
 
     assert result[-1].kind is RuntimeEventKind.COMPLETED
     assert model.visible_tool_names
-    assert all(
-        set(names) == {"read_file", "finalize_research_answer"}
-        for names in model.visible_tool_names
-    )
+    assert all(names == ("read_file",) for names in model.visible_tool_names)
 
 
 async def test_execute_remains_forbidden_even_if_registered_and_policy_named() -> None:
@@ -2569,20 +2515,6 @@ async def test_execute_remains_forbidden_even_if_registered_and_policy_named() -
     assert exc_info.value.code == "runtime_tool_not_allowed"
     assert calls == []
     assert all("execute" not in names for names in model.visible_tool_names)
-
-
-def test_custom_tool_cannot_shadow_structured_finalization_protocol() -> None:
-    @tool
-    def finalize_research_answer(answer_status: str) -> str:
-        """不得覆盖 Runtime 保留的终止协议。"""
-        return answer_status
-
-    with pytest.raises(ValueError, match="终止协议冲突"):
-        DeepAgentsResearchAgentRuntime(
-            model=ScriptedDeepAgentChatModel(),
-            tools=(finalize_research_answer,),
-            checkpointer=MemorySaver(),
-        )
 
 
 def test_restricted_harness_does_not_globally_exclude_sandbox_execute(monkeypatch) -> None:
