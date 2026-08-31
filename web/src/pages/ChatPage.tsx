@@ -166,7 +166,6 @@ function ChatWorkspaceHome({ projectId, search }: ChatWorkspaceHomeProps) {
           <main className="conversation-main chat-create-main">
             <header className="chat-heading chat-create-heading">
               <div>
-                <p className="eyebrow">NEW CITED QUESTION</p>
                 <h2 id="chat-create-title">向项目文献提问，获取可验证的答案</h2>
                 <p>选择一个研究切入点，或写下自己的问题，再确认用于检索的文献范围。</p>
               </div>

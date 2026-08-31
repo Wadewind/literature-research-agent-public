@@ -314,7 +314,7 @@ export function AppSidebarView({
         <span className="brand-mark" aria-hidden="true">L·A</span>
         <span className="app-nav-label">
           <strong>Literature Atlas</strong>
-          <small>文献综述 Agent</small>
+          <small>Research Agent</small>
         </span>
       </NavLink>
 
@@ -360,6 +360,10 @@ export function AppSidebarView({
                       aria-label={item.label}
                       aria-current={active ? "page" : undefined}
                       className={`app-nav-link${active ? " active" : ""}`}
+                      onClick={sessionMode && active ? () => setExpanded((current) => ({
+                        ...current,
+                        [sessionMode]: !current[sessionMode],
+                      })) : undefined}
                     >
                       <SidebarIcon name={item.icon} />
                       <span className="app-nav-label">{item.label}</span>
@@ -397,10 +401,6 @@ export function AppSidebarView({
       </nav>
 
       <div className="app-sidebar-footer">
-        <div className="sidebar-phase" aria-label="Research Agent Spike">
-          <span className="sidebar-phase-mark" aria-hidden="true">S</span>
-          <span className="app-nav-label"><strong>RESEARCH AGENT</strong><small>SPIKE</small></span>
-        </div>
         <button
           type="button"
           className="app-sidebar-toggle"
