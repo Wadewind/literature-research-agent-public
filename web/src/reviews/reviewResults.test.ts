@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ReviewOutput } from "../api/types";
 import {
   artifactContentUrl,
+  dimensionLabel,
   evidenceFileUrl,
   matrixRows,
   moveOutlineSection,
@@ -29,6 +30,12 @@ function output(payload: Record<string, unknown>): ReviewOutput {
 }
 
 describe("Review 结构化结果投影", () => {
+  it("把常见分析维度转换为用户可读标签", () => {
+    expect(dimensionLabel("classical_methods")).toBe("经典方法");
+    expect(dimensionLabel("experimental_setup")).toBe("实验设置");
+    expect(dimensionLabel("custom_dimension")).toBe("custom dimension");
+  });
+
   it("只接受可由表单编辑的 Outline 结构", () => {
     expect(outlineSections(output({ sections: [{ section_key: "methods", title: "方法", purpose: "比较", dimension_keys: ["reliability"] }] }))).toHaveLength(1);
     expect(outlineSections(output({ sections: [{ section_key: "methods", title: 1 }] }))).toEqual([]);

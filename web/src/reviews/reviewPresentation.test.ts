@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   FIXED_REVIEW_STAGES,
+  PRODUCT_REVIEW_STAGES,
+  reviewProductStageRail,
   reviewStageRail,
   sourcePresentation,
 } from "./reviewPresentation";
@@ -23,6 +25,31 @@ describe("reviewStageRail", () => {
 
   it("成功终态把所有固定阶段标记为完成", () => {
     expect(reviewStageRail("finalize", "succeeded").every((item) => item.state === "completed"))
+      .toBe(true);
+  });
+});
+
+describe("reviewProductStageRail", () => {
+  it("把固定 Workflow 投影为四个用户可理解的阶段", () => {
+    const rail = reviewProductStageRail("build_evidence_matrix", "running");
+
+    expect(rail.map((item) => item.key)).toEqual(PRODUCT_REVIEW_STAGES.map((item) => item.key));
+    expect(rail.map((item) => item.state)).toEqual([
+      "completed",
+      "current",
+      "waiting",
+      "waiting",
+    ]);
+  });
+
+  it("把大纲确认归入整理证据，并保留等待输入状态", () => {
+    const rail = reviewProductStageRail("review_outline", "waiting_input");
+
+    expect(rail[1]).toMatchObject({ key: "organize_evidence", state: "waiting-current" });
+  });
+
+  it("成功终态只展示四个已完成阶段", () => {
+    expect(reviewProductStageRail("finalize", "succeeded").every((item) => item.state === "completed"))
       .toBe(true);
   });
 });

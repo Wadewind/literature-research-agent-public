@@ -7,6 +7,7 @@ import type {
   HumanInputRequest,
   ReviewArtifact,
   ReviewOutput,
+  ReviewSource,
 } from "../api/types";
 import {
   ensureHumanInputIntent,
@@ -16,6 +17,7 @@ import {
 } from "../reviews/reviewHumanInput";
 import {
   artifactContentUrl,
+  dimensionLabel,
   evidenceFileUrl,
   matrixRows,
   moveOutlineSection,
@@ -33,6 +35,9 @@ interface ReviewResultsProps {
   runId: string;
   request: HumanInputRequest | null;
   eventSequence: number;
+  sources: ReviewSource[];
+  sourceCount: number;
+  completed: boolean;
   citationsValidated: boolean;
   canSubmitHumanInput: boolean;
 }
@@ -56,7 +61,15 @@ function updateSection(
   );
 }
 
-function EvidenceLocator({ projectId, evidenceId }: { projectId: string; evidenceId: string }) {
+function EvidenceLocator({
+  projectId,
+  evidenceId,
+  number,
+}: {
+  projectId: string;
+  evidenceId: string;
+  number: number;
+}) {
   const [open, setOpen] = useState(false);
   const query = useQuery({
     queryKey: ["evidence", projectId, evidenceId],
@@ -67,8 +80,8 @@ function EvidenceLocator({ projectId, evidenceId }: { projectId: string; evidenc
   const evidence = query.data;
   return (
     <span className="review-evidence-locator">
-      <button className="evidence-chip" type="button" onClick={() => setOpen((value) => !value)}>
-        Evidence {evidenceId.slice(0, 8)}
+      <button className="evidence-chip" type="button" aria-label={`查看证据 ${number}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        [{number}]
       </button>
       {open && (
         <span className="evidence-popover">
@@ -171,11 +184,11 @@ function OutlineWorkbench({
                 <label>section_key<input value={section.section_key} maxLength={64} className="mono" onChange={(event) => setSections((current) => updateSection(current, index, { section_key: event.target.value }))}/></label>
                 <label>章节标题<input value={section.title} maxLength={200} onChange={(event) => setSections((current) => updateSection(current, index, { title: event.target.value }))}/></label>
                 <label>章节目标<textarea value={section.purpose} maxLength={1000} rows={2} onChange={(event) => setSections((current) => updateSection(current, index, { purpose: event.target.value }))}/></label>
-                <fieldset><legend>分析维度</legend><div className="dimension-options">{availableDimensions.map((key) => <label key={key}><input type="checkbox" checked={section.dimension_keys.includes(key)} onChange={(event) => setSections((current) => updateSection(current, index, { dimension_keys: event.target.checked ? [...section.dimension_keys, key] : section.dimension_keys.filter((item) => item !== key) }))}/>{key}</label>)}</div></fieldset>
+                <fieldset><legend>分析维度</legend><div className="dimension-options">{availableDimensions.map((key) => <label key={key} title={key}><input type="checkbox" checked={section.dimension_keys.includes(key)} onChange={(event) => setSections((current) => updateSection(current, index, { dimension_keys: event.target.checked ? [...section.dimension_keys, key] : section.dimension_keys.filter((item) => item !== key) }))}/>{dimensionLabel(key)}</label>)}</div></fieldset>
                 <div className="outline-row-actions"><button className="button-plain" type="button" disabled={index === 0} onClick={() => setSections((current) => moveOutlineSection(current, index, -1))}>上移</button><button className="button-plain" type="button" disabled={index === sections.length - 1} onClick={() => setSections((current) => moveOutlineSection(current, index, 1))}>下移</button><button className="button-text-danger" type="button" disabled={sections.length === 1} onClick={() => setSections((current) => current.filter((_, itemIndex) => itemIndex !== index))}>删除章节</button></div>
               </div>
             ) : (
-              <div><h3>{section.title}</h3><p>{section.purpose}</p><div className="dimension-row">{section.dimension_keys.map((key) => <span className="dimension-chip" key={key}>{key}</span>)}</div></div>
+              <div><h3>{section.title}</h3><p>{section.purpose}</p><div className="dimension-row">{section.dimension_keys.map((key) => <span className="dimension-chip" key={key} title={key}>{dimensionLabel(key)}</span>)}</div></div>
             )}
           </li>
         ))}
@@ -204,6 +217,9 @@ export default function ReviewResults({
   runId,
   request,
   eventSequence,
+  sources,
+  sourceCount,
+  completed,
   citationsValidated,
   canSubmitHumanInput,
 }: ReviewResultsProps) {
@@ -249,43 +265,90 @@ export default function ReviewResults({
       (sectionOrder.get(right.section_key) ?? Number.MAX_SAFE_INTEGER),
   );
   const invalidSectionCount = (sectionsQuery.data?.length ?? 0) - sections.length;
+  const paperTitles = new Map(
+    sources.flatMap((source) => {
+      const title = source.metadata_snapshot.title;
+      return source.paper_id && typeof title === "string" && title.trim()
+        ? [[source.paper_id, title.trim()] as const]
+        : [];
+    }),
+  );
+  const evidenceNumbers = new Map<string, number>();
+  for (const evidenceId of [
+    ...rows.flatMap((row) => row.evidence_ids),
+    ...sections.flatMap((section) => section.claims.flatMap((claim) => claim.evidence_ids)),
+  ]) {
+    if (!evidenceNumbers.has(evidenceId)) evidenceNumbers.set(evidenceId, evidenceNumbers.size + 1);
+  }
+  const outlineSection = (
+    <section className={`section-block ${request ? "review-human-focus" : ""}`} id="review-outline" aria-labelledby="outline-title">
+      <div className="section-title-row"><div><p className="project-library-kicker">{request ? "需要你的确认" : "研究结构"}</p><h2 id="outline-title">研究大纲</h2></div><span className="section-count">{String(parsedOutline.length).padStart(2, "0")}</span></div>
+      {outlineQuery.isPending && <p className="muted">正在读取大纲…</p>}
+      {outlineQuery.isError && !isNotReady(outlineQuery.error) && <p className="error-text">{errorMessage(outlineQuery.error)}</p>}
+      {!outlineQuery.isPending && (
+        <OutlineWorkbench
+          key={outlineQuery.data?.output_id ?? "missing"}
+          projectId={projectId}
+          runId={runId}
+          output={outlineQuery.data}
+          request={request}
+          availableDimensions={availableDimensions}
+          canSubmit={canSubmitHumanInput}
+        />
+      )}
+    </section>
+  );
+  const hasResults = completed || Boolean(
+    matrixQuery.data || outlineQuery.data || sections.length > 0 || artifactsQuery.data?.length,
+  );
   return (
     <div className="review-results-flow">
-      <section className="section-block review-matrix-primary" aria-labelledby="matrix-title">
+      {completed && (
+        <section className="review-result-summary" aria-labelledby="result-summary-title">
+          <div>
+            <p className="project-library-kicker">研究结果</p>
+            <h2 id="result-summary-title">证据综述已准备完成</h2>
+            <p>{sourceCount} 篇可用来源 · {rows.length} 条 Matrix 记录 · {citationsValidated ? "引用已校验" : "引用待校验"}</p>
+          </div>
+          <div className="review-result-actions">
+            <a className="button-link" href="#review-sections">阅读综述</a>
+            <a className="button-outline button-link" href="#review-artifacts">下载文件</a>
+            <a className="text-link" href="#review-sources">查看来源</a>
+          </div>
+        </section>
+      )}
+
+      {hasResults && (
+        <nav className="review-result-nav" aria-label="研究结果导航">
+          <a href="#review-matrix">证据矩阵</a>
+          <a href="#review-sections">简要综述</a>
+          <a href="#review-outline">研究大纲</a>
+          <a href="#review-sources">来源</a>
+        </nav>
+      )}
+
+      {request ? outlineSection : null}
+
+      <section className="section-block review-matrix-primary" id="review-matrix" aria-labelledby="matrix-title">
         <div className="section-title-row"><div><p className="project-library-kicker">主要分析结果</p><h2 id="matrix-title">Evidence Matrix</h2><p className="section-description">按论文和分析维度整理结论、限制与可回查证据。</p></div><span className="section-count">{String(rows.length).padStart(2, "0")}</span></div>
         {matrixQuery.isPending && <p className="muted">正在读取 Evidence Matrix…</p>}
         {matrixQuery.isError && !isNotReady(matrixQuery.error) && <p className="error-text">{errorMessage(matrixQuery.error)}</p>}
         {!matrixQuery.isPending && (!matrixQuery.isError || isNotReady(matrixQuery.error)) && !matrixQuery.data && <div className="empty-state compact"><h3>Evidence Matrix 尚未生成</h3><p>来源完成解析和索引后，系统才会固定本次任务的证据边界。</p></div>}
-        {rows.length > 0 && <div className="matrix-table-wrap"><table className="matrix-table"><thead><tr><th>Paper</th><th>维度</th><th>结论 / 限制</th><th>Evidence</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.paper_id}:${row.dimension_key}`}><td className="mono">{row.paper_id.slice(0, 8)}</td><td>{row.dimension_key}</td><td>{row.status === "insufficient_evidence" ? <span className="badge badge-warn">证据不足</span> : <><p>{row.finding}</p>{row.limitations && <small>限制：{row.limitations}</small>}</>}</td><td><div className="evidence-chip-row">{row.evidence_ids.map((id) => <EvidenceLocator key={id} projectId={projectId} evidenceId={id}/>)}</div></td></tr>)}</tbody></table></div>}
+        {rows.length > 0 && <div className="matrix-table-wrap"><table className="matrix-table"><thead><tr><th>论文</th><th>分析维度</th><th>结论与限制</th><th>证据</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.paper_id}:${row.dimension_key}`}><td><span className="matrix-paper"><strong title={paperTitles.get(row.paper_id) ?? row.paper_id}>{paperTitles.get(row.paper_id) ?? "未命名论文"}</strong><small className="mono">{row.paper_id.slice(0, 8)}</small></span></td><td><span className="matrix-dimension" title={row.dimension_key}>{dimensionLabel(row.dimension_key)}</span></td><td>{row.status === "insufficient_evidence" ? <span className="matrix-insufficient">证据不足</span> : <><p>{row.finding}</p>{row.limitations && <small>限制：{row.limitations}</small>}</>}</td><td><div className="evidence-chip-row">{row.evidence_ids.map((id) => <EvidenceLocator key={id} projectId={projectId} evidenceId={id} number={evidenceNumbers.get(id) ?? 0}/>)}</div></td></tr>)}</tbody></table></div>}
       </section>
 
-      <section className="section-block" aria-labelledby="outline-title">
-        <div className="section-title-row"><div><p className="project-library-kicker">人工确认节点</p><h2 id="outline-title">结构化大纲</h2></div><span className="section-count">{String(outlineSections(outlineQuery.data).length).padStart(2, "0")}</span></div>
-        {outlineQuery.isPending && <p className="muted">正在读取大纲…</p>}
-        {outlineQuery.isError && !isNotReady(outlineQuery.error) && <p className="error-text">{errorMessage(outlineQuery.error)}</p>}
-        {!outlineQuery.isPending && (
-          <OutlineWorkbench
-            key={outlineQuery.data?.output_id ?? "missing"}
-            projectId={projectId}
-            runId={runId}
-            output={outlineQuery.data}
-            request={request}
-            availableDimensions={availableDimensions}
-            canSubmit={canSubmitHumanInput}
-          />
-        )}
-      </section>
-
-      <section className="section-block" aria-labelledby="sections-title">
-        <div className="section-title-row"><div><p className="project-library-kicker">基于证据写作</p><h2 id="sections-title">章节与引用</h2></div><span className="section-count">{String(sections.length).padStart(2, "0")}</span></div>
+      <section className="section-block" id="review-sections" aria-labelledby="sections-title">
+        <div className="section-title-row"><div><p className="project-library-kicker">研究结论</p><h2 id="sections-title">简要综述</h2><p className="section-description">按研究大纲组织结论，并保留可回查的引用。</p></div><span className="section-count">{String(sections.length).padStart(2, "0")}</span></div>
         {sectionsQuery.isPending && <p className="muted">正在读取章节与 Evidence 绑定…</p>}
         {sectionsQuery.isError && <p className="error-text">{errorMessage(sectionsQuery.error)}</p>}
         {invalidSectionCount > 0 && <p className="error-text">{invalidSectionCount} 个 Section Output 不符合 section.v1 展示契约，已拒绝部分投影。</p>}
         {!sectionsQuery.isPending && !sectionsQuery.isError && sectionsQuery.data?.length === 0 && <div className="empty-state compact"><h3>章节尚未生成</h3><p>批准大纲后，章节会按顺序写作并经过 Citation Validator。</p></div>}
-        <div className="review-section-stack">{sections.map((section, index) => <article key={section.section_key}><header><span className="outline-number">{String(index + 1).padStart(2, "0")}</span><div><h3>{section.title}</h3><p>{section.summary}</p></div><span className={`badge ${section.status === "insufficient_evidence" ? "badge-warn" : citationsValidated ? "badge-ok" : "badge-pending"}`}>{section.status === "insufficient_evidence" ? "证据不足" : citationsValidated ? "引用已校验" : "Evidence 已绑定"}</span></header><ol>{section.claims.map((claim, claimIndex) => <li key={`${section.section_key}:${claimIndex}`}><p>{claim.text}</p><div className="evidence-chip-row">{claim.evidence_ids.map((id) => <EvidenceLocator key={id} projectId={projectId} evidenceId={id}/>)}</div></li>)}</ol>{section.terminology.length > 0 && <dl className="terminology-list">{section.terminology.map((item) => <div key={item.term}><dt>{item.term}</dt><dd>{item.definition}</dd></div>)}</dl>}</article>)}</div>
+        <div className="review-section-stack">{sections.map((section, index) => <article key={section.section_key}><header><span className="outline-number">{String(index + 1).padStart(2, "0")}</span><div><h3>{section.title}</h3><p>{section.summary}</p></div><span className={`badge ${section.status === "insufficient_evidence" ? "badge-warn" : citationsValidated ? "badge-ok" : "badge-pending"}`}>{section.status === "insufficient_evidence" ? "证据不足" : citationsValidated ? "引用已校验" : "Evidence 已绑定"}</span></header><ol>{section.claims.map((claim, claimIndex) => <li key={`${section.section_key}:${claimIndex}`}><p>{claim.text}</p><div className="evidence-chip-row">{claim.evidence_ids.map((id) => <EvidenceLocator key={id} projectId={projectId} evidenceId={id} number={evidenceNumbers.get(id) ?? 0}/>)}</div></li>)}</ol>{section.terminology.length > 0 && <dl className="terminology-list">{section.terminology.map((item) => <div key={item.term}><dt>{item.term}</dt><dd>{item.definition}</dd></div>)}</dl>}</article>)}</div>
       </section>
 
-      <section className="section-block" aria-labelledby="artifacts-title">
+      {!request ? outlineSection : null}
+
+      <section className="section-block" id="review-artifacts" aria-labelledby="artifacts-title">
         <div className="section-title-row"><div><p className="project-library-kicker">最终产物</p><h2 id="artifacts-title">研究文件</h2></div><span className="section-count">{String(artifactsQuery.data?.length ?? 0).padStart(2, "0")}</span></div>
         {artifactsQuery.isPending && <p className="muted">正在读取研究文件…</p>}
         {artifactsQuery.isError && <p className="error-text">{errorMessage(artifactsQuery.error)}</p>}

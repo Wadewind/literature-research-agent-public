@@ -8,6 +8,7 @@ import PageBar from "../components/PageBar";
 import ReviewResults from "../components/ReviewResults";
 import ReviewSourceSelection from "../components/ReviewSourceSelection";
 import {
+  reviewProductStageRail,
   reviewStageRail,
   sourcePresentation,
   stageLabel,
@@ -98,17 +99,43 @@ export default function ReviewDetailPage() {
   const { run, review, steps } = detail;
   const notice = runNotice(detail);
   const rail = reviewStageRail(review.current_stage, run.status);
+  const productRail = reviewProductStageRail(review.current_stage, run.status);
+  const readySourceCount = sourcesQuery.data?.filter((source) => source.status === "ready").length ?? 0;
+  const currentProductStage = productRail.find((item) =>
+    item.state === "current" || item.state === "waiting-current" || item.state === "failed",
+  );
+  const fullStageIndex = rail.findIndex((item) => item.key === review.current_stage);
+  const fullStageProgress = run.status === "succeeded" ? rail.length : Math.max(fullStageIndex + 1, 0);
 
   return (
     <div className="page-flow review-detail-page">
       <PageBar
         breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "文献研究", to: `/projects/${projectId}/reviews` }, { label: run.run_id.slice(0, 8) }]}
         title={review.research_question}
-        actions={<div className="page-bar-action-group"><span className={badgeClass(run.status)}>{statusLabel(run.status)}</span><span className="page-bar-meta">当前：{stageLabel(review.current_stage)}</span><span className="mono page-bar-meta">{review.workflow_version}</span>{isCancellable(run.status) ? <button className="danger" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>{cancelMutation.isPending ? "正在请求取消…" : "取消任务"}</button> : null}</div>}
+        actions={<div className="page-bar-action-group"><span className={badgeClass(run.status)}>{statusLabel(run.status)}</span>{isCancellable(run.status) ? <button className="danger" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>{cancelMutation.isPending ? "正在请求取消…" : "取消任务"}</button> : null}</div>}
       />
       {cancelMutation.isError && <p className="notice error-text">{errorMessage(cancelMutation.error)}</p>}
 
-      <section className={`review-state-notice ${notice.tone}`} aria-live="polite"><span className="status-dot" aria-hidden="true"/><div><strong>{notice.title}</strong><p>{notice.text}</p></div></section>
+      {run.status !== "succeeded" && (
+        <section className={`review-progress-overview ${notice.tone}`} aria-labelledby="product-progress-title" aria-live="polite">
+          <div className="review-progress-copy">
+            <div>
+              <p className="project-library-kicker">当前进展</p>
+              <h2 id="product-progress-title">{notice.title}</h2>
+              <p>{notice.text}</p>
+            </div>
+            {currentProductStage && <span className="review-current-stage">{currentProductStage.label}</span>}
+          </div>
+          <ol className="product-stage-rail">
+            {productRail.map((item, index) => (
+              <li key={item.key} className={`stage-${item.state}`} aria-current={item.state === "current" || item.state === "waiting-current" ? "step" : undefined}>
+                <span className="product-stage-index">{String(index + 1).padStart(2, "0")}</span>
+                <span><strong>{item.label}</strong><small>{item.description}</small></span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       <ReviewSourceSelection
         projectId={projectId}
@@ -116,46 +143,62 @@ export default function ReviewDetailPage() {
         request={detail.open_human_input_request}
       />
 
-      <section className="stage-section" aria-labelledby="stage-title">
-        <div className="section-title-row"><div><p className="project-library-kicker">任务进度</p><h2 id="stage-title">研究流程</h2></div><span className="section-count">{String(rail.findIndex((item) => item.key === review.current_stage) + 1).padStart(2, "0")}/{rail.length}</span></div>
-        <ol className="stage-rail">
-          {rail.map((item) => <li key={item.key} className={`stage-${item.state}`} aria-current={item.state === "current" || item.state === "waiting-current" ? "step" : undefined}><span className="stage-node" aria-hidden="true"/><span><strong>{item.label}</strong><small>{STAGE_STATE_LABEL[item.state]}</small></span></li>)}
-        </ol>
-      </section>
-
       <ReviewResults
         projectId={projectId}
         runId={runId}
         request={detail.open_human_input_request?.request_kind === "outline" ? detail.open_human_input_request : null}
         eventSequence={stream.lastSequence}
+        sources={sourcesQuery.data ?? []}
+        sourceCount={readySourceCount}
+        completed={run.status === "succeeded"}
         citationsValidated={steps.some(
           (step) => step.step_key === "validate_sections" && step.status === "succeeded",
         )}
         canSubmitHumanInput={run.status === "waiting_input"}
       />
 
-      <div className="review-detail-support-grid">
-        <section className="section-block" aria-labelledby="sources-title">
-          <div className="section-title-row"><div><p className="project-library-kicker">任务输入</p><h2 id="sources-title">本次来源</h2></div><div className="section-tools"><Link className="text-link" to={`/projects/${projectId}?add=search`}>前往文献库补充来源</Link><span className="section-count">{String(sourcesQuery.data?.length ?? 0).padStart(2, "0")}</span></div></div>
-          {sourcesQuery.isError && <p className="notice error-text">{errorMessage(sourcesQuery.error)}</p>}
-          {sourcesQuery.isPending && <p className="muted">正在读取来源…</p>}
-          {sourcesQuery.data?.length === 0 && <div className="empty-state compact"><h3>尚未发现来源</h3><p>检索完成后，来源会按 arXiv 排名在这里出现。</p></div>}
-          <ol className="review-source-list">
-            {sourcesQuery.data?.map((source) => {
-              const presentation = sourcePresentation(source.status);
-              return <li key={source.source_id}><span className="source-rank">{String(source.rank).padStart(2, "0")}</span><span className="source-identity"><strong>{sourceTitle(source)}</strong><small>{source.source_kind === "project" ? "项目文献库 · 固定版本" : `arXiv ${source.arxiv_id} ${source.arxiv_version}`}</small></span><span className={`source-status source-${presentation.tone}`}>{presentation.label}</span>{source.failure_code && <small className="source-failure">{source.failure_code}</small>}</li>;
-            })}
-          </ol>
-        </section>
-        <details className="section-block review-diagnostics">
-          <summary><span><span className="project-library-kicker">运行诊断</span><strong>执行记录</strong></span><span>{String(steps.length).padStart(2, "0")}</span></summary>
-          <ol className="review-step-list">
-            {steps.map((step) => <li key={step.step_id}><span className={`step-state step-${step.status}`} aria-hidden="true"/><span><strong>{stageLabel(step.step_key)}</strong><small>{step.status === "failed" && step.error_code ? `${stepStatusLabel(step.status)} · ${step.error_code}` : stepStatusLabel(step.status)}</small></span><time>{step.completed_at ? new Date(step.completed_at).toLocaleString() : "—"}</time></li>)}
-          </ol>
-        </details>
-      </div>
+      <section className="section-block review-sources-section" id="review-sources" aria-labelledby="sources-title">
+        <div className="section-title-row"><div><p className="project-library-kicker">研究范围</p><h2 id="sources-title">本次来源</h2></div><div className="section-tools"><Link className="text-link" to={`/projects/${projectId}?add=search`}>前往文献库补充来源</Link><span className="section-count">{String(sourcesQuery.data?.length ?? 0).padStart(2, "0")}</span></div></div>
+        {sourcesQuery.isError && <p className="notice error-text">{errorMessage(sourcesQuery.error)}</p>}
+        {sourcesQuery.isPending && <p className="muted">正在读取来源…</p>}
+        {sourcesQuery.data?.length === 0 && <div className="empty-state compact"><h3>尚未发现来源</h3><p>检索完成后，来源会按 arXiv 排名在这里出现。</p></div>}
+        <ol className="review-source-list">
+          {sourcesQuery.data?.map((source) => {
+            const presentation = sourcePresentation(source.status);
+            return <li key={source.source_id}><span className="source-rank">{String(source.rank).padStart(2, "0")}</span><span className="source-identity"><strong>{sourceTitle(source)}</strong><small>{source.source_kind === "project" ? "项目文献库 · 固定版本" : `arXiv ${source.arxiv_id} ${source.arxiv_version}`}</small></span><span className={`source-status source-${presentation.tone}`}>{presentation.label}</span>{source.failure_code && <small className="source-failure">{source.failure_code}</small>}</li>;
+          })}
+        </ol>
+      </section>
 
-      {stream.events.length > 0 && <details className="review-event-details"><summary>最近事件（{stream.events.length}）</summary><ol>{stream.events.slice(-8).map((event) => <li key={event.sequence}><span className="mono">#{event.sequence}</span><strong>{event.event_type}</strong><time>{new Date(event.occurred_at).toLocaleTimeString()}</time></li>)}</ol></details>}
+      <details className="review-execution-details">
+        <summary>
+          <span><span className="project-library-kicker">执行信息</span><strong>查看完整流程、步骤记录和最近事件</strong></span>
+          <span className="mono">{String(fullStageProgress).padStart(2, "0")}/{rail.length}</span>
+        </summary>
+        <div className="review-execution-content">
+          <section className="stage-section" aria-labelledby="stage-title">
+            <div className="section-title-row"><div><p className="project-library-kicker">固定工作流</p><h2 id="stage-title">完整执行流程</h2></div><span className="section-count">{String(fullStageProgress).padStart(2, "0")}/{rail.length}</span></div>
+            <ol className="stage-rail">
+              {rail.map((item) => <li key={item.key} className={`stage-${item.state}`} aria-current={item.state === "current" || item.state === "waiting-current" ? "step" : undefined}><span className="stage-node" aria-hidden="true"/><span><strong>{item.label}</strong><small>{STAGE_STATE_LABEL[item.state]}</small></span></li>)}
+            </ol>
+          </section>
+          <div className="review-execution-log-grid">
+            <section aria-labelledby="step-log-title">
+              <h3 id="step-log-title">步骤记录</h3>
+              <ol className="review-step-list">
+                {steps.map((step) => <li key={step.step_id}><span className={`step-state step-${step.status}`} aria-hidden="true"/><span><strong>{stageLabel(step.step_key)}</strong><small>{step.status === "failed" && step.error_code ? `${stepStatusLabel(step.status)} · ${step.error_code}` : stepStatusLabel(step.status)}</small></span><time>{step.completed_at ? new Date(step.completed_at).toLocaleString() : "—"}</time></li>)}
+              </ol>
+            </section>
+            <section aria-labelledby="event-log-title">
+              <h3 id="event-log-title">最近事件</h3>
+              {stream.events.length === 0 ? <p className="muted">当前浏览器会话中还没有收到新事件。</p> : (
+                <ol className="review-event-list">{stream.events.slice(-8).map((event) => <li key={event.sequence}><span className="mono">#{event.sequence}</span><strong>{event.event_type}</strong><time>{new Date(event.occurred_at).toLocaleTimeString()}</time></li>)}</ol>
+              )}
+            </section>
+          </div>
+          <p className="review-workflow-version">Workflow <span className="mono">{review.workflow_version}</span></p>
+        </div>
+      </details>
     </div>
   );
 }

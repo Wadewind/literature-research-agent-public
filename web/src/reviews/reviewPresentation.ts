@@ -15,12 +15,50 @@ export const FIXED_REVIEW_STAGES = [
   { key: "finalize", label: "完成" },
 ] as const;
 
+export const PRODUCT_REVIEW_STAGES = [
+  {
+    key: "prepare_sources",
+    label: "准备来源",
+    description: "检索、筛选并准备论文来源",
+    stages: [
+      "validate_request",
+      "formulate_search_strategy",
+      "search_arxiv",
+      "review_sources",
+      "import_arxiv_papers",
+      "wait_for_ingestion",
+    ],
+  },
+  {
+    key: "organize_evidence",
+    label: "整理证据",
+    description: "构建证据矩阵并确认研究大纲",
+    stages: ["build_evidence_matrix", "propose_outline", "persist_outline", "review_outline"],
+  },
+  {
+    key: "draft_review",
+    label: "撰写综述",
+    description: "基于已固定的证据撰写章节",
+    stages: ["draft_sections"],
+  },
+  {
+    key: "validate_export",
+    label: "校验与导出",
+    description: "校验引用与一致性并导出文件",
+    stages: ["validate_sections", "consistency_check", "export_review", "finalize"],
+  },
+] as const;
+
 export type StageRailState = "completed" | "current" | "waiting-current" | "failed" | "waiting";
 
 export interface StageRailItem {
   key: string;
   label: string;
   state: StageRailState;
+}
+
+export interface ProductStageRailItem extends StageRailItem {
+  description: string;
 }
 
 export function stageLabel(stage: string): string {
@@ -41,6 +79,32 @@ export function reviewStageRail(currentStage: string, runStatus: string): StageR
       } else state = "current";
     }
     return { ...stage, state };
+  });
+}
+
+export function reviewProductStageRail(
+  currentStage: string,
+  runStatus: string,
+): ProductStageRailItem[] {
+  const currentIndex = PRODUCT_REVIEW_STAGES.findIndex((stage) =>
+    stage.stages.some((key) => key === currentStage),
+  );
+  return PRODUCT_REVIEW_STAGES.map((stage, index) => {
+    let state: StageRailState = "waiting";
+    if (runStatus === "succeeded" || (currentIndex >= 0 && index < currentIndex)) {
+      state = "completed";
+    } else if (index === currentIndex) {
+      if (runStatus === "failed" || runStatus === "cancelled") state = "failed";
+      else if (runStatus === "waiting_input" || runStatus === "waiting_dependency") {
+        state = "waiting-current";
+      } else state = "current";
+    }
+    return {
+      key: stage.key,
+      label: stage.label,
+      description: stage.description,
+      state,
+    };
   });
 }
 

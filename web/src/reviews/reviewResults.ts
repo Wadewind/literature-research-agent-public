@@ -46,6 +46,27 @@ const SECTION_FIELDS = new Set([
   "terminology",
 ]);
 
+const DIMENSION_LABELS: Record<string, string> = {
+  baselines: "对比基线",
+  classical_methods: "经典方法",
+  contributions: "主要贡献",
+  datasets: "数据集",
+  evaluation_metrics: "评价指标",
+  experimental_setup: "实验设置",
+  future_work: "未来方向",
+  learning_based: "学习方法",
+  limitations: "研究局限",
+  main_findings: "主要结论",
+  methodology: "研究方法",
+  optimization_based: "优化方法",
+  reliability: "可靠性",
+  sampling_based: "采样方法",
+};
+
+export function dimensionLabel(key: string): string {
+  return DIMENSION_LABELS[key] ?? key.replaceAll("_", " ").replaceAll("-", " ");
+}
+
 function hasExactKeys(value: Record<string, unknown>, expected: Set<string>): boolean {
   const keys = Object.keys(value);
   return keys.length === expected.size && keys.every((key) => expected.has(key));

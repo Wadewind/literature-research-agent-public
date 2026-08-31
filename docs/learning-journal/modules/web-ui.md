@@ -34,7 +34,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   并行读取详情和 Sources，`useRunEvents(runId)` 收到业务 Event 后只失效 `review`、`reviews` 与
   `review-sources` Query，真实内容继续从 API 恢复。
 - 固定 Stage rail 编码 `review.v1` 的真实顺序，并将持久 `current_stage` 与 Run 状态确定性映射为完成、
-  当前、等待和停止。它不实现浏览器状态机，也不根据 Event 推断业务 Stage。
+  当前、等待和停止。详情页首屏只把它投影为“准备来源 / 整理证据 / 撰写综述 / 校验与导出”四个产品
+  阶段；完整 14 步、步骤记录、Workflow 版本和最近事件统一收进底部“执行信息”。完成态不再显示大面积
+  进度，而是直接展示来源数、Matrix 行数、引用校验状态和结果导航。两层展示都不实现浏览器状态机，
+  也不根据 Event 推断业务 Stage。
 - Outline 表单只把标题、目标、分析维度和 feedback 留在 React 交互状态。提交体携带服务端 Request ID/
   version、Outline Output ID 和 action；相同失败意图复用 `Idempotency-Key`，任一版本或表单语义变化
   才生成新 Key。成功后由 REST 重载，不在本地假设 Workflow 已推进。
@@ -44,7 +47,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   feedback 也明确不携带本地编辑。
 - Matrix 与 Section 只渲染版本化 ReviewOutput。Section API 每个 key 只返回最新版本，页面按 Outline
   顺序重排；Evidence ID 点击后再调用现有 Project-scoped Evidence API 获取 PaperVersion 与页码，
-  PDF 链接使用受限 file endpoint。Artifact 只使用 Project-scoped content endpoint。
+  PDF 链接使用受限 file endpoint。Matrix 以 Review Source 快照把 `paper_id` 投影为论文标题，短 ID
+  降为次级信息；常见 dimension key 转换为中文标签，Evidence ID 在当前结果中稳定编号为 `[1]`、
+  `[2]`，点击后才读取详情。Artifact 只使用 Project-scoped content endpoint。
 - Agent 页并行读取 Project、Session、消息、Review Matrix、MCP/Skill Catalog 与 Profile；TanStack
   Query 持有服务端状态，本地只保存输入意图、能力配置草稿和当前选中的 Evidence。每条消息使用稳定
   `Idempotency-Key`，活动 Turn 时禁发；SSE 只显示允许列表中的业务活动，终态后失效 Session、Message
@@ -109,7 +114,8 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   `output_id/version/row_count/valid_papers/failed_papers` 摘要；后端用 owner/Project-scoped 批量查询，
   不逐 Review probing，也不把 `config_snapshot`、Prompt 版本或 Checkpoint 暴露给列表。
 - **Stage rail 是展示映射**：前端保存固定顺序和中文标签，但合法转换仍只属于后端 Domain；刷新、
-  SSE 重连或页面直接打开都以 Detail API 的 `current_stage` 为准。
+  SSE 重连或页面直接打开都以 Detail API 的 `current_stage` 为准。四阶段产品进度只是固定 14 步的
+  分组投影，不改变 Workflow、Checkpoint、取消或重试语义；完整流程仍可从执行信息展开核对。
 - **HITL 交互意图不是业务状态**：浏览器可以为同一失败提交保留 Key，但 Request 是否开放、版本是否
   过期、edit 生成哪个批准 Outline，以及 Run/Outbox 是否恢复都由后端原子事务决定；409 后界面提示
   刷新，不在客户端自动改写版本。
@@ -331,6 +337,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - 2026-08-31 的 Review 创建页布局收敛后，前端全量为 40 files / 198 passed，production build 通过。
   1600×1000 浏览器走查确认来源卡位于中央工作区、研究问题 Composer 固定在工作区底部，页面无横向
   溢出；控制台仅保留既有 `favicon.ico` 404。
+- 2026-08-31 的 Review Detail 产品化调整新增四阶段投影和维度标签测试，前端全量为 40 files /
+  202 passed，production build 通过；真实完成任务与取消中任务的浏览器走查确认结果优先、四阶段进度、
+  论文标题、中文维度、编号引用和默认收起的执行信息均正确，两种状态无横向溢出或 Vite 错误浮层。
 
 ## 60 秒面试说明
 
