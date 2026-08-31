@@ -6,6 +6,7 @@ import { apiFetch, errorMessage } from "../api/client";
 import type { ReviewDetail, ReviewSource } from "../api/types";
 import PageBar from "../components/PageBar";
 import ReviewResults from "../components/ReviewResults";
+import ReviewSourceSelection from "../components/ReviewSourceSelection";
 import {
   reviewStageRail,
   sourcePresentation,
@@ -33,7 +34,8 @@ const STAGE_STATE_LABEL: Record<StageRailState, string> = {
 
 function sourceTitle(source: ReviewSource): string {
   const title = source.metadata_snapshot.title;
-  return typeof title === "string" && title.trim() ? title : `arXiv ${source.arxiv_id}`;
+  if (typeof title === "string" && title.trim()) return title;
+  return source.source_kind === "project" ? "项目论文" : `arXiv ${source.arxiv_id}`;
 }
 
 function stepStatusLabel(status: string): string {
@@ -44,6 +46,7 @@ function stepStatusLabel(status: string): string {
 
 function runNotice(detail: ReviewDetail): { tone: string; title: string; text: string } {
   const { run, review } = detail;
+  if (run.status === "waiting_input" && detail.open_human_input_request?.request_kind === "source_selection") return { tone: "waiting", title: "等待候选论文筛选", text: "检索结果已经固定；确认前不会下载候选 PDF。" };
   if (run.status === "waiting_input") return { tone: "waiting", title: "等待大纲确认", text: "研究流程已安全暂停，不占用后台执行资源。请在下方批准、编辑或提交反馈。" };
   if (run.status === "waiting_dependency") return { tone: "waiting", title: "等待来源就绪", text: "系统正在等待所有已发现来源完成解析、索引或稳定失败后再固定证据边界。" };
   if (run.status === "retry_wait") return { tone: "waiting", title: "等待受限重试", text: "临时错误已记录，后台会按既定策略重新排队。" };
@@ -101,11 +104,17 @@ export default function ReviewDetailPage() {
       <PageBar
         breadcrumbs={[{ label: "研究项目", to: "/" }, { label: "文献研究", to: `/projects/${projectId}/reviews` }, { label: run.run_id.slice(0, 8) }]}
         title={review.research_question}
-        actions={<div className="page-bar-action-group"><span className={badgeClass(run.status)}>{statusLabel(run.status)}</span><span className="page-bar-meta">当前：{stageLabel(review.current_stage)}</span><span className="mono page-bar-meta">review.v1</span>{isCancellable(run.status) ? <button className="danger" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>{cancelMutation.isPending ? "正在请求取消…" : "取消任务"}</button> : null}</div>}
+        actions={<div className="page-bar-action-group"><span className={badgeClass(run.status)}>{statusLabel(run.status)}</span><span className="page-bar-meta">当前：{stageLabel(review.current_stage)}</span><span className="mono page-bar-meta">{review.workflow_version}</span>{isCancellable(run.status) ? <button className="danger" type="button" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>{cancelMutation.isPending ? "正在请求取消…" : "取消任务"}</button> : null}</div>}
       />
       {cancelMutation.isError && <p className="notice error-text">{errorMessage(cancelMutation.error)}</p>}
 
       <section className={`review-state-notice ${notice.tone}`} aria-live="polite"><span className="status-dot" aria-hidden="true"/><div><strong>{notice.title}</strong><p>{notice.text}</p></div></section>
+
+      <ReviewSourceSelection
+        projectId={projectId}
+        runId={runId}
+        request={detail.open_human_input_request}
+      />
 
       <section className="stage-section" aria-labelledby="stage-title">
         <div className="section-title-row"><div><p className="project-library-kicker">任务进度</p><h2 id="stage-title">研究流程</h2></div><span className="section-count">{String(rail.findIndex((item) => item.key === review.current_stage) + 1).padStart(2, "0")}/{rail.length}</span></div>
@@ -117,7 +126,7 @@ export default function ReviewDetailPage() {
       <ReviewResults
         projectId={projectId}
         runId={runId}
-        request={detail.open_human_input_request}
+        request={detail.open_human_input_request?.request_kind === "outline" ? detail.open_human_input_request : null}
         eventSequence={stream.lastSequence}
         citationsValidated={steps.some(
           (step) => step.step_key === "validate_sections" && step.status === "succeeded",
@@ -134,7 +143,7 @@ export default function ReviewDetailPage() {
           <ol className="review-source-list">
             {sourcesQuery.data?.map((source) => {
               const presentation = sourcePresentation(source.status);
-              return <li key={source.source_id}><span className="source-rank">{String(source.rank).padStart(2, "0")}</span><span className="source-identity"><strong>{sourceTitle(source)}</strong><small>arXiv {source.arxiv_id} {source.arxiv_version}</small></span><span className={`source-status source-${presentation.tone}`}>{presentation.label}</span>{source.failure_code && <small className="source-failure">{source.failure_code}</small>}</li>;
+              return <li key={source.source_id}><span className="source-rank">{String(source.rank).padStart(2, "0")}</span><span className="source-identity"><strong>{sourceTitle(source)}</strong><small>{source.source_kind === "project" ? "项目文献库 · 固定版本" : `arXiv ${source.arxiv_id} ${source.arxiv_version}`}</small></span><span className={`source-status source-${presentation.tone}`}>{presentation.label}</span>{source.failure_code && <small className="source-failure">{source.failure_code}</small>}</li>;
             })}
           </ol>
         </section>

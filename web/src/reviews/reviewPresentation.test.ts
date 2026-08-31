@@ -17,8 +17,8 @@ describe("reviewStageRail", () => {
   });
 
   it("等待输入与失败状态只作用于真实 current_stage", () => {
-    expect(reviewStageRail("review_outline", "waiting_input")[7].state).toBe("waiting-current");
-    expect(reviewStageRail("draft_sections", "failed")[8].state).toBe("failed");
+    expect(reviewStageRail("review_outline", "waiting_input")[8].state).toBe("waiting-current");
+    expect(reviewStageRail("draft_sections", "failed")[9].state).toBe("failed");
   });
 
   it("成功终态把所有固定阶段标记为完成", () => {

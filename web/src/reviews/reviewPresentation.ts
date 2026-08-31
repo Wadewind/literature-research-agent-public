@@ -2,6 +2,7 @@ export const FIXED_REVIEW_STAGES = [
   { key: "validate_request", label: "确认请求" },
   { key: "formulate_search_strategy", label: "制定检索策略" },
   { key: "search_arxiv", label: "检索 arXiv" },
+  { key: "review_sources", label: "筛选候选" },
   { key: "import_arxiv_papers", label: "导入论文" },
   { key: "wait_for_ingestion", label: "等待解析与索引" },
   { key: "build_evidence_matrix", label: "构建证据矩阵" },
@@ -43,13 +44,14 @@ export function reviewStageRail(currentStage: string, runStatus: string): StageR
   });
 }
 
-export type SourceTone = "waiting" | "importing" | "ready" | "failed";
+export type SourceTone = "waiting" | "importing" | "ready" | "failed" | "muted";
 
 export function sourcePresentation(status: string): { label: string; tone: SourceTone } {
   switch (status) {
     case "importing": return { label: "正在导入", tone: "importing" };
     case "ready": return { label: "可用于综述", tone: "ready" };
     case "failed": return { label: "导入失败", tone: "failed" };
+    case "rejected": return { label: "未选用", tone: "muted" };
     default: return { label: "等待导入", tone: "waiting" };
   }
 }

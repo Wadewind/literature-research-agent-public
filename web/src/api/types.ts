@@ -74,6 +74,7 @@ export interface ArxivSearchResult {
   categories: string[];
   published_at: string;
   updated_at: string;
+  page_count: number | null;
 }
 
 export interface ProjectPaperResult {
@@ -242,6 +243,7 @@ export interface HumanInputRequest {
   allowed_actions: string[];
   status: string;
   created_at: string;
+  request_kind: "outline" | "source_selection";
 }
 
 export interface ReviewDetail {
@@ -254,8 +256,9 @@ export interface ReviewDetail {
 export interface ReviewSource {
   source_id: string;
   review_run_id: string;
-  arxiv_id: string;
-  arxiv_version: string;
+  source_kind: "arxiv" | "project";
+  arxiv_id: string | null;
+  arxiv_version: string | null;
   rank: number;
   metadata_snapshot: Record<string, unknown>;
   status: string;

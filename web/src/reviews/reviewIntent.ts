@@ -2,14 +2,32 @@
 
 export interface ReviewIntent {
   researchQuestion: string;
+  paperVersionIds: string[];
+  autoSearchCandidates: boolean;
   key: string;
 }
 
 export function ensureReviewIntent(
   current: ReviewIntent | null,
   researchQuestion: string,
+  paperVersionIds: string[],
+  autoSearchCandidates: boolean,
   keyFactory: () => string,
 ): ReviewIntent {
-  if (current?.researchQuestion === researchQuestion) return current;
-  return { researchQuestion, key: keyFactory() };
+  const sameVersions =
+    current?.paperVersionIds.length === paperVersionIds.length &&
+    current.paperVersionIds.every((value, index) => value === paperVersionIds[index]);
+  if (
+    current?.researchQuestion === researchQuestion &&
+    current.autoSearchCandidates === autoSearchCandidates &&
+    sameVersions
+  ) {
+    return current;
+  }
+  return {
+    researchQuestion,
+    paperVersionIds: [...paperVersionIds],
+    autoSearchCandidates,
+    key: keyFactory(),
+  };
 }
