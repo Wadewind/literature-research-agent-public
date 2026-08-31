@@ -161,7 +161,11 @@ async def test_native_skills_load_once_across_two_turns_and_remain_read_only() -
         owner_id="owner-1",
         session_id="session-1",
         selections=(
-            SkillProfileSelection(SkillSource.PLATFORM, EVIDENCE_LED_SYNTHESIS.skill_id, 1),
+            SkillProfileSelection(
+                SkillSource.PLATFORM,
+                EVIDENCE_LED_SYNTHESIS.skill_id,
+                EVIDENCE_LED_SYNTHESIS.version,
+            ),
         ),
     )
     ref = SkillCatalog(platform_skills=(EVIDENCE_LED_SYNTHESIS,)).resolve_profile(

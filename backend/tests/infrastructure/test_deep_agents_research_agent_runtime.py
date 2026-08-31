@@ -297,6 +297,19 @@ class _ProjectToolModel(ScriptedDeepAgentChatModel):
         )
 
 
+class _ProjectToolPlaceholderModel(_ProjectToolModel):
+    def _next_message(self, messages: list[Any]) -> AIMessage:
+        message = super()._next_message(messages)
+        if self._tool_requested and message.content:
+            return AIMessage(
+                content=(
+                    "结论来自项目论文 [evidence:evidence-agent-1]\n"
+                    "标注 [evidence:…] 的部分来自本项目证据。"
+                )
+            )
+        return message
+
+
 class _MatrixToolModel(_ProjectToolModel):
     def _next_message(self, messages: list[Any]) -> AIMessage:
         self.model_call_count += 1
@@ -605,6 +618,26 @@ def test_artifact_tool_prompt_requires_formal_output_directory(monkeypatch) -> N
     assert ".txt=text/plain" in captured["system_prompt"]
     assert ".md/.markdown=text/markdown" in captured["system_prompt"]
     assert ".py=text/x-python" in captured["system_prompt"]
+
+
+def test_system_prompt_reserves_evidence_marker_for_real_ids(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def capture_graph(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(runtime_module, "create_deep_agent", capture_graph)
+    DeepAgentsResearchAgentRuntime(
+        model=ScriptedDeepAgentChatModel(model_name="evidence-prompt-model"),
+        checkpointer=MemorySaver(),
+    )
+
+    prompt = captured["system_prompt"]
+    assert "真实 Evidence ID" in prompt
+    assert "不要用省略号、尖括号或格式示例" in prompt
+    assert "解释格式时只称为“Evidence 标记”" in prompt
+    assert "[evidence:<id>" not in prompt
 
 
 async def test_persistent_usage_wraps_model_and_project_tool_boundaries() -> None:
@@ -2293,6 +2326,27 @@ async def test_project_tool_injects_turn_scope_and_hides_platform_ids_from_model
             "turn_run_id",
         )
     )
+
+
+async def test_project_tool_result_neutralizes_evidence_placeholder_metasyntax() -> None:
+    runtime = DeepAgentsResearchAgentRuntime(
+        model=_ProjectToolPlaceholderModel(),
+        project_context=_ProjectContext(),
+        checkpointer=MemorySaver(),
+    )
+    request = _request(
+        allowed_tool_names=("search_project_chunks",),
+        max_tool_calls=1,
+    )
+
+    await _collect(runtime.execute_turn(request))
+    result = await runtime.collect_turn_result(request.turn_run_id)
+
+    assert result.assistant_content == (
+        "结论来自项目论文 [evidence:evidence-agent-1]\n"
+        "标注 Evidence 标记 的部分来自本项目证据。"
+    )
+    assert result.evidence_ids == ("evidence-agent-1",)
 
 
 async def test_previous_turn_project_tool_does_not_reclassify_natural_reply() -> None:

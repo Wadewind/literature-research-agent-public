@@ -14,10 +14,18 @@ _CLAIM_LINE = re.compile(r"^(?P<text>.+?) \[evidence:(?P<ids>[^\[\]]+)\]$")
 _TRAILING_EVIDENCE = re.compile(r"^(?P<text>.+?)\s*\[evidence:(?P<ids>[^\[\]]+)\]$")
 _EVIDENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 _MARKDOWN_PREFIX = re.compile(r"^(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")
+_EVIDENCE_PLACEHOLDER = re.compile(
+    r"\[evidence:\s*(?:…|\.{3}|<id>|<id>\s*\[,\s*<id>\s*(?:…|\.{3})\])\s*\]"
+)
 
 
 class AgentAnswerContractError(ValueError):
     """Agent 最终回答不符合可确定性验证的引用语法。"""
+
+
+def normalize_agent_evidence_placeholders(content: str) -> str:
+    """只中和明显的 Evidence 格式占位符，不放宽真实引用校验。"""
+    return _EVIDENCE_PLACEHOLDER.sub("Evidence 标记", content)
 
 
 def canonicalize_agent_answer(content: str) -> str:

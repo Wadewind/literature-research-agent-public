@@ -841,6 +841,12 @@ Effect Store 交付有界前缀，外层取消时尝试关闭已认领 Effect；
 每轮消息还携带 Snapshot UTC 时间基准。是否启用引用校验只由本轮最终回复的显式标记决定，不扫描历史
 Thread 的 ToolMessage。旧 v3 Turn 不被原地升级，详细证据见 Real 模式体验缺陷台账。
 
+2026-08-31 的真实失败 Turn 补充了引用元语法边界：模型在普通说明中复述 `[evidence:…]` 时，不再因为
+省略号占位符误触发整轮永久失败。Runtime 与 Application 提交边界只中和 `…`、`...`、`<id>` 等明确
+格式占位符，真实 ID 的非法格式、重复引用和非行尾标记仍严格拒绝；系统 Prompt 与
+`evidence-led-synthesis` v2 改用真实 ID 示例并禁止输出占位符，v1 继续保留以解析已锁定 Session。
+`runtime_output_invalid` 同时获得不泄漏模型原文的前端专用提示。历史失败 Run 不被原地改写。
+
 2026-08-30 Real 对话回归修复了同一条 Workspace 成果链的两个契约缺口：每次新建或复用 Sandbox Lease
 都会幂等创建 `/workspace/outputs`，系统提示要求正式成果先写入该目录；`artifact_path_invalid` 在保留
 Rejected Candidate 与失败 ToolCall 审计后，以有界错误 ToolMessage 返回模型继续纠正，不再直接终止

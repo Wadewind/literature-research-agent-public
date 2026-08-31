@@ -51,6 +51,13 @@ export function agentTurnFailureSummary(
       code: "runtime_sandbox_metadata_invalid",
     };
   }
+  if (errorType === "runtime_output_invalid") {
+    return {
+      title: "回答引用格式未通过校验",
+      detail: "模型已完成研究，但最终回复的 Evidence 标记格式无效，因此未写入会话。可以重新发起本轮研究。",
+      code: "runtime_output_invalid",
+    };
+  }
   return {
     title: "本轮研究未能完成",
     detail: "本轮没有生成研究助手回复。可以调整问题后重新发起，并在研究活动中核对失败阶段。",
@@ -94,6 +101,23 @@ interface SkillIdentity {
   source: string;
   skill_id: string;
   version: number;
+}
+
+export function visibleSkillVersions<T extends SkillIdentity>(
+  skills: readonly T[],
+  selections: readonly SkillIdentity[],
+): T[] {
+  return skills.filter((skill) => {
+    const selected = selections.find((item) =>
+      item.source === skill.source && item.skill_id === skill.skill_id
+    );
+    if (selected) return selected.version === skill.version;
+    return !skills.some((candidate) =>
+      candidate.source === skill.source &&
+      candidate.skill_id === skill.skill_id &&
+      candidate.version > skill.version
+    );
+  });
 }
 
 export function isSkillSelectionSelected(

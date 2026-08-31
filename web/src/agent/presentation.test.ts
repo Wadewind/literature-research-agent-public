@@ -9,6 +9,7 @@ import {
   isSkillSelectionSelected,
   isSessionInProject,
   projectIndexLabel,
+  visibleSkillVersions,
 } from "./presentation";
 
 describe("Agent UI 投影", () => {
@@ -44,6 +45,21 @@ describe("Agent UI 投影", () => {
     ).toBe(false);
   });
 
+  it("研究方法默认只展示最新版，已有会话继续展示所选旧版本", () => {
+    const catalog = [
+      { source: "platform", skill_id: "synthesis", version: 1, name: "方法" },
+      { source: "platform", skill_id: "synthesis", version: 2, name: "方法" },
+      { source: "owner", skill_id: "comparison", version: 1, name: "对比" },
+    ];
+
+    expect(visibleSkillVersions(catalog, [])).toEqual([catalog[1], catalog[2]]);
+    expect(
+      visibleSkillVersions(catalog, [
+        { source: "platform", skill_id: "synthesis", version: 1 },
+      ]),
+    ).toEqual([catalog[0], catalog[2]]);
+  });
+
   it("Project 与 Session 闭包确认前禁止交互", () => {
     const project = { project_id: "project-1" };
     const session = { project_id: "project-1" };
@@ -72,6 +88,24 @@ describe("Agent UI 投影", () => {
     expect(summary.detail).toContain("未进入模型或工具执行");
     expect(JSON.stringify(summary)).not.toContain("secret endpoint");
     expect(JSON.stringify(summary)).not.toContain("provider detail");
+  });
+
+  it("将回答引用格式失败投影为可恢复说明且不回显模型输出", () => {
+    const summary = agentTurnFailureSummary({
+      event_type: "run_failed",
+      payload: {
+        error: {
+          type: "runtime_output_invalid",
+          message: "模型原始回答包含 [evidence:…]",
+        },
+      },
+    });
+
+    expect(summary.code).toBe("runtime_output_invalid");
+    expect(summary.title).toBe("回答引用格式未通过校验");
+    expect(summary.detail).toContain("未写入会话");
+    expect(JSON.stringify(summary)).not.toContain("模型原始回答");
+    expect(JSON.stringify(summary)).not.toContain("[evidence:…]");
   });
 
   it("未知失败只返回通用稳定错误码，不回显事件 payload", () => {

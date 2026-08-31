@@ -70,8 +70,11 @@ Agents 原生压缩逻辑，只把测试阈值降到可控值。强制压缩后�
   最终回复显式产生 Evidence 标记或返回固定证据不足文案时才启用引用契约；Runtime 不按 Project Tool
   调用历史重分类或清洗回复，而是完整交付 SDK 富文本，并只提取合法、位于行末的显式 Evidence Claim。
   标题、世界知识、外部来源、Browser/文件/`execute` 结果和操作说明可以与引用 Claim 共存并进入
-  PostgreSQL，但未标记正文不获得平台 Evidence 背书；任何已经写出的非法 Evidence 标记仍使本轮失败。
-  Application 负责显式 Evidence 的 Run/Project 授权、Citation Validator 与事务提交；
+  PostgreSQL，但未标记正文不获得平台 Evidence 背书。2026-08-31 的真实 Turn 发现模型会在格式说明中
+  复述 `[evidence:…]`，从而把普通说明误判成非法引用；当前 Runtime 与 Application 提交边界都会先把
+  `…`、`...`、`<id>` 等明确元语法占位符改写为普通“Evidence 标记”文字。真实 Evidence ID 格式错误、
+  重复 ID 或标记不在行尾仍然 fail-closed，Application 继续负责显式 Evidence 的 Run/Project 授权、
+  Citation Validator 与事务提交；
 - 每轮 HumanMessage 在正文前附加 `ContextSnapshot.created_at` 的 UTC 时间基准，使“今年”等相对日期不依赖
   模型训练时间；它不复制历史消息或改变 Deep Agents 的上下文/压缩职责；
 - 切片 4 当时未接 MCP、Browser、Sandbox、网络、长期 Memory 或 Skill；7.1 后续已接 OpenSandbox，
@@ -112,6 +115,8 @@ manifest 始终一致；旧 graph revision 继续 fail-closed。
 - 模型与 Tool middleware 在实际调用边界复核 permit，过期 owner 不能启动下一次调用或写 Runtime 终态；
 - `FAILED/CANCELLED/SUCCEEDED` 均可跨 Adapter/进程对账；取消还必须先验证业务 Run 已进入取消路径；
 - Runtime/Graph/Deep Agents/LangGraph revision 必须完全匹配，不兼容时 fail-closed；
+- `runtime_output_invalid` 在前端投影为专用的引用格式说明，不回显模型原文或 Provider 细节；已经失败的
+  历史 Turn 保持失败事实，用户重新发起后由新输出契约处理，不原地篡改 checkpoint 或产品消息；
 - 真实进程测试已证明同步 checkpoint 确认的模型/Tool 不重放，但未确认的在途调用仍可能重试。
 
 - 已存在 checkpoint 的相同请求只重放四个确定性 Event，不再次调用模型或 Tool；相同 Turn 的不同请求
@@ -176,6 +181,10 @@ Runtime 的回归证明模型可见并能执行 `mkdir`。相关 Infrastructure 
 
 受控命令沙箱内运行 Deep Agents 异步链时曾出现 selector 假性等待；相同完全离线命令在沙箱外会正常
 给出断言失败或通过结果。该现象只描述开发工具环境，不是产品 Sandbox 的能力或安全验证。
+
+2026-08-31 的 Evidence 占位符修复回归：Deep Agents Runtime 与 Agent Turn Executor 两个完整测试文件
+`82 passed in 60.48s`；领域契约与 Skill v2 定向测试 `26 passed`，数据库原子提交用例 `1 passed`；
+Ruff、Pyright 和 `git diff --check` 均通过。测试未调用真实模型或公网。
 
 ## 代码入口
 

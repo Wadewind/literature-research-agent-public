@@ -20,6 +20,7 @@ from literature_agent.domain.skill_configuration import (
 )
 from literature_agent.infrastructure.agent.skill_catalog import (
     EVIDENCE_LED_SYNTHESIS,
+    EVIDENCE_LED_SYNTHESIS_V1,
     PLATFORM_SKILLS,
 )
 from literature_agent.infrastructure.persistence.agent_repository import (
@@ -42,6 +43,13 @@ def _service(factory) -> SkillConfigurationService:
         skill_repo_factory=SqlalchemySkillRepository,
         platform_skills=PLATFORM_SKILLS,
     )
+
+
+def test_platform_evidence_skill_keeps_v1_and_publishes_placeholder_safe_v2() -> None:
+    assert EVIDENCE_LED_SYNTHESIS_V1.version == 1
+    assert EVIDENCE_LED_SYNTHESIS.version == 2
+    assert PLATFORM_SKILLS == (EVIDENCE_LED_SYNTHESIS_V1, EVIDENCE_LED_SYNTHESIS)
+    assert "不要输出标记占位符" in EVIDENCE_LED_SYNTHESIS.instructions
 
 
 @pytest.mark.asyncio
@@ -148,7 +156,11 @@ async def test_profile_is_owner_scoped_revision_guarded_and_locked_after_first_t
         scenario.actor, scenario.project.project_id, title="Skills"
     )
     service = _service(scenario.factory)
-    selection = SkillProfileSelection(SkillSource.PLATFORM, EVIDENCE_LED_SYNTHESIS.skill_id, 1)
+    selection = SkillProfileSelection(
+        SkillSource.PLATFORM,
+        EVIDENCE_LED_SYNTHESIS.skill_id,
+        EVIDENCE_LED_SYNTHESIS.version,
+    )
     profile = await service.update_profile(
         scenario.actor,
         session_value.session_id,

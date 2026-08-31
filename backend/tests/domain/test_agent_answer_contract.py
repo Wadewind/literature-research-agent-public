@@ -6,6 +6,7 @@ from literature_agent.domain.agent_answer import (
     AgentAnswerContractError,
     canonicalize_agent_answer,
     extract_agent_evidence_claims,
+    normalize_agent_evidence_placeholders,
     parse_agent_answer,
 )
 from literature_agent.domain.evidence import AnswerStatus
@@ -80,6 +81,43 @@ def test_extract_agent_evidence_claims_ignores_unmarked_world_knowledge_and_rece
 def test_extract_agent_evidence_claims_rejects_any_malformed_explicit_marker(
     content: str,
 ) -> None:
+    with pytest.raises(AgentAnswerContractError):
+        extract_agent_evidence_claims(content)
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("标注 [evidence:…] 的部分来自项目证据。", "标注 Evidence 标记 的部分来自项目证据。"),
+        ("格式为 [evidence:...]。", "格式为 Evidence 标记。"),
+        ("使用 [evidence:<id>] 结尾。", "使用 Evidence 标记 结尾。"),
+        ("格式是 [evidence:<id>[,<id>...]]。", "格式是 Evidence 标记。"),
+    ],
+)
+def test_normalize_agent_evidence_placeholders_only_rewrites_metasyntax(
+    content: str,
+    expected: str,
+) -> None:
+    assert normalize_agent_evidence_placeholders(content) == expected
+
+
+def test_normalized_placeholder_does_not_invalidate_real_evidence_claim() -> None:
+    content = normalize_agent_evidence_placeholders(
+        "结论来自项目论文 [evidence:e-1]\n"
+        "标注 [evidence:…] 的部分来自本项目证据。"
+    )
+
+    output, evidence_ids = extract_agent_evidence_claims(content)
+
+    assert content.endswith("标注 Evidence 标记 的部分来自本项目证据。")
+    assert [claim.text for claim in output.claims] == ["结论来自项目论文"]
+    assert evidence_ids == ("e-1",)
+
+
+def test_normalize_agent_evidence_placeholders_keeps_malformed_real_marker() -> None:
+    content = "合法 [evidence:e-1] 后面还有内容"
+
+    assert normalize_agent_evidence_placeholders(content) == content
     with pytest.raises(AgentAnswerContractError):
         extract_agent_evidence_claims(content)
 

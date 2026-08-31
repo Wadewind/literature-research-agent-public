@@ -4,7 +4,10 @@ import type {
   McpProfileSelection,
   SkillProfileSelection,
 } from "../api/types";
-import { isSkillSelectionSelected } from "../agent/presentation";
+import {
+  isSkillSelectionSelected,
+  visibleSkillVersions,
+} from "../agent/presentation";
 
 interface AgentCapabilityPanelProps {
   mcpCatalog: McpCatalogEntry[];
@@ -39,6 +42,8 @@ export default function AgentCapabilityPanel({
   onSkillToggle,
   onSave,
 }: AgentCapabilityPanelProps) {
+  const visibleSkills = visibleSkillVersions(skillCatalog, skillSelections);
+
   return (
     <details className="agent-capability-panel">
       <summary>
@@ -89,7 +94,7 @@ export default function AgentCapabilityPanel({
         <section>
           <h3>研究方法</h3>
           <p>{skillLocked ? "首轮开始后已锁定；更换研究方法需要新建会话。" : "研究方法会指导 Agent 如何组织证据，但不会扩大权限。"}</p>
-          {skillCatalog.map((skill) => {
+          {visibleSkills.map((skill) => {
             const selected = skillSelections.some((item) =>
               isSkillSelectionSelected(item, skill)
             );

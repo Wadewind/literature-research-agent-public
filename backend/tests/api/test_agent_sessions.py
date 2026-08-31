@@ -510,7 +510,7 @@ def test_skill_api_accepts_only_declarative_content_and_catalog_selection() -> N
                     {
                         "source": "platform",
                         "skill_id": EVIDENCE_LED_SYNTHESIS.skill_id,
-                        "version": 1,
+                        "version": EVIDENCE_LED_SYNTHESIS.version,
                     }
                 ],
             },
@@ -549,7 +549,7 @@ def test_skill_api_accepts_only_declarative_content_and_catalog_selection() -> N
         {
             "source": "platform",
             "skill_id": EVIDENCE_LED_SYNTHESIS.skill_id,
-            "version": 1,
+            "version": EVIDENCE_LED_SYNTHESIS.version,
         }
     ]
     assert rejected_path.status_code == 422

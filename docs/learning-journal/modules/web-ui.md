@@ -351,6 +351,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   202 passed，production build 与 `git diff --check` 通过。1280×720 本地只读走查确认三张方向卡、
   14 篇就绪索引提示和创建操作同屏，中央区域没有独立滚动，卡片与 Composer 间距约 34px，页面无横向
   溢出或 Vite 错误浮层；走查未创建 Session、未发送 Turn。
+- 2026-08-31 为 `runtime_output_invalid` 增加稳定的“回答引用格式未通过校验”说明，明确模型虽完成研究但
+  回复未写入会话，并引导重新发起；错误投影不回显原始模型输出、Provider 信息或内部 checkpoint。
+  平台 Skill 新版本发布后，能力面板对未选择会话只显示最新版；已有选择继续显示其精确旧版本，使锁定
+  Session 可恢复且不会出现两个同名研究方法。前端全量为 40 files / 204 passed，production build 通过。
 
 ## 60 秒面试说明
 
