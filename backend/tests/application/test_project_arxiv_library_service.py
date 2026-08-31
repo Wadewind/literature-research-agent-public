@@ -9,6 +9,7 @@ from literature_agent.application.project_arxiv_library_service import (
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.arxiv import ArxivPaper, ArxivSearchQuery, DownloadedPdf
 from literature_agent.domain.exceptions import ProjectArchivedError, ProjectNotFoundError
+from literature_agent.domain.paper import PaperTitleSource
 from literature_agent.domain.project import create_project
 from tests.fakes.fake_project_repository import FakeProjectRepository
 
@@ -112,6 +113,9 @@ async def test_import_uses_validated_official_url_and_existing_ingestion_pipelin
     )
 
     assert result == {"status": "queued"}
+    assert gateway.search_calls == [ArxivSearchQuery("id:2405.15460", max_results=1)]
     assert gateway.download_calls == [("https://arxiv.org/pdf/2405.15460v1", 1024)]
     assert ingestion.calls[0]["filename"] == "arxiv-2405.15460v1.pdf"
     assert ingestion.calls[0]["content"] == b"%PDF-1.4\nfixture"
+    assert ingestion.calls[0]["paper_title"] == gateway.paper.title
+    assert ingestion.calls[0]["paper_title_source"] is PaperTitleSource.ARXIV_METADATA

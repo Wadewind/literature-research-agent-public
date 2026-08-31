@@ -38,7 +38,7 @@ from literature_agent.domain.exceptions import (
     ProjectNotFoundError,
     RunNotFoundError,
 )
-from literature_agent.domain.paper import create_paper
+from literature_agent.domain.paper import PaperTitleSource, create_paper
 from literature_agent.domain.paper_version import create_paper_version
 from literature_agent.domain.project_paper import create_project_paper
 from literature_agent.domain.queue_outbox import create_outbox_entry
@@ -148,6 +148,8 @@ class IngestionService:
         content: bytes,
         idempotency_key: str,
         correlation_id: str,
+        paper_title: str | None = None,
+        paper_title_source: PaperTitleSource | None = None,
     ) -> UploadResult:
         """上传 PDF 并创建 Ingestion Run。
 
@@ -159,6 +161,8 @@ class IngestionService:
             content: 文件字节内容。
             idempotency_key: 调用方提供的幂等键。
             correlation_id: 关联标识符。
+            paper_title: 已由可信来源校验的可选论文标题。
+            paper_title_source: 可选标题来源，必须与标题同时提供。
 
         返回:
             上传结果，包含 run_id、paper_id、version_id 和初始状态。
@@ -169,6 +173,10 @@ class IngestionService:
             ProjectNotFoundError: Project 不存在或不属于当前 actor。
             ProjectArchivedError: Project 已归档，拒绝新上传。
         """
+        if paper_title is None and paper_title_source is not None:
+            raise ValueError("paper_title_required")
+        if paper_title is not None and paper_title_source is None:
+            raise ValueError("paper_title_source_required")
         self._validate_upload(idempotency_key, content)
         sanitized_filename = _sanitize_filename(filename)
         file_hash = _compute_sha256(content)
@@ -220,6 +228,11 @@ class IngestionService:
                 paper = await paper_repo.get_by_id(existing_version.paper_id)
                 if paper is None or paper.owner_id != actor.owner_id:
                     raise RunNotFoundError(existing_version.version_id)
+                if paper_title is not None and paper_title_source is not None:
+                    titled_paper = paper.with_title(paper_title, paper_title_source)
+                    if titled_paper is not paper:
+                        await paper_repo.update(titled_paper)
+                        paper = titled_paper
                 relation_repo = self._project_paper_repo_factory(session)
                 relation = await relation_repo.get(project_id, paper.paper_id)
                 already_added = relation is not None
@@ -264,7 +277,11 @@ class IngestionService:
                 await session.commit()
                 return result
 
-            paper = create_paper(actor.owner_id)
+            paper = create_paper(
+                actor.owner_id,
+                title=paper_title,
+                title_source=paper_title_source,
+            )
             storage_key = self._build_storage_key(
                 actor.owner_id, paper.paper_id, file_hash
             )

@@ -17,9 +17,10 @@
 用户选择 versioned_arxiv_id
   → Project/owner/归档校验
   → 确定性解析 arXiv ID 与版本
+  → 按 ID 重新读取并校验官方 arXiv 标题
   → 构造官方 HTTPS PDF 地址
   → Adapter 下载并校验 PDF
-  → IngestionService 内容哈希、幂等、Project 关联与 Run 创建
+  → IngestionService 写入 arXiv 标题、内容哈希、幂等、Project 关联与 Run 创建
   → Worker 继续解析和索引
 ```
 
@@ -35,6 +36,9 @@ Outbox 或 Storage 逻辑。
 - Project 不存在、跨 owner 或已归档时，在外部 I/O 前拒绝。
 - 临时 arXiv 错误映射为 `503`；非法选择、下载或文件校验错误返回稳定的 `4xx`；幂等冲突返回 `409`。
 - 下载成功后的重复提交由现有 IdempotencyRecord 与文件哈希复用，不宣称分布式 Exactly Once。
+- 每篇搜索结果独立跟踪导入请求；某篇请求进行中只禁用该行，其他候选仍可继续引入。
+- 新 Paper 在异步解析前即保存 `arxiv_metadata` 标题；同哈希复用已有 Paper 时也会按标题来源优先级
+  回填或升级标题，避免 UI 长期退化显示 `arxiv-<id>.pdf`。
 
 ## 安全与可观察性
 
@@ -55,7 +59,9 @@ Outbox 或 Storage 逻辑。
 - `tests/application/test_project_arxiv_library_service.py`：跨 owner、归档前置拒绝、官方 URL 与 Ingestion
   复用。
 - `tests/api/test_project_arxiv.py`：公开响应、幂等请求头和导入响应。
-- 2026-08-31 定向结果：6 passed；相关文件 Ruff、Pyright 通过；前端 build 与 AppSidebar 8 项测试通过。
+- 2026-08-31 并发与标题修复：应用服务与相关 API 共 29 项定向测试通过，相关 Ruff、Pyright 通过；
+  前端 40 files / 197 tests 与生产 build 通过。`test_paper_files.py` 依赖本地 PostgreSQL/Valkey，沙箱内
+  因网络隔离等待，改在已授权的本地环境运行后 7 项通过。
 - 浏览器检查验证 URL `?add=search`、三种添加方式、搜索结果布局、文献研究首页/详情以及 760px 窄屏；
   当前已运行的后端进程未热加载新路由，因此真实浏览器搜索需重启开发环境后再点击确认，API 行为由 ASGI
   测试覆盖。
@@ -65,6 +71,8 @@ Outbox 或 Storage 逻辑。
 - 当前只支持 arXiv，单次最多返回 20 条，UI 固定请求 10 条，不含分页和候选集合持久化。
 - `review.v1` 为兼容历史重放仍会自动搜索并导入来源；本模块不会静默改变已冻结 Workflow Profile。
 - 搜索结果尚未标注“已在当前项目”，重复引入依赖服务端内容哈希与项目关联幂等收敛。
+- 独立引入会为每篇选中论文额外执行一次精确 ID 元数据查询，以保证标题来自服务端重新校验的官方来源；
+  多篇并发请求仍受 arXiv Adapter 的单连接与请求间隔限制，不等同于并行轰击上游。
 
 ## 60 秒面试说明
 

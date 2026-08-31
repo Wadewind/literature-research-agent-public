@@ -10,11 +10,13 @@ from literature_agent.application.ports.arxiv_gateway import ArxivGateway
 from literature_agent.application.ports.project_repository import ProjectRepository
 from literature_agent.domain.actor import ActorContext
 from literature_agent.domain.arxiv import (
+    ArxivError,
     ArxivPaper,
     ArxivSearchQuery,
     parse_versioned_arxiv_id,
 )
 from literature_agent.domain.exceptions import ProjectArchivedError, ProjectNotFoundError
+from literature_agent.domain.paper import PaperTitleSource
 
 
 class PaperIngestion(Protocol):
@@ -29,6 +31,8 @@ class PaperIngestion(Protocol):
         content: bytes,
         idempotency_key: str,
         correlation_id: str,
+        paper_title: str | None = None,
+        paper_title_source: PaperTitleSource | None = None,
     ) -> UploadResult: ...
 
 
@@ -75,6 +79,19 @@ class ProjectArxivLibraryService:
         """仅根据已验证 arXiv ID 下载官方 PDF，并复用普通文献导入。"""
         await self._ensure_project_writable(actor, project_id)
         arxiv_id, version = parse_versioned_arxiv_id(versioned_arxiv_id)
+        metadata_results = await self._arxiv.search(
+            ArxivSearchQuery(expression=f"id:{arxiv_id}", max_results=1)
+        )
+        metadata = next(
+            (paper for paper in metadata_results if paper.arxiv_id == arxiv_id),
+            None,
+        )
+        if metadata is None:
+            raise ArxivError(
+                "arxiv_paper_not_found",
+                temporary=False,
+                http_status=404,
+            )
         pdf_url = f"https://arxiv.org/pdf/{arxiv_id}{version}"
         downloaded = await self._arxiv.download_pdf(
             pdf_url,
@@ -89,6 +106,8 @@ class ProjectArxivLibraryService:
             content=downloaded.content,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            paper_title=metadata.title,
+            paper_title_source=PaperTitleSource.ARXIV_METADATA,
         )
 
     async def _ensure_project_writable(self, actor: ActorContext, project_id: str) -> None:

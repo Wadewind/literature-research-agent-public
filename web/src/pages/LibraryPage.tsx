@@ -1,7 +1,7 @@
 /** Project 工作台：文献、Conversation 入口、索引状态与归档管理。 */
 
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { apiFetch, errorMessage } from "../api/client";
@@ -25,6 +25,7 @@ function formatSize(bytes: number): string {
 }
 
 type IngestMode = "upload" | "reuse" | "search";
+type ArxivImportVariables = { paper: ArxivSearchResult; key: string };
 
 const ARXIV_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
@@ -134,8 +135,10 @@ export default function LibraryPage() {
       );
     },
   });
+  const arxivImportMutationKey = ["project-arxiv-import", projectId] as const;
   const arxivImportMutation = useMutation({
-    mutationFn: ({ paper, key }: { paper: ArxivSearchResult; key: string }) =>
+    mutationKey: arxivImportMutationKey,
+    mutationFn: ({ paper, key }: ArxivImportVariables) =>
       apiFetch<UploadResult>(`/api/v1/projects/${projectId}/arxiv/import`, {
         method: "POST",
         headers: {
@@ -148,6 +151,11 @@ export default function LibraryPage() {
       setLastArxivImport(result);
       refreshLibraries();
     },
+  });
+  const pendingArxivImportIds = useMutationState({
+    filters: { mutationKey: arxivImportMutationKey, status: "pending" },
+    select: (mutation) =>
+      (mutation.state.variables as ArxivImportVariables | undefined)?.paper.versioned_id,
   });
   const removeMutation = useMutation({
     mutationFn: (paperId: string) =>
@@ -398,9 +406,7 @@ export default function LibraryPage() {
                 {arxivSearchMutation.data && arxivSearchMutation.data.length > 0 ? (
                   <ol className="project-arxiv-results">
                     {arxivSearchMutation.data.map((paper, index) => {
-                      const importing =
-                        arxivImportMutation.isPending &&
-                        arxivImportMutation.variables?.paper.versioned_id === paper.versioned_id;
+                      const importing = pendingArxivImportIds.includes(paper.versioned_id);
                       return (
                         <li key={paper.versioned_id}>
                           <span className="source-rank">{String(index + 1).padStart(2, "0")}</span>
@@ -415,7 +421,7 @@ export default function LibraryPage() {
                           <button
                             type="button"
                             className="button-quiet"
-                            disabled={archived || arxivImportMutation.isPending}
+                            disabled={archived || importing}
                             onClick={() => arxivImportMutation.mutate({ paper, key: crypto.randomUUID() })}
                           >
                             {importing ? "正在引入…" : "引入项目"}

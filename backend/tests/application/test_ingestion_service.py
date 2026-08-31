@@ -11,6 +11,7 @@ from literature_agent.domain.exceptions import (
     ProjectArchivedError,
     ProjectNotFoundError,
 )
+from literature_agent.domain.paper import PaperTitleSource
 from literature_agent.domain.project import create_project
 from tests.fakes.fake_event_repository import FakeEventRepository
 from tests.fakes.fake_idempotency_repository import FakeIdempotencyRepository
@@ -155,6 +156,32 @@ async def test_upload_valid_pdf_creates_run(
     version = await paper_version_repo.get_by_id(result.version_id)
     assert version is not None
     assert version.display_filename == "test.pdf"
+
+
+@pytest.mark.asyncio
+async def test_upload_with_arxiv_metadata_sets_paper_title(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    paper_repo: FakePaperRepository,
+) -> None:
+    """可信 arXiv 元数据应在异步解析前成为 Paper 标题。"""
+    result = await service.upload_paper_file(
+        actor=actor,
+        project_id=project.project_id,
+        filename="arxiv-2405.15460v1.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="arxiv-title",
+        correlation_id="corr-arxiv-title",
+        paper_title="TD3 Based Collision Free Motion Planning",
+        paper_title_source=PaperTitleSource.ARXIV_METADATA,
+    )
+
+    paper = await paper_repo.get_by_id(result.paper_id)
+    assert paper is not None
+    assert paper.title == "TD3 Based Collision Free Motion Planning"
+    assert paper.title_source is PaperTitleSource.ARXIV_METADATA
 
 
 @pytest.mark.asyncio
@@ -355,6 +382,46 @@ async def test_same_owner_hash_reuses_version_across_projects(
     assert reused.version_id == first.version_id
     assert reused.run_id == first.run_id
     assert await project_paper_repo.get(other.project_id, first.paper_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_reused_hash_backfills_arxiv_metadata_title(
+    service: IngestionService,
+    actor: ActorContext,
+    project: object,
+    project_repo: FakeProjectRepository,
+    paper_repo: FakePaperRepository,
+) -> None:
+    """再次按 arXiv 引入已有文件时应修复缺失的正式标题。"""
+    other = create_project(actor.owner_id, "另一个项目", "")
+    await project_repo.add(other)
+    first = await service.upload_paper_file(
+        actor=actor,
+        project_id=project.project_id,
+        filename="arxiv-2405.15460v1.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="arxiv-title-first",
+        correlation_id="corr-1",
+    )
+
+    reused = await service.upload_paper_file(
+        actor=actor,
+        project_id=other.project_id,
+        filename="arxiv-2405.15460v1.pdf",
+        content_type="application/pdf",
+        content=_pdf_content(),
+        idempotency_key="arxiv-title-second",
+        correlation_id="corr-2",
+        paper_title="TD3 Based Collision Free Motion Planning",
+        paper_title_source=PaperTitleSource.ARXIV_METADATA,
+    )
+
+    paper = await paper_repo.get_by_id(first.paper_id)
+    assert reused.reused is True
+    assert paper is not None
+    assert paper.title == "TD3 Based Collision Free Motion Planning"
+    assert paper.title_source is PaperTitleSource.ARXIV_METADATA
 
 
 @pytest.mark.asyncio
