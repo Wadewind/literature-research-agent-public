@@ -135,6 +135,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
 - **应用侧栏只做小范围 UI 调整**：默认宽度保持 232px，216px 下限保留主导航与操作空间，288px 上限
   避免挤占研究工作区。separator 常态只显示低对比 grip，hover/focus/drag 时增强；拖动期间禁用文本选择。
   宽度与折叠状态沿用同一个版本化 UI 记录，不新建服务端偏好或把 Project/Session 事实写入浏览器。
+- **Review 入口只承担创建**：Review List 不再在创建页下方复制一套重型记录区；已有 Review 与
+  Conversation、AgentSession 一样进入侧栏可折叠子树，创建页只保留研究问题、项目论文范围和自动补充
+  策略。侧栏仍读取 Project-scoped 最小 Review List，并仅在存在活动任务时轮询。
 
 ## 失败、重试与取消行为
 
@@ -255,6 +258,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   `1 passed (1.9s)`，覆盖方向键、Home/End、216–288px 边界、pointer 拖动、刷新恢复、折叠恢复、双击
   复位与 880px 窄屏 56px icon rail；Phase 2 Fake 问答闭环另为 `1 passed (7.2s)`。1280×720 临时截图
   确认默认宽度下项目名、导航、会话树、问题卡片和 Composer 无挤压；截图未作为像素基线保留。
+- 2026-08-31 的 Review 入口收敛移除双栏流程说明与页面内任务列表，把历史任务合并到“文献研究”侧栏
+  子树。前端全量为 `40 files / 198 passed`，production build 通过；1600×1000 本地只读走查确认研究
+  问题、项目论文、自动补充和提交动作按单一路径排列，侧栏当前任务可直接进入。控制台仅保留既有
+  `favicon.ico` 404，未创建 Review 或调用外部网络。
 
 ## 代码入口
 

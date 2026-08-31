@@ -10,7 +10,8 @@ import {
 import { Link, NavLink, useLocation } from "react-router-dom";
 
 import { apiFetch } from "../api/client";
-import type { AgentSession, Conversation, Project } from "../api/types";
+import type { AgentSession, Conversation, Project, ReviewListItem } from "../api/types";
+import { reviewListRefetchInterval } from "../reviews/reviewListRefresh";
 import { chatConversationPath, chatHomePath } from "../workspace/projectWorkspace";
 
 const SIDEBAR_STORAGE_KEY = "literature-atlas.app-sidebar.v1";
@@ -23,6 +24,7 @@ export const SIDEBAR_WIDTH = {
 } as const;
 
 type ProjectMode = "library" | "chat" | "reviews" | "agent";
+type ExpandableProjectMode = Exclude<ProjectMode, "library">;
 type SidebarIconName = "projects" | "library" | "chat" | "reviews" | "agent";
 
 const SIDEBAR_ICON_PATHS: Record<SidebarIconName, string> = {
@@ -57,6 +59,8 @@ interface AppSidebarViewProps {
   projectUnavailable?: boolean;
   conversations?: Array<Pick<Conversation, "conversation_id" | "title">>;
   conversationsUnavailable?: boolean;
+  reviews?: Array<Pick<ReviewListItem, "run_id" | "research_question" | "status">>;
+  reviewsUnavailable?: boolean;
   agentSessions?: Array<Pick<
     AgentSession,
     "session_id" | "title" | "active_turn_run_id" | "last_activity_at"
@@ -73,8 +77,12 @@ interface ProjectNavItem {
 
 const RECENT_SESSION_LIMIT = 5;
 
-function routeResourceId(pathname: string, mode: "chat" | "agent"): string | undefined {
-  const pattern = mode === "chat" ? /\/chat\/([^/?#]+)/ : /\/agent\/([^/?#]+)/;
+function routeResourceId(pathname: string, mode: ExpandableProjectMode): string | undefined {
+  const pattern = mode === "chat"
+    ? /\/chat\/([^/?#]+)/
+    : mode === "reviews"
+      ? /\/reviews\/([^/?#]+)/
+      : /\/agent\/([^/?#]+)/;
   const match = pattern.exec(pathname);
   return match?.[1];
 }
@@ -165,6 +173,12 @@ export default function AppSidebar() {
     queryFn: () => apiFetch<Conversation[]>(`/api/v1/projects/${projectId}/conversations`),
     enabled: Boolean(projectId && !collapsed),
   });
+  const reviewsQuery = useQuery({
+    queryKey: ["reviews", projectId],
+    queryFn: () => apiFetch<ReviewListItem[]>(`/api/v1/projects/${projectId}/reviews`),
+    enabled: Boolean(projectId && !collapsed),
+    refetchInterval: (query) => reviewListRefetchInterval(query.state.data),
+  });
   const agentSessionsQuery = useQuery({
     queryKey: ["agent-sessions", projectId],
     queryFn: () => apiFetch<AgentSession[]>(`/api/v1/projects/${projectId}/agent-sessions`),
@@ -207,6 +221,8 @@ export default function AppSidebar() {
       projectUnavailable={projectQuery.isError}
       conversations={conversationsQuery.data}
       conversationsUnavailable={conversationsQuery.isError}
+      reviews={reviewsQuery.data}
+      reviewsUnavailable={reviewsQuery.isError}
       agentSessions={agentSessionsQuery.data}
       agentSessionsUnavailable={agentSessionsQuery.isError}
     />
@@ -226,6 +242,8 @@ export function AppSidebarView({
   projectUnavailable = false,
   conversations,
   conversationsUnavailable = false,
+  reviews,
+  reviewsUnavailable = false,
   agentSessions,
   agentSessionsUnavailable = false,
 }: AppSidebarViewProps) {
@@ -240,37 +258,44 @@ export function AppSidebarView({
         { mode: "agent", label: "研究助手", to: `/projects/${projectId}/agent`, icon: "agent" },
       ]
     : [];
-  const [expanded, setExpanded] = useState<Record<"chat" | "agent", boolean>>({
+  const [expanded, setExpanded] = useState<Record<ExpandableProjectMode, boolean>>({
     chat: currentMode === "chat",
+    reviews: currentMode === "reviews",
     agent: currentMode === "agent",
   });
-  const [showAll, setShowAll] = useState<Record<"chat" | "agent", boolean>>({
+  const [showAll, setShowAll] = useState<Record<ExpandableProjectMode, boolean>>({
     chat: false,
+    reviews: false,
     agent: false,
   });
 
   useEffect(() => {
-    if (currentMode !== "chat" && currentMode !== "agent") return;
+    if (currentMode === undefined || currentMode === "library") return;
     setExpanded((current) => current[currentMode]
       ? current
       : { ...current, [currentMode]: true });
   }, [currentMode]);
 
   const activeConversationId = routeResourceId(pathname, "chat");
+  const activeReviewId = routeResourceId(pathname, "reviews");
   const activeSessionId = routeResourceId(pathname, "agent");
 
-  const sessionTree = (mode: "chat" | "agent") => {
-    const isChat = mode === "chat";
-    const items = isChat ? conversations : agentSessions;
-    const unavailable = isChat ? conversationsUnavailable : agentSessionsUnavailable;
+  const sessionTree = (mode: ExpandableProjectMode) => {
+    const items = mode === "chat" ? conversations : mode === "reviews" ? reviews : agentSessions;
+    const unavailable = mode === "chat"
+      ? conversationsUnavailable
+      : mode === "reviews"
+        ? reviewsUnavailable
+        : agentSessionsUnavailable;
     const visibleItems = showAll[mode] ? items : items?.slice(0, RECENT_SESSION_LIMIT);
+    const itemLabel = mode === "reviews" ? "任务" : "会话";
 
     return (
       <div className="app-session-tree app-nav-label">
-        {items === undefined && !unavailable ? <p>正在读取会话…</p> : null}
-        {unavailable ? <p className="error-text">会话读取失败</p> : null}
-        {items?.length === 0 ? <p>还没有会话</p> : null}
-        {isChat
+        {items === undefined && !unavailable ? <p>正在读取{itemLabel}…</p> : null}
+        {unavailable ? <p className="error-text">{itemLabel}读取失败</p> : null}
+        {items?.length === 0 ? <p>还没有{itemLabel}</p> : null}
+        {mode === "chat"
           ? (visibleItems as typeof conversations)?.map((conversation) => (
               <Link
                 key={conversation.conversation_id}
@@ -281,7 +306,18 @@ export function AppSidebarView({
                 <span>{conversation.title || "未命名问答"}</span>
               </Link>
             ))
-          : (visibleItems as typeof agentSessions)?.map((session) => (
+          : mode === "reviews"
+            ? (visibleItems as typeof reviews)?.map((review) => (
+              <Link
+                key={review.run_id}
+                className={review.run_id === activeReviewId ? "active" : ""}
+                to={`/projects/${projectId}/reviews/${review.run_id}`}
+                title={review.research_question}
+              >
+                <span>{review.research_question}</span>
+              </Link>
+            ))
+            : (visibleItems as typeof agentSessions)?.map((session) => (
               <Link
                 key={session.session_id}
                 className={session.session_id === activeSessionId ? "active" : ""}
@@ -349,8 +385,8 @@ export function AppSidebarView({
             </p>
             {projectItems.map((item) => {
               const active = item.mode === currentMode;
-              const sessionMode: "chat" | "agent" | null =
-                item.mode === "chat" || item.mode === "agent" ? item.mode : null;
+              const sessionMode: ExpandableProjectMode | null =
+                item.mode === "library" ? null : item.mode;
               return (
                 <div className={`app-nav-group${active ? " active" : ""}`} key={item.mode}>
                   <div className="app-nav-group-row">
@@ -373,14 +409,18 @@ export function AppSidebarView({
                         <Link
                           className="app-nav-create"
                           to={item.to}
-                          aria-label={sessionMode === "chat" ? "新建文献问答" : "新建研究会话"}
+                          aria-label={sessionMode === "chat"
+                            ? "新建文献问答"
+                            : sessionMode === "reviews"
+                              ? "新建文献研究"
+                              : "新建研究会话"}
                         >
                           <span aria-hidden="true">＋</span>
                         </Link>
                         <button
                           type="button"
                           className="app-nav-disclosure"
-                          aria-label={`${expanded[sessionMode] ? "收起" : "展开"}${item.label}会话`}
+                          aria-label={`${expanded[sessionMode] ? "收起" : "展开"}${item.label}${sessionMode === "reviews" ? "任务" : "会话"}`}
                           aria-expanded={expanded[sessionMode]}
                           onClick={() => setExpanded((current) => ({
                             ...current,

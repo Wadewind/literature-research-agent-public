@@ -20,6 +20,7 @@ function renderSidebar(
     projectId?: string;
     projectName?: string;
     conversations?: Array<{ conversation_id: string; title: string; scope_type: "project"; paper_ids: string[] }>;
+    reviews?: Array<{ run_id: string; research_question: string; status: string }>;
     agentSessions?: Array<{
       session_id: string;
       title: string | null;
@@ -45,6 +46,7 @@ function renderSidebar(
           ? { name: options.projectName, archived_at: null }
           : undefined,
         conversations: options.conversations,
+        reviews: options.reviews,
         agentSessions: options.agentSessions,
       }),
     ),
@@ -129,6 +131,24 @@ describe("AppSidebar", () => {
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain("路径规划研究缺口");
     expect(html).toContain('/projects/project-1/agent/session-1');
+  });
+
+  it("将文献研究任务作为可折叠子项显示在侧栏", () => {
+    const html = renderSidebar("/projects/project-1/reviews/review-1", {
+      projectId: "project-1",
+      projectName: "事实性评估方法",
+      reviews: [{
+        run_id: "review-1",
+        research_question: "不同路径规划方法的证据差异是什么？",
+        status: "succeeded",
+      }],
+    });
+
+    expect(html).toContain('aria-label="新建文献研究"');
+    expect(html).toContain('aria-label="收起文献研究任务"');
+    expect(html).toContain("不同路径规划方法的证据差异是什么？");
+    expect(html).toContain('/projects/project-1/reviews/review-1');
+    expect(html).toMatch(/class="active"[^>]*href="\/projects\/project-1\/reviews\/review-1"/);
   });
 
   it("解析宽度偏好，并兼容只含折叠状态的既有记录", () => {
