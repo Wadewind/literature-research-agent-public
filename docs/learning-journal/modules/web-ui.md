@@ -137,7 +137,10 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   宽度与折叠状态沿用同一个版本化 UI 记录，不新建服务端偏好或把 Project/Session 事实写入浏览器。
 - **Review 入口只承担创建**：Review List 不再在创建页下方复制一套重型记录区；已有 Review 与
   Conversation、AgentSession 一样进入侧栏可折叠子树，创建页只保留研究问题、项目论文范围和自动补充
-  策略。侧栏仍读取 Project-scoped 最小 Review List，并仅在存在活动任务时轮询。
+  策略。创建页沿用 Chat 首页的“功能说明—中央范围选择—底部 Composer”空间结构，中间只负责选择
+  Project 论文和自动补充策略，底部只负责输入研究问题与启动任务；两种功能共享工作台节奏，但不合并
+  Conversation 与 Review 的业务交互。侧栏仍读取 Project-scoped 最小 Review List，并仅在存在活动
+  任务时轮询。
 
 ## 失败、重试与取消行为
 
@@ -325,6 +328,9 @@ Evidence Matrix 和版本固定的能力 Profile，并通过逐消息 Turn 连�
   定向回归为 43 passed，迁移 head 为
   `a9e3d5f7b1c4`，PostgreSQL 往返与升降级为 6 passed。1440×1000 与 390×844 浏览器走查确认书目行
   为 68px、桌面单行/窄屏双行截断、搜索生效且均无横向溢出。
+- 2026-08-31 的 Review 创建页布局收敛后，前端全量为 40 files / 198 passed，production build 通过。
+  1600×1000 浏览器走查确认来源卡位于中央工作区、研究问题 Composer 固定在工作区底部，页面无横向
+  溢出；控制台仅保留既有 `favicon.ico` 404。
 
 ## 60 秒面试说明
 
