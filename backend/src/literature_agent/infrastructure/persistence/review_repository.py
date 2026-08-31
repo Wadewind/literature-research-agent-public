@@ -727,6 +727,7 @@ class SqlalchemyReviewRepository(ReviewRepository):
             "request_id": request.request_id,
             "review_run_id": request.review_run_id,
             "request_version": request.request_version,
+            "request_kind": request.request_kind.value,
             "outline_output_id": request.outline_output_id,
             "status": request.status.value,
             "allowed_actions": [item.value for item in request.allowed_actions],

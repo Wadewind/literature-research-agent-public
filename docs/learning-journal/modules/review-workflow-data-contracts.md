@@ -50,6 +50,8 @@ Phase 3 后续切片已接入 HTTP Route 与 Worker。Phase 4 切片 3 又补充
   版本并按 key 稳定排序，不向页面暴露 Search Strategy、内部失败 Output 或旧章节版本；
 - 同一 HumanInputRequest 最多写入一个 HumanInput，Input 必须携带匹配的 request_version；
 - 同一 Review Run 同时最多有一个开放的 HumanInputRequest；
+- HumanInputRequest 的 `request_kind` 必须由所有写路径显式持久化；`outline` ORM 默认值只服务历史迁移
+  兼容，不能覆盖 `source_selection` 业务事实；
 - Artifact 只保存受控 metadata 与 Storage 引用，大型 Markdown/矩阵不能放进 JSONB；
 - ReviewRun 统计摘要只允许来源数量、模型调用数和 token 数等固定计数，不承载任意运行数据；
 - 数据库 FK 只证明引用目标存在；所有跨聚合配对仍须由已授权写服务在同一事务内校验所属 Review
@@ -79,6 +81,7 @@ owner 命名空间，这与现有上传和 RAG 提问行为一致。
 ## 失败、重复、取消和恢复
 
 - 同键同请求返回原 Review Run，不产生第二个 Event 或 Outbox；同键不同请求抛幂等冲突；
+- 幂等冲突代表已持久事实与本次请求不一致，属于确定性永久错误，不进入 Worker 自动重试；
 - Project 不存在、跨 owner 或已归档时不创建任何记录；
 - 重复 Step、Source、Dependency、Output、HumanInput 和 Artifact 由对应唯一约束兜底；
 - 依赖状态由 `ReviewDependencyReconciler` 持父 Run 行锁后单向推进；人工输入由
@@ -101,6 +104,7 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 - 应用测试覆盖原子创建 bundle、Project/owner/归档边界、幂等回放和冲突；
 - PostgreSQL 集成测试覆盖所有实体往返、owner/Project 查询隔离、追加版本、依赖与 HumanInput 唯一
   约束，以及创建中途失败后的事务回滚；
+- `review.v2` 来源筛选增加真实 Repository 往返测试，覆盖 `source_selection` 类型不会被 ORM 默认值改写；
 - Phase 4 切片 3 增加 Application/API/PostgreSQL List 测试，覆盖稳定排序、owner/Project 隔离与
   `RunType.REVIEW` 过滤；该切片 Backend 非集成全量 `615 passed, 4 skipped`，integration 全量
   `113 passed`。
@@ -109,6 +113,11 @@ sequence 组合出可理解的时间线；这些数据不能由 LangGraph Checkp
 实际验证结果：定向领域/应用测试 `11 passed`、定向 PostgreSQL 集成测试 `7 passed`；Backend 完整
 非集成测试 `398 passed, 4 skipped`、完整 PostgreSQL/Testcontainers integration `93 passed`；
 `ruff check src tests` 与 `pyright` 通过。本切片没有前端改动，因此未重复运行 Web 测试与构建。
+
+2026-08-31 `review.v2` 真实任务回归发现 `get_or_add_human_input_request()` 遗漏 `request_kind`，导致
+PostgreSQL 写入时使用历史 ORM 默认值 `outline`，来源筛选请求读回即触发确定性幂等冲突。修复后完整
+Review Repository 集成套件 `14 passed`，来源筛选应用测试 `1 passed`，RunExecution 应用套件
+`22 passed`，重试策略领域测试 `4 passed`；Ruff 与 Pyright 通过。测试未调用真实模型或 arXiv。
 
 ## 代码入口
 

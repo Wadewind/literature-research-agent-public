@@ -13,7 +13,7 @@ from literature_agent.application.run_execution_service import (
 )
 from literature_agent.domain.arxiv import ArxivError
 from literature_agent.domain.event import create_event
-from literature_agent.domain.exceptions import InvalidPdfInputError
+from literature_agent.domain.exceptions import IdempotencyConflictError, InvalidPdfInputError
 from literature_agent.domain.queue_outbox import OutboxStatus, create_outbox_entry
 from literature_agent.domain.run import Run, RunStatus, create_run
 from literature_agent.domain.run_attempt import AttemptStatus
@@ -485,6 +485,33 @@ async def test_execute_permanent_error_marks_failed(
     entry = await outbox_repo.get_by_run_id(run.run_id)
     assert entry is not None
     assert entry.status == OutboxStatus.DISPATCHED
+
+
+async def test_execute_idempotency_conflict_is_not_retried(
+    run_repo: FakeRunRepository,
+    event_repo: FakeEventRepository,
+    attempt_repo: FakeAttemptRepository,
+    outbox_repo: FakeOutboxRepository,
+) -> None:
+    """同键不同事实属于确定性冲突，不得重复执行相同失败路径。"""
+
+    async def _failing_executor(_run: Run, _correlation_id: str) -> None:
+        raise IdempotencyConflictError("review:source-selection:1")
+
+    run = await _add_run(run_repo)
+    await _seed_dispatched_outbox(outbox_repo, run.run_id)
+    service = _make_service(
+        run_repo, event_repo, attempt_repo, outbox_repo, _failing_executor
+    )
+
+    outcome = await service.execute(run.run_id, correlation_id="job-idempotency")
+
+    assert outcome is ExecutionOutcome.FAILED
+    assert _event_types(event_repo, run.run_id) == ["run_started", "run_failed"]
+    failed = next(item for item in event_repo._events if item.event_type == "run_failed")
+    assert failed.payload["error"]["type"] == "IdempotencyConflictError"
+    entry = await outbox_repo.get_by_run_id(run.run_id)
+    assert entry is not None and entry.status is OutboxStatus.DISPATCHED
 
 
 async def test_execute_retry_budget_exhausted_marks_failed(

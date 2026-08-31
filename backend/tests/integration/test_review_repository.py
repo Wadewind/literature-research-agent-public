@@ -14,6 +14,7 @@ from literature_agent.domain.queue_outbox import OutboxStatus
 from literature_agent.domain.review import (
     ArtifactType,
     HumanInputAction,
+    HumanInputRequestKind,
     ReviewDependencyType,
     ReviewOutputType,
     ReviewStage,
@@ -336,6 +337,38 @@ async def test_source_candidates_output_satisfies_database_constraint(
     await session.commit()
 
     assert output in await repo.list_outputs_scoped(run.run_id, project, "user-1")
+
+
+async def test_source_selection_request_kind_roundtrips_through_get_or_add(
+    session, project: str
+) -> None:
+    """来源筛选请求不能被 ORM 默认值静默降级为旧版大纲请求。"""
+    run, _ = await _seed_review(session, project)
+    repo = SqlalchemyReviewRepository(session)
+    output = create_review_output(
+        review_run_id=run.run_id,
+        output_type=ReviewOutputType.SOURCE_CANDIDATES,
+        output_key="source-candidates",
+        version=1,
+        schema_version="source-candidates.v1",
+        payload={"candidates": []},
+        idempotency_key=f"{run.run_id}:source-candidates:v1",
+    )
+    await repo.add_output(output)
+    await session.flush()
+    proposed = create_human_input_request(
+        review_run_id=run.run_id,
+        request_version=1,
+        outline_output_id=output.output_id,
+        allowed_actions=[HumanInputAction.SELECT_SOURCES],
+        request_kind=HumanInputRequestKind.SOURCE_SELECTION,
+    )
+
+    persisted = await repo.get_or_add_human_input_request(proposed)
+    await session.commit()
+
+    assert persisted.request_kind is HumanInputRequestKind.SOURCE_SELECTION
+    assert persisted == proposed
 
 
 async def test_cancelled_review_with_unsettled_source_is_reconcile_candidate(

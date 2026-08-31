@@ -38,6 +38,9 @@ Review Profile，必须另行版本化契约，不能静默改变 `review.v1`。
 - 候选检索事实与来源筛选暂停分属不同短事务；暂停事务失败并重试时，执行器必须再次验证来源筛选的
   已解决事实，不能仅凭 `current_stage=import_arxiv_papers` 绕过 HITL；`source_candidates` 必须属于数据库
   允许的 ReviewOutput 类型。
+- `HumanInputRequest.request_kind` 是顺序 HITL 的持久业务事实；Repository 的 effectively-once 写路径必须
+  显式保存它，不能依赖面向历史大纲请求的 ORM 默认值。读回类型与本次请求不一致属于确定性幂等冲突，
+  应立即失败且不得消耗 Worker 重试预算。
 - 导入阶段采用协作式取消：每篇论文及下载、缓存、注册边界都重新读取父 Run 状态；确认取消后不得再
   启动新的下载或子 Run。已经创建且可被项目复用的 Ingestion/Indexing Run 不盲目级联取消，其完成事实
   仍可用于同步 ReviewSource 的最终状态。

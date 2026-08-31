@@ -7,6 +7,7 @@ from literature_agent.domain.exceptions import (
     EvidenceMatrixInvalidError,
     EvidenceMatrixScopeError,
     FileValidationError,
+    IdempotencyConflictError,
     InvalidPdfInputError,
     NoReviewablePapersError,
     ParserResourceError,
@@ -39,6 +40,7 @@ def test_permanent_input_errors() -> None:
     assert is_permanent_error(ReviewSectionInvalidError("章节输出非法"))
     assert is_permanent_error(ReviewCitationInvalidError("引用非法"))
     assert is_permanent_error(ReviewExportInvalidError("导出闭包非法"))
+    assert is_permanent_error(IdempotencyConflictError("review:source-selection:1"))
 
 
 def test_temporary_errors() -> None:

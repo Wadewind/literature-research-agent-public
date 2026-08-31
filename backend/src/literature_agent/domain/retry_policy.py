@@ -11,6 +11,7 @@ from literature_agent.domain.exceptions import (
     EvidenceMatrixScopeError,
     EvidenceScopeError,
     FileValidationError,
+    IdempotencyConflictError,
     IndexingInputError,
     InvalidPdfInputError,
     ModelOutputInvalidError,
@@ -35,6 +36,7 @@ from literature_agent.domain.queue_outbox import compute_dispatch_backoff
 _PERMANENT_TYPES: tuple[type[Exception], ...] = (
     InvalidPdfInputError,
     FileValidationError,
+    IdempotencyConflictError,
     IndexingInputError,
     EvidenceScopeError,
     EvidenceMatrixInvalidError,
