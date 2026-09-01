@@ -5,6 +5,7 @@
 可恢复的后台执行体系中。
 
 > 当前定位是本地单人、可复现的 Demo-ready 系统，不代表公网多租户、生产级安全或 SLA 已完成。
+![Demo](./docs/output.gif)
 
 **技术栈：** Python 3.13 · FastAPI · SQLAlchemy Async · PostgreSQL/pgvector · ARQ/Valkey ·
 LangGraph/Deep Agents · OpenSandbox · React/TypeScript
